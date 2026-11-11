@@ -139,6 +139,7 @@ export const contactIdentities = pgTable(
  *   atomically before generating and releases it after its messages are stored; an expired
  *   lease may be taken over, so a crashed run cannot block the conversation.
  * - `last_inbound_at`: when the customer last wrote (messaging windows, stale checks).
+ * - `handled_through_seq`: the watermark of inbound messages a turn has dealt with.
  */
 export const conversations = pgTable(
   "conversations",
@@ -157,6 +158,12 @@ export const conversations = pgTable(
       .$type<UserId>()
       .references(() => users.id, { onDelete: "set null" }),
     messageSeq: integer("message_seq").notNull().default(0),
+    /**
+     * Every inbound message with a sequence up to this one has been dealt with by a turn:
+     * answered, or deliberately left unanswered (takeover, opt-out). The next turn answers
+     * the inbound messages above it (C3).
+     */
+    handledThroughSeq: integer("handled_through_seq").notNull().default(0),
     unreadCount: integer("unread_count").notNull().default(0),
     lastInboundAt: timestamptz("last_inbound_at"),
     lastOutboundAt: timestamptz("last_outbound_at"),

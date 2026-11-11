@@ -45,12 +45,15 @@ export const ALLOWED_DEPENDENCIES = {
   "@repo/widget-embed": ["@repo/core"],
 
   // Layer 5: the message pipeline composes the engine with the domain packages.
+  // `@repo/channel-test` is a devDependency only: the pipeline's tests drive the real test
+  // channel. Production adapters are wired in apps/web/src/server, never here.
   "@repo/pipeline": [
     ...DOMAIN_WITH_MODEL,
     "@repo/knowledge",
     "@repo/leads",
     "@repo/handoff",
     "@repo/scheduling",
+    "@repo/channel-test",
   ],
 
   // Layer 6: the evaluation harness drives the same composition in dry-run mode.

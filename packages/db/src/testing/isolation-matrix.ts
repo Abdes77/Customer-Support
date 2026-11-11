@@ -541,6 +541,24 @@ export const ISOLATION_MATRIX: readonly MatrixEntry[] = [
     user: READ_ONLY_FOR_USERS,
     system: "read_write",
   },
+  {
+    name: "conversation_turns",
+    table: tables.conversationTurns,
+    kind: "business",
+    row: (r) => ({
+      ...r.tenant,
+      conversationId: r.ref("conversations"),
+      ordinal: r.uniqueInt(),
+      trigger: "inbound_message",
+      status: "replied",
+      runId: r.unique("run"),
+      traceId: randomUUID(),
+      throughSeq: 1,
+    }),
+    change: { column: "skip_reason", value: "changed" },
+    user: READ_ONLY_FOR_USERS,
+    system: "read_write",
+  },
 
   // --- integrations ------------------------------------------------------------------------
   {

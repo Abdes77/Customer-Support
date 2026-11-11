@@ -10,6 +10,7 @@ export * from "./knowledge";
 export * from "./leads";
 export * from "./model";
 export * from "./operations";
+export * from "./pipeline";
 export * from "./playbooks";
 export * from "./settings";
 export * from "./tenancy";

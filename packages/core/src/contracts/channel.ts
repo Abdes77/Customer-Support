@@ -407,13 +407,23 @@ export interface ChannelAdapter {
   readonly channel: ChannelId;
   readonly capabilities: ChannelCapabilities;
 
-  /** Checks the signature or handshake. Must use a constant-time comparison. */
+  /**
+   * Checks the signature or handshake. Must use a constant-time comparison. A bad request is
+   * answered with `rejected` (the route returns 401), never by throwing.
+   */
   verifyWebhook(request: WebhookRequest): Promise<WebhookVerification>;
 
-  /** Turns a verified payload into normalized messages, delivery statuses and signals. */
+  /**
+   * Turns a verified payload into normalized messages, delivery statuses and signals. Throws
+   * a `ValidationError` for a payload it cannot read (400); anything else thrown is a 500,
+   * so the provider retries.
+   */
   parseWebhook(request: WebhookRequest): Promise<ParsedWebhook>;
 
-  /** Sends exactly one provider message. Splitting long text is the pipeline's job. */
+  /**
+   * Sends exactly one provider message. Splitting long text is the pipeline's job. Report
+   * failures in the `SendResult`; anything thrown is treated as a retryable failure.
+   */
   send(message: OutboundMessage, target: SendTarget): Promise<SendResult>;
 
   /** Shows or hides the typing indicator, where the channel has one. */

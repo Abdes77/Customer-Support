@@ -64,6 +64,23 @@ export const MESSAGE_STATUSES = [
 ] as const;
 export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
 
+/**
+ * The life of one reply turn (C3, `conversation_turns`). "running" holds the turn lease;
+ * the others are final. "skipped": a guard stopped the turn (takeover, opt-out...).
+ * "superseded": a newer customer message arrived while generating, so the drafts were kept
+ * but not sent.
+ */
+export const TURN_STATUSES = [
+  "running",
+  "replied",
+  "no_reply",
+  "superseded",
+  "skipped",
+  "refused",
+  "failed",
+] as const;
+export type TurnStatus = (typeof TURN_STATUSES)[number];
+
 export const ATTACHMENT_STATUSES = ["pending", "stored", "failed", "skipped"] as const;
 export type AttachmentStatus = (typeof ATTACHMENT_STATUSES)[number];
 

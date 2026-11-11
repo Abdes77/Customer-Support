@@ -31,7 +31,8 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 | `pnpm db:generate` | Write a migration after changing `packages/db/src/schema` |
 | `pnpm db:doctor` | Check a database: roles, migrations, RLS, privileges, encryption key |
 | `pnpm db:create-admin --slug <agency> --email <user>` | Make a user agency_admin (first-time setup) |
-| `pnpm dev` | Run the Next.js app at http://localhost:3000 |
+| `pnpm dev` | Run the Next.js app at http://localhost:3000 (jobs in-process without Inngest; test chat at `/dev/chat`) |
+| `pnpm --filter @repo/pipeline live:roundtrip` | Live webhook → jobs → reply check against a running app (HUMAN_TODO 7) |
 
 ## Layout
 
@@ -65,7 +66,9 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
   never sent to the browser or put in a job payload.
 - Logging: `logger.child({ traceId, businessId })` from `@repo/core`. Never log message text,
   contact details or tokens.
-- Jobs: payloads carry ids only; handlers are idempotent; side effects sit in their own step.
+- Jobs: `JobDefinition`s from `@repo/jobs` (ARCHITECTURE §4), registered in
+  `apps/web/src/server/pipeline`; payloads carry ids only; handlers are idempotent; side
+  effects sit in their own step. Pipeline tests: `src/testing/harness.ts` in `packages/pipeline`.
 - Model calls go through the client in `packages/ai` and follow ARCHITECTURE §5 (no
   `thinking`, `temperature` or forced `tool_choice`; check `stop_reason`; keep the cached
   prefix stable).

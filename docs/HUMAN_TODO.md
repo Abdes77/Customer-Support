@@ -114,12 +114,47 @@ Format of an entry:
 - **Variable:** none.
 - **Live check:** none.
 
+### 7. Inngest account, and the test channel secret (C3)
+
+- **What:** an Inngest account (Cloud) for the durable jobs: the reply turn, sending,
+  retries and the sweeper. Without it a hosted deployment stores incoming messages but never
+  answers (webhooks answer 500 so providers keep retrying). Also a secret for the built-in
+  test channel, which the dev chat page and the onboarding wizard's test chat (C15) use.
+- **Where:** https://app.inngest.com, create an app (or install the Inngest integration from
+  the Vercel Marketplace, which sets the two keys for you). Event key: Manage, Event Keys.
+  Signing key: Manage, Signing Key. After the first deploy, sync the app at
+  `<APP_URL>/api/inngest` (the Vercel integration does this on every deploy; otherwise
+  Apps, Sync new app, or `curl -X PUT <APP_URL>/api/inngest`). The route needs a
+  `maxDuration` of 300 s, which needs a Vercel Pro plan.
+- **Variables:** `INNGEST_EVENT_KEY`, `INNGEST_SIGNING_KEY` (and
+  `INNGEST_SIGNING_KEY_FALLBACK` during a key rotation). `TEST_CHANNEL_SECRET`: generate
+  with `openssl rand -base64 48`.
+- **Live check that was skipped:** the round trip against Inngest Cloud. It ran against the
+  Inngest dev server locally (see `autobuild/reports/C3.md`). Against the deployment, from a
+  machine with the production `DATABASE_URL` in `.env.local`:
+
+  ```
+  APP_URL=<APP_URL> TEST_CHANNEL_SECRET=<the deployment's value> \
+    pnpm --filter @repo/pipeline live:roundtrip
+  ```
+
+  It posts three quick messages and a duplicate to the test channel's webhook and passes
+  when exactly one reply answering all three is sent. Then check the runs in the Inngest
+  dashboard (`pipeline-reply`, `pipeline-send`, `pipeline-sweeper` every minute).
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
 `CREDENTIALS_ENCRYPTION_KEY` (`openssl rand -base64 48` and `openssl rand -base64 32`), then
 `pnpm services:up && pnpm db:migrate && pnpm db:seed && pnpm dev`. The seed prints the four
 demo users; their password is in `packages/db/src/seed/demo.ts`.
+
+Without Inngest variables, jobs run inside the dev server process: sign in as the demo admin
+and chat with a business at http://localhost:3000/dev/chat. To use the real Inngest engine
+locally instead, start its dev server (`npx inngest-cli@latest dev -u
+http://localhost:3000/api/inngest`, or with Docker: `docker run --network host
+inngest/inngest inngest dev -u http://127.0.0.1:3000/api/inngest`) and set `INNGEST_DEV=1`
+(and `INNGEST_BASE_URL=http://127.0.0.1:8288`) in `.env.local`.
 
 ## Accounts the build will ask for
 
@@ -128,7 +163,6 @@ already listed and described in `.env.example`.
 
 | Account | Needed for | Variables (group in `.env.example`) | Entry added by |
 | --- | --- | --- | --- |
-| Inngest account | Durable jobs | Inngest | C3 |
 | Meta developer app, business verification, App Review | WhatsApp, Instagram, Messenger | Meta | C9, C10, C18 |
 | Google Cloud project (OAuth client, Pub/Sub topic) | Gmail, Google Calendar | Google | C11, C12 |
 | Microsoft Entra app registration | Outlook mail and calendar | Microsoft | C11, C12 |
@@ -155,6 +189,11 @@ already listed and described in `.env.example`.
 - **Supabase Auth (C1).** The provider in `apps/web/src/server/auth/supabase-provider.ts` is
   type-checked against `@supabase/ssr` 0.12 and `auth-js` 2.119 and tested with a stand-in
   client; password and magic-link sign-in have not run against a live project (entry 3).
+- **Inngest (C3).** The pipeline's functions ran against the Inngest dev server 1.52.0 (Docker
+  image `inngest/inngest`, November 2026) with SDK 4.26.2: debounce, concurrency, steps,
+  sleeps and retries behaved as designed. Inngest Cloud (signing keys, the Vercel
+  integration, production debounce timing) was not used (entry 7). The Inngest docs site was
+  reachable, but the SDK's own type definitions were the reference.
 - **Supabase Auth admin API and Storage API (C1).** `packages/db/src/supabase-auth-admin.ts`
   (create a user) and `packages/db/src/storage/supabase-store.ts` (upload, download, delete,
   signed link) are written from the documented REST APIs and tested with a mocked `fetch`.

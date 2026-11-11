@@ -77,6 +77,7 @@ describe("migrations on an empty database", () => {
       "channel_connections",
       "contact_identities",
       "contacts",
+      "conversation_turns",
       "conversations",
       "dead_letters",
       "escalations",

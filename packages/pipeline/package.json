@@ -9,14 +9,23 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "live:roundtrip": "tsx scripts/live-roundtrip.ts"
   },
   "dependencies": {
-    "@repo/core": "workspace:*"
+    "@repo/core": "workspace:*",
+    "@repo/db": "workspace:*",
+    "@repo/jobs": "workspace:*",
+    "@repo/settings": "workspace:*",
+    "zod": "catalog:"
   },
   "devDependencies": {
+    "@inngest/test": "catalog:",
+    "@repo/channel-test": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
+    "inngest": "catalog:",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

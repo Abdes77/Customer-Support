@@ -155,6 +155,36 @@ pipeline entry point, `ingest(parsed)`, which performs steps 4 to 6.
     `failed`, emits `message.send_failed`, raises an alert and lands in the dead-letter table.
     Delivery statuses arriving later by webhook update the same row.
 
+### As built (C3)
+
+- **Where the code is.** `createPipeline()` in `packages/pipeline` returns `handleWebhook`,
+  `ingest` and three job definitions: `pipeline-reply` (`src/reply`), `pipeline-send`
+  (`src/send`) and `pipeline-sweeper`. `apps/web/src/server/pipeline` composes it with the
+  adapters, the database and the job runner; `/api/webhooks/[channel]` and `/api/inngest` are
+  thin routes.
+- **Turn state.** A turn that takes the lease gets a `conversation_turns` row (ordinal,
+  trigger, run id, trace id, `through_seq`, outcome, actions, versions, tokens). The pending
+  messages are the inbound ones above `conversations.handled_through_seq` up to the turn's
+  `through_seq`; reactions never start a turn. Commit moves the watermark; a guard stop moves
+  it too (a takeover's messages are the person's to answer); a failed or superseded turn
+  does not. Superseded drafts stay stored with status `superseded`.
+- **Steps of `pipeline-reply`:** `plan` → `reply-wait` (sleepUntil) → `claim-<n>` (lease,
+  turn row, guards; `lease-wait-<n>` sleeps while busy) → `attachment-<id>` →
+  `presence-on` → `generate` (renews the lease, then the engine call, outside any
+  transaction) → `commit` → `emit`. `onFailure` closes the turn, frees the lease and writes
+  a dead letter. A turn's history holds every reply that went out or is queued, even one
+  numbered after a customer message of the turn. Transactions lock the conversation row
+  before a turn row. The sweeper flags a turn whose lease expired (dead letter and alert).
+- **Steps of `pipeline-send`:** `claim` (queued → sending, owned by the run) → `order-<n>`
+  (earlier outbound messages of the conversation finished?) → `prepare` (takeover and
+  opt-out check for bot messages, window, split) → `send-<part>` → `finish` →
+  `emit-failure`.
+- **Extension points for later chunks:** the engine (C4), `ActionHandler`s, the knowledge
+  retriever (C6), the `TurnLoaders` for lead and playbook (C5, C6) and `TurnGuard`s (C13,
+  C17) are registered in `createDomainComposition()` (`packages/pipeline/src/composition`),
+  which production and the evaluation harness share; channel adapters and job definitions
+  in `apps/web/src/server/pipeline`.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -309,6 +339,17 @@ Rules for every function:
 | `scheduling-reminders` | booking created | `sleepUntil`, cancelled on reschedule or cancel | C12 |
 | `retention-purge` | cron, daily | deletes per the data-retention settings | C17 |
 
+**Definitions and runners (C3).** Functions are declared once as `JobDefinition`s in
+`@repo/jobs` (trigger, debounce, concurrency key, retries, handler, `onFailure`) against a
+small `StepTools` interface (`run`, `sleep`, `sleepUntil`; step results go through JSON).
+`toInngestFunctions()` turns them into Inngest functions for `/api/inngest`;
+`createLocalJobRunner()` runs them in-process with the same semantics (memoized steps,
+debounce, concurrency slots released while sleeping, retries, `onFailure`) for tests and for
+local development without Inngest. `jobsModeFromEnv()` picks the runner (DECISIONS 62).
+Events are sent through the `EventSender` port, built with `jobEvent(name, id, data)`, which
+checks the payload against the catalogue. An `AppError` with `retryable: false` becomes
+Inngest's `NonRetriableError`, `ExternalServiceError.retryAfterSeconds` a `RetryAfterError`.
+
 Event names reserved so far are the keys of `EVENT_CATALOG`: `message.received`,
 `message.send_requested`, `message.send_failed`, `conversation.takeover_started`,
 `conversation.takeover_released`, `lead.qualified`, `lead.meeting_requested`, `lead.handoff`,
@@ -431,6 +472,16 @@ optional `sendTyping`, `markRead`, `fetchAttachment`.
   decisions belong to the pipeline, driven by `ChannelCapabilities`.
 - `CHANNEL_CAPABILITIES` holds baseline capabilities per channel so the engine and the evals
   can format for a channel without importing its adapter.
+- Error conventions the pipeline relies on (C3): `verifyWebhook` never throws for a bad
+  request, it returns `rejected` (401); `parseWebhook` throws a `ValidationError` for a
+  payload it cannot read (400), anything else thrown is a 500 so the provider retries;
+  `send` returns failures as `SendResult` (a retryable one is retried, honouring
+  `retryAfterSeconds`; `windowClosed` is final), and anything it throws is treated as
+  retryable. `fetchAttachment` throws a non-retryable `AppError` for a file that can never be
+  fetched.
+- The "test" channel (`@repo/channel-test`) is the reference adapter: HMAC-signed JSON
+  webhooks, a pluggable transport instead of a provider, and `@repo/channel-test/server` for
+  the business's test connection and the dev chat page (`/dev/chat`).
 
 ### Conversation engine (`contracts/engine.ts`, owner C4)
 
@@ -511,7 +562,7 @@ never edited). Expected tables, by area:
 | Playbooks and knowledge | segments, playbook versions, business playbook overrides, knowledge items, import runs |
 | Settings | setting values per scope, setting versions |
 | Channels | channel connections, channel connection secrets (encrypted credentials), message templates, widget sessions |
-| Conversations | contacts, contact identities, conversations (turn lease, last inbound time), messages (unique provider id, sequence, status, trace id), attachments, takeover locks, internal notes |
+| Conversations | contacts, contact identities, conversations (turn lease, last inbound time, `handled_through_seq` watermark), messages (unique provider id, sequence, status, trace id), attachments, takeover locks, internal notes, conversation turns (one row per reply turn, C3) |
 | Leads | leads, lead fields (value, confidence, evidence), lead reports, routing decisions |
 | Model | model calls (inputs, outputs, tokens, latency, cache reads) |
 | Integrations | integration connections, integration connection secrets, integration event log, bookings |

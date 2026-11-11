@@ -12,10 +12,15 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@repo/channel-test": "workspace:*",
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/jobs": "workspace:*",
+    "@repo/pipeline": "workspace:*",
+    "@repo/settings": "workspace:*",
     "@supabase/ssr": "catalog:",
     "@supabase/supabase-js": "catalog:",
+    "inngest": "catalog:",
     "next": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",

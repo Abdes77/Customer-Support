@@ -224,6 +224,16 @@ export const ENV_SPEC = {
     required: "feature",
   },
 
+  TEST_CHANNEL_SECRET: {
+    schema: z.string().min(32),
+    group: "security",
+    description:
+      "Signs webhooks of the built-in test channel (dev chat page, onboarding test chat). At least 32 characters. Locally a random per-process secret is used when it is empty; a hosted deployment without it has no test channel. Generate with: openssl rand -base64 48",
+    example: "",
+    secret: true,
+    required: "optional",
+  },
+
   // --- anthropic -------------------------------------------------------------------------
   ANTHROPIC_API_KEY: {
     schema: nonEmpty,
@@ -271,7 +281,8 @@ export const ENV_SPEC = {
   INNGEST_DEV: {
     schema: flag,
     group: "inngest",
-    description: "Set to 1 to use the local Inngest dev server instead of Inngest Cloud.",
+    description:
+      "Set to 1 to use the local Inngest dev server instead of Inngest Cloud. Ignored on Vercel production and preview deployments (dev mode does not check request signatures).",
     example: "1",
     secret: false,
     required: "optional",
