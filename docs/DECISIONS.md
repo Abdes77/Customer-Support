@@ -1,0 +1,28 @@
+# Decisions
+
+One line per decision: what was chosen and why. Newest at the bottom. When a decision is
+reversed, add a new line that says so; do not rewrite history.
+
+| # | Date | Chunk | Decision | Why |
+| --- | --- | --- | --- | --- |
+| 1 | 2026-11-11 | C0 | TypeScript is pinned to 6.0.x, not 7. | typescript-eslint 8 supports TypeScript below 6.1 only; type-aware linting matters more than the newest compiler. |
+| 2 | 2026-11-11 | C0 | Internal packages export TypeScript source; there is no build step and Next.js transpiles them. | One less thing to keep in sync across 20 packages; typecheck, lint and tests work on source directly. |
+| 3 | 2026-11-11 | C0 | One root ESLint flat config with type-aware rules; packages run `eslint .` and have no config of their own. | A single place for rules; no drift between packages built by different sessions. |
+| 4 | 2026-11-11 | C0 | `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `noImplicitReturns` are on; `exactOptionalPropertyTypes` is off. | The last one fights types inferred by Zod and Drizzle and most vendor SDKs; the others catch real bugs cheaply. |
+| 5 | 2026-11-11 | C0 | Every later chunk gets a pre-created package, and allowed dependencies between packages are a checked list (`tooling/boundaries.mjs`, part of `pnpm verify`). | Independent sessions cannot create import cycles or reach across layers by accident. |
+| 6 | 2026-11-11 | C0 | The cross-chunk contracts are code in `@repo/core` (types plus Zod schemas, with tests), not only prose. | Later chunks compile against them; a mismatch is a type error instead of a late surprise. |
+| 7 | 2026-11-11 | C0 | Entity ids are branded UUID types (`BusinessId`, `ConversationId`, ...). | Passing the wrong id is the classic cross-tenant bug; the compiler now refuses it. |
+| 8 | 2026-11-11 | C0 | Events are named `entity.event` with a dot (`lead.qualified`, `message.received`). | Matches the names in the spec exactly; one convention for all events. |
+| 9 | 2026-11-11 | C0 | The routing decision reaches the model as the tool result of `update_lead_fields` within the same turn, instead of a separate extraction call before the reply. | The reply must follow the decision; this needs one model round trip and keeps scoring deterministic code. |
+| 10 | 2026-11-11 | C0 | Conversation history is replayed to Claude as plain text; thinking blocks are kept only inside one turn's tool loop. | On claude-fable-5-2 a replayed thinking block is rejected if the system prompt, tools or earlier turns changed, and admins can edit prompts, playbooks and knowledge mid-conversation. |
+| 11 | 2026-11-11 | C0 | No Redis and no vector database in production. Counters, locks and rate limits use Postgres; knowledge retrieval uses Postgres full-text search. | Neither is in the decided stack; per-business knowledge is small; fewer vendors to operate. (pgvector is also not installed in the build VM.) |
+| 12 | 2026-11-11 | C0 | Environment variables are declared once in `packages/core/src/env/spec.ts`; `.env.example` is generated from it and ESLint forbids `process.env` elsewhere. | Makes "keep .env.example current" mechanical: an undeclared variable cannot be read. |
+| 13 | 2026-11-11 | C0 | Debounce = Inngest's static debounce plus a per-business sleep and a latest-message check; ordering = Inngest concurrency plus a turn lease in Postgres. | Inngest's debounce period cannot vary per business, and its concurrency limit applies to steps, not whole runs. |
+| 14 | 2026-11-11 | C0 | Prettier formats code and config but not Markdown. | Docs are written by many sessions; reflowing tables and prose creates noise and failed checks. |
+| 15 | 2026-11-11 | C0 | Turborepo runs with `envMode: "loose"` and never caches the `test` task. | Tests must see `ANTHROPIC_API_KEY`, `TEST_DATABASE_URL` and friends, and a cached pass could hide a broken database or service. |
+| 16 | 2026-11-11 | C0 | Local and CI databases are plain PostgreSQL 16 with a role shaped like Supabase's `postgres` role (not superuser, bypasses RLS); C1 adds a Supabase-compatibility bootstrap. The Supabase CLI stack is not used. | PostgreSQL 16 is installed in the VM; the Supabase stack needs many container images and is slower to start. |
+| 17 | 2026-11-11 | C0 | Playwright end-to-end tests run with `pnpm e2e`, outside `pnpm verify`. | They need browsers and a running app; `pnpm verify` stays fast and dependable as the gate for every chunk. |
+| 18 | 2026-11-11 | C0 | Channels that notify rather than deliver (Gmail push, Graph, IMAP) and the widget call the pipeline's `ingest()` with normalized messages instead of implementing `parseWebhook`. | Their webhook body does not contain the message; fetching needs tenant credentials and belongs in a job. |
+| 19 | 2026-11-11 | C0 | Alert email goes through a plain SMTP server (`ALERT_SMTP_URL`), and alert WhatsApp messages through the agency's own Cloud API number. | No extra email vendor; reuses the Meta module. C13 may revise. |
+| 20 | 2026-11-11 | C0 | Refusals from the model (`stop_reason: "refusal"`) hand the conversation to a human, and server-side fallbacks are enabled by default behind a setting. | A support bot must never stall silently; a false-positive safety refusal should still produce an answer. |
+| 21 | 2026-11-11 | C0 | Dependency versions in the pnpm catalog are the latest published on 2026-11-11 (Next.js 16.4, React 19.3, Zod 4.6, Vitest 5.1, ESLint 10, Inngest 4, Anthropic SDK 1.8, Drizzle 0.45). Only the ones C0 uses were installed and proven. | Start current; a chunk that finds an incompatibility changes the catalog and adds a line here. |

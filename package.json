@@ -1,0 +1,41 @@
+{
+  "name": "home-services-reply-bot",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-tenant reply bot for US home-services businesses",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint && pnpm run lint:root && pnpm run check:boundaries && pnpm run format:check",
+    "lint:root": "eslint --max-warnings 0 --no-error-on-unmatched-pattern \"*.{js,mjs,cjs,ts,mts}\" tooling scripts",
+    "test": "turbo run test && pnpm run test:tooling",
+    "test:tooling": "node --test \"tooling/scripts/*.test.mjs\"",
+    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
+    "check:boundaries": "node tooling/scripts/check-boundaries.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "env:example": "pnpm --filter @repo/core run env:example",
+    "services:up": "bash scripts/dev-services.sh up",
+    "services:down": "bash scripts/dev-services.sh down",
+    "services:status": "bash scripts/dev-services.sh status"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@next/eslint-plugin-next": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "eslint-plugin-react-hooks": "catalog:",
+    "globals": "catalog:",
+    "prettier": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  }
+}
