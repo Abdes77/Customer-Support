@@ -33,6 +33,9 @@ export interface Connection {
   readonly db: RawDatabase;
 }
 
+const JSON_OID = 114;
+const JSONB_OID = 3802;
+
 export function connect(url: string, options: ConnectOptions = {}): Connection {
   const client = postgres(url, {
     max: options.max ?? 5,
@@ -43,5 +46,14 @@ export function connect(url: string, options: ConnectOptions = {}): Connection {
     onnotice: () => undefined,
     connection: { application_name: options.applicationName ?? "hsrb" },
   });
-  return { client, db: drizzle(client, { schema: tables }) };
+  const db = drizzle(client, { schema: tables });
+  // json and jsonb are parsed exactly once, by Drizzle's column. postgres.js parses them by
+  // default and Drizzle's `json`/`jsonb` columns then call JSON.parse on any string they get,
+  // so a stored JSON string that looks like JSON ("55408", "true", "[1,2]") came back as a
+  // number, boolean or array. Consequence: raw `execute(sql...)` returns json/jsonb as text.
+  // Drizzle sets its own parsers in `drizzle()`, so this must come after it. ARCHITECTURE §8.
+  const asText = (value: string): string => value;
+  client.options.parsers[JSON_OID] = asText;
+  client.options.parsers[JSONB_OID] = asText;
+  return { client, db };
 }

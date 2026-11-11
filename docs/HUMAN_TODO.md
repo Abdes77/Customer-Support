@@ -98,6 +98,22 @@ Format of an entry:
 - **Variable:** none.
 - **Live check:** sign in at `<APP_URL>/sign-in`.
 
+### 6. Review the defaults that carry legal or safety weight (C2)
+
+- **What:** a person at the agency (and, where it applies, its lawyer) should read these
+  defaults before the first real customer is answered. They were written without legal review:
+  - `emergency.classes`: the safety instructions the bot gives word for word for gas, carbon
+    monoxide, fire, electrical hazards, flooding, no heat, no cooling and structural damage;
+  - `persona.ai_disclosure` (default: the bot says it is an AI in its first message) and its
+    wording. Some US states require bots to identify themselves;
+  - `follow_up.opt_out_keywords`, `follow_up.opt_out_confirmation` and `hours.quiet_hours`
+    (default 21:00 to 08:00), which bear on TCPA and carrier rules for text messages;
+  - `data.*`: how long conversations, photos and model records are kept.
+- **Where:** `docs/SETTINGS.md` lists each default; change them agency-wide on the settings
+  screen (C15) at the global scope, or in `packages/settings/src/registry`.
+- **Variable:** none.
+- **Live check:** none.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and

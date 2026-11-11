@@ -10,7 +10,8 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 - `docs/ARCHITECTURE.md`: components, webhook-to-reply flow, tenancy and security, jobs,
   Claude API rules, package layers, contracts between chunks.
 - `docs/BUILD_PLAN.md`: which paths each chunk owns and how to change shared files.
-- `docs/SETTINGS.md` (once it exists), `docs/DECISIONS.md`, `docs/HUMAN_TODO.md`.
+- `docs/SETTINGS.md`: every setting, how values resolve, how to read, change and add one.
+- `docs/DECISIONS.md`, `docs/HUMAN_TODO.md`.
 - `AUTOBUILD.md`: the build rules. Never edit it or `autobuild/STATE.md`.
 
 ## Commands
@@ -24,6 +25,7 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 | `pnpm format` | Fix formatting with Prettier |
 | `pnpm check:boundaries` | Check package dependencies against `tooling/boundaries.mjs` |
 | `pnpm env:example` | Regenerate `.env.example` from `packages/core/src/env/spec.ts` |
+| `pnpm settings:docs` | Regenerate `docs/SETTINGS.md` from the registry in `packages/settings` |
 | `pnpm services:up` | Start local PostgreSQL 16, create `hsrb_dev` and `hsrb_test` |
 | `pnpm db:migrate` / `db:seed` / `db:reset` | Apply migrations (the only supported way); load demo data; wipe a local database |
 | `pnpm db:generate` | Write a migration after changing `packages/db/src/schema` |
@@ -55,8 +57,10 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 - Auth in `apps/web`: `requireAccess()` from `@/server/auth`, then `requireBusinessRole()`.
   Local sign-in needs `LOCAL_AUTH_SECRET`; seed users are in `packages/db/src/seed/demo.ts`.
 - Configuration: declare variables in the env spec and read them with `getEnv()` /
-  `requireEnv()` from `@repo/core/env`. `process.env` is blocked by ESLint. Anything a
-  business might tune is a setting, not an env variable.
+  `requireEnv()` from `@repo/core/env`. `process.env` is blocked by ESLint.
+- Settings: anything a business might tune is a setting, not an env variable or a constant.
+  Declare it in `packages/settings/src/registry`, read it from the turn's snapshot
+  (`settings.values["category.name"]`), change stored values only through the store.
 - Secrets: never print, log or commit one. Tenant credentials are encrypted before storage and
   never sent to the browser or put in a job payload.
 - Logging: `logger.child({ traceId, businessId })` from `@repo/core`. Never log message text,

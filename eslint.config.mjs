@@ -108,6 +108,44 @@ export default defineConfig(
     },
   },
 
+  // @repo/settings: the main entry point is imported by the admin panel in the browser, so
+  // only src/server may touch the database, the environment or Node built-ins.
+  {
+    files: ["packages/settings/src/**/*.ts"],
+    ignores: ["packages/settings/src/server/**", "**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            ...["fs", "path", "crypto", "os", "child_process", "buffer", "stream", "util"].map(
+              (name) => ({ name, message: "This entry point must run in a browser." }),
+            ),
+            {
+              name: "@repo/db",
+              message: "Database code belongs in packages/settings/src/server.",
+            },
+            {
+              name: "@repo/core/env",
+              message: "Environment access belongs in packages/settings/src/server.",
+            },
+          ],
+          patterns: [
+            { group: ["node:*"], message: "This entry point must run in a browser." },
+            {
+              group: ["@repo/db/*", "./server", "./server/*", "../server", "../server/*"],
+              message: "Only @repo/settings/server may import server code.",
+            },
+            {
+              group: ["@repo/*/src", "@repo/*/src/*", "**/packages/*/src/*"],
+              message: "Import from the package's public entry point (@repo/<name>), not its src.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Configuration is read through @repo/core/env so it is validated and documented once.
   {
     files: ["packages/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}"],

@@ -458,8 +458,26 @@ optional `sendTyping`, `markRead`, `fetchAttachment`.
 `SettingsResolver.resolve({ agencyId, businessId }): ResolvedSettings<TValues>` with `values`,
 `sources` (which scope supplied each value) and `version` (a stable hash). Precedence, later
 wins: registry default, global override, segment default, business override.
-`packages/settings` exports the concrete `TValues`. Consumers receive a snapshot; they do not
-read setting rows or re-resolve in the middle of a turn.
+`packages/settings` exports the concrete `TValues` (`AppSettings`, one property per setting
+key such as `"pricing.disclosure"`). Consumers receive a snapshot; they do not read setting
+rows or re-resolve in the middle of a turn.
+
+- The registry (`SETTINGS`) declares every setting once: key, field (Zod schema plus the
+  description a form is drawn from), default, label, help, category, allowed scopes,
+  client-editable flag. `docs/SETTINGS.md` is generated from it and lists every setting.
+- `@repo/settings` is browser-safe (registry, types, pure resolver, access rules);
+  `@repo/settings/server` holds the database half: `createSettingsResolver({ db })`,
+  `loadSettings(ctx, target)` inside a transaction, and `createSettingsService({ db })` for
+  the admin panel (view, update, history on behalf of a signed-in user).
+- The resolver never trusts a stored row: an unknown key, a scope the setting does not allow
+  or a value that fails validation is skipped, the value falls back to the next scope down,
+  and the row is reported in `issues`.
+- Writes go through the store only: validated, versioned (`setting_versions`) and audited in
+  one transaction. Agency staff write as themselves; client users, who have no row-level
+  access to the settings tables, are served in the business's system scope after their role,
+  the setting's client-editable flag and `client_portal.edit_settings` are checked.
+- Per-channel settings are read with `channelSetting(values, base, channel)`; tests and
+  evaluation profiles build a snapshot with `settingsWith({ ...overrides })`.
 
 ### Integration connector (`contracts/integration.ts`, owner C14)
 
@@ -519,6 +537,17 @@ Things to know when writing queries: timestamps are `Date` objects; inside a raw
 `sql` template pass a date as `${date.toISOString()}::timestamptz` (column operators such as
 `lt(table.createdAt, date)` convert by themselves); import query helpers (`eq`, `and`, `sql`)
 from `@repo/db`; spread `ctx.tenant` into every insert; do not nest `run()` calls.
+
+**`json` and `jsonb` are parsed once, by Drizzle.** postgres.js parses JSON columns by default
+and Drizzle's `json`/`jsonb` column parses any string it is handed again, so a stored JSON
+string that is itself valid JSON changed type on the way out (`"55408"` became the number
+55408, `"true"` a boolean). `connect()` in `packages/db/src/internal/client.ts` therefore
+turns postgres.js's JSON parsing off and leaves the one parse to the column; read and write
+`jsonb` columns through Drizzle as usual and a string stays a string
+(`packages/db/src/internal/client.test.ts`). The price: a raw `execute(sql...)` returns
+`json`/`jsonb` values as text, so `JSON.parse` what you select that way; the same holds for
+a `sql` expression in `select()` that yields JSON, unless it is given `.mapWith(table.column)`
+of a `jsonb` column.
 
 ## 9. Configuration
 
