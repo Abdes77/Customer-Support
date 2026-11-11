@@ -13,9 +13,13 @@
   },
   "dependencies": {
     "@repo/core": "workspace:*",
+    "@repo/db": "workspace:*",
+    "@supabase/ssr": "catalog:",
+    "@supabase/supabase-js": "catalog:",
     "next": "catalog:",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "catalog:",

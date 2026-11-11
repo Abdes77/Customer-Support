@@ -181,23 +181,59 @@ There are exactly three ways to reach the database:
 
 | Path | Used by | Mechanism |
 | --- | --- | --- |
-| User context | Admin panel, client portal, anything acting for a signed-in user | A connection that runs as the Postgres role `authenticated` with the user's JWT claims set, so **row-level security decides**. Server code also checks the role (defence in depth). |
-| System context | Webhooks, Inngest functions, crons | A connection that bypasses RLS, reachable only through tenant-scoped repositories: every call takes a `businessId` (or `agencyId`) and adds it to the query. Raw access is not exported from `packages/db`. |
-| Public | Widget visitors, unauthenticated webhooks | Never the database directly. API routes authenticate the caller (signed visitor session, provider signature) and then use the system path for exactly one tenant. |
+| User context | Admin panel, client portal, anything acting for a signed-in user | `getDatabase().asUser(user).run(ctx => ...)`: one transaction as the Postgres role `authenticated` with the user's JWT claims set, so **row-level security decides**. Server code also checks the role (defence in depth). |
+| System context | Webhooks, Inngest functions, crons | `getDatabase().forBusiness(businessId).run(ctx => ...)` or `.forAgency(agencyId)`: one transaction as the role `app_system`, **confined by row-level security to the tenant it entered** (held in transaction-local settings). `ctx.tx` is a full Drizzle transaction; a query that forgets `business_id` still cannot read or write another tenant. |
+| Cross-tenant | The few lookups that have no tenant yet | `getDatabase().directory` (webhook account → tenant, API key → agency, tenants for a cron) and `.platform` (create an agency). They run on the connection role, which bypasses RLS, and live only in `packages/db`. A chunk that needs another one adds it there, by the rules at the top of `src/directory.ts`. |
+| Public | Widget visitors, unauthenticated webhooks | Never the database directly. API routes authenticate the caller (signed visitor session, provider signature), map it to a tenant through the directory, and then use the system context of exactly that tenant. |
 
-RLS is enabled and forced on every table. Policies use `SECURITY DEFINER` helper functions that
-read membership tables by `auth.uid()`, so removing a membership takes effect immediately.
-Sign-in is Supabase Auth (magic link and password). `apps/web/src/proxy.ts` (the Next.js 16
-name for middleware) only refreshes the session cookie; it is not an authorization layer.
-Every server action and route handler authorizes on its own, because a route outside the
-proxy's matcher would otherwise be unprotected.
+No unrestricted client is exported from `packages/db`.
+
+RLS is enabled and forced on every table. Policies are declared next to the tables
+(`packages/db/src/schema/policies.ts`) for the two restricted roles. The ones for
+`authenticated` use `SECURITY DEFINER` helper functions that read the membership tables by
+`auth.uid()`, so removing a membership, or switching client logins off, takes effect at once.
+What signed-in users may do:
+
+- **Agency staff** read everything in their agency. They write configuration (businesses,
+  knowledge, playbooks, message templates, notes, business-scope settings); `agency_admin`
+  additionally manages memberships, API keys, agency-wide and segment settings, deletes, and
+  reads the audit log.
+- **Client users** only read, only their own business, only while `businesses.client_portal_enabled`
+  is true (the per-business switch for client logins, a column because RLS reads it), and only
+  the customer-facing tables: contacts, conversations, messages, attachments, takeover locks,
+  leads and their fields, reports and routing, bookings, knowledge. Finer client permissions
+  are settings, enforced in server code.
+- **Nobody** writes the tables the pipeline owns (conversations, messages, leads, jobs, alerts,
+  model calls...) as a user. A manual reply, an assignment or a takeover is a server function
+  that checks the role and then acts in the system context, so sequence numbers, leases and
+  statuses are never edited from a browser. The same goes for channel and integration
+  connections: the provider account stored there decides which tenant receives a webhook, so
+  only a connect flow that proved control of the account may write it. Credentials are not
+  readable by any user.
+
+After every migration `app.sync_table_privileges()` grants each restricted role exactly the
+commands its policies cover and revokes everything from `anon`; a table without policies is
+unreachable. Every foreign key between tenant tables includes `business_id`, so a row cannot
+point at another tenant's row.
+
+Sign-in is Supabase Auth (magic link and password), behind a provider interface in
+`apps/web/src/server/auth`. Local development and CI have no Supabase project: there the same
+interface is served by a local provider (users in the compatibility `auth.users` table, a
+signed cookie as the session), switched on by `LOCAL_AUTH_SECRET` and never on Vercel.
+`apps/web/src/proxy.ts` (the Next.js 16 name for middleware) only refreshes the session
+cookie; it is not an authorization layer. Every server action and route handler authorizes on
+its own (`requireAccess()`, then `requireBusinessRole()`), because a route outside the proxy's
+matcher would otherwise be unprotected.
 The tenant-isolation test suite (C1) enumerates every table with a `business_id` column from
-the catalog and fails if a table has no policy or is missing from the test matrix, so tables
-added by later chunks are covered automatically.
+the catalog and fails if a table has no policy or is missing from the test matrix
+(`packages/db/src/testing/isolation-matrix.ts`), so tables added by later chunks are covered
+or the suite fails.
 
 Supabase Storage uses one private bucket with paths
 `{agencyId}/{businessId}/{conversationId}/{messageId}/{file}`; files are served through
-short-lived signed URLs created server-side after an access check. Supabase Realtime carries
+short-lived signed URLs created server-side after an access check. Code reaches it through
+`getTenantStorage(tenant)` from `@repo/db/storage`, which refuses any path outside the tenant
+(on a developer machine the bucket is a folder under `.local/storage`). Supabase Realtime carries
 inbox updates to signed-in users under the same RLS policies; widget visitors receive replies
 on a private channel bound to their signed session and can read no table.
 
@@ -210,6 +246,9 @@ on a private channel bound to their signed session and can read no table.
   The key comes from `CREDENTIALS_ENCRYPTION_KEY`; each ciphertext records a key id so keys
   rotate without downtime, and the row's tenant and connection ids are bound in as
   additional authenticated data, so a ciphertext copied to another tenant will not decrypt.
+  They are stored in their own tables (`channel_connection_secrets`,
+  `integration_connection_secrets`), which have no policy for signed-in users, and are read
+  and written through `getDatabase().secrets` inside a business's system context.
 - Decryption happens just in time, inside the job step that makes the vendor call. Decrypted
   values are never logged, never returned from a server action or API, and never put in a
   job payload. Connection DTOs sent to the browser carry masked metadata only.
@@ -220,7 +259,7 @@ on a private channel bound to their signed session and can read no table.
 | Threat | Design answer |
 | --- | --- |
 | Prompt injection through messages, emails, photos, imported data, crawled pages | Untrusted text only ever appears as `user` content or inside clearly delimited data blocks; operator instructions use the system prompt or `role: "system"` messages. Tools are narrow, validated with Zod and re-checked against settings and state by the handler, so the model cannot grant itself an action. Replies pass a deterministic output guard (length, link allow-list, system-prompt canary). |
-| Cross-tenant access | RLS for users, tenant-scoped repositories for jobs, branded id types (`BusinessId` is not `ConversationId`), isolation tests over every table. |
+| Cross-tenant access | RLS for users and for jobs (the system context is confined to one tenant by PostgreSQL), foreign keys that include `business_id`, branded id types (`BusinessId` is not `ConversationId`), isolation tests over every table. |
 | Webhook spoofing and replay | Signature over raw bytes, constant-time compare, provider timestamp tolerance where one exists, idempotent storage keyed by provider message id. |
 | Secret leakage | Application-layer encryption, redacting logger, no secrets or message text in job payloads, secrets never serialized to the browser. |
 | Personal data in logs | The logger redacts message bodies, contact details and credentials by field name; full model inputs and outputs go to a tenant-scoped table with a retention setting, not to logs. |
@@ -242,9 +281,10 @@ Rules for every function:
 - **At-least-once.** Every handler is idempotent. Side effects sit in their own `step.run`,
   keyed by a stable id (outbound message id, lead event id, tool-call id), and check stored
   state before acting.
-- **Tenant first.** The first step loads the tenant from the payload ids through a
-  tenant-scoped repository; a mismatch between `businessId` and the entity is a
-  `TenantAccessError` (never retried).
+- **Tenant first.** Every step works inside
+  `getDatabase().forBusiness(businessId, { agencyId })` with the ids from the payload; a
+  business that is not in that agency, or an entity that is not in that business, is a
+  `TenantAccessError` or simply not found (never retried).
 - **Errors.** Throw `AppError`s. `retryable: false` maps to Inngest's non-retriable error;
   everything else retries with backoff. Every function has an `onFailure` handler that writes
   a dead-letter row and raises an alert.
@@ -452,16 +492,33 @@ never edited). Expected tables, by area:
 | Tenancy and auth | agencies, users, agency memberships, businesses, business memberships, API keys (hashed) |
 | Playbooks and knowledge | segments, playbook versions, business playbook overrides, knowledge items, import runs |
 | Settings | setting values per scope, setting versions |
-| Channels | channel connections (encrypted credentials), message templates, widget sessions |
+| Channels | channel connections, channel connection secrets (encrypted credentials), message templates, widget sessions |
 | Conversations | contacts, contact identities, conversations (turn lease, last inbound time), messages (unique provider id, sequence, status, trace id), attachments, takeover locks, internal notes |
 | Leads | leads, lead fields (value, confidence, evidence), lead reports, routing decisions |
 | Model | model calls (inputs, outputs, tokens, latency, cache reads) |
-| Integrations | integration connections, integration event log, bookings |
+| Integrations | integration connections, integration connection secrets, integration event log, bookings |
 | Operations | scheduled jobs, alerts, escalations, dead letters, rate-limit and spend counters, audit log |
 
 Vocabulary to share: message direction `inbound` / `outbound`; author `customer`, `bot`,
 `human_agent`; outbound status `queued`, `sending`, `sent`, `delivered`, `read`, `failed`,
-`superseded`; lead status as in `LEAD_STATUSES`; roles as in `ROLES`.
+`superseded` (an inbound message is `received`); lead status as in `LEAD_STATUSES`; roles as
+in `ROLES`. Closed vocabularies are `text` columns with a CHECK constraint built from the
+constant array that types the column.
+
+Adding or changing a table (any chunk):
+
+1. Declare it in `packages/db/src/schema/` with `tenantColumns()`, `tenantFk()`, composite
+   keys to its parents (`conversationFk`, `leadFk`, ...) and one of `businessPolicies()`,
+   `sharedPolicies()` or `agencyPolicies()`.
+2. `pnpm db:generate`, and read the SQL it wrote into `packages/db/drizzle/`.
+3. Add the table to `packages/db/src/testing/isolation-matrix.ts`.
+4. `pnpm --filter @repo/db test`. The suite fails when a table has no policy, is missing from
+   the matrix, or the schema and the migrations disagree.
+
+Things to know when writing queries: timestamps are `Date` objects; inside a raw
+`sql` template pass a date as `${date.toISOString()}::timestamptz` (column operators such as
+`lt(table.createdAt, date)` convert by themselves); import query helpers (`eq`, `and`, `sql`)
+from `@repo/db`; spread `ctx.tenant` into every insert; do not nest `run()` calls.
 
 ## 9. Configuration
 
@@ -480,7 +537,7 @@ Vocabulary to share: message direction `inbound` / `outbound`; author `customer`
 | Kind | Where | Runs in |
 | --- | --- | --- |
 | Unit and contract tests | `*.test.ts` next to the source | `pnpm verify` |
-| Database tests (migrations, RLS, repositories) | `packages/db` and consumers, against local PostgreSQL 16 (`pnpm services:up`, `TEST_DATABASE_URL`) | `pnpm verify` |
+| Database tests (migrations, RLS, repositories) | `packages/db` and consumers, against local PostgreSQL 16 (`TEST_DATABASE_URL`). `createTestDatabase()` from `@repo/db/testing` gives each test file its own migrated database (cloned from a template), `createWorld()` fills it with two agencies and a user per role; the server is started when it is down | `pnpm verify` |
 | Provider fixtures | `fixtures/` folders with recorded payloads; adapters and connectors take an injected `fetch` | `pnpm verify` |
 | Job tests | `@inngest/test` and fake clocks | `pnpm verify` |
 | Engine scripts | Scripted conversations against a mocked or recorded model client | `pnpm verify` |

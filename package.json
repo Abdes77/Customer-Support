@@ -21,6 +21,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "env:example": "pnpm --filter @repo/core run env:example",
+    "db:generate": "pnpm --filter @repo/db run generate",
+    "db:migrate": "pnpm --filter @repo/db run migrate",
+    "db:seed": "pnpm --filter @repo/db run seed",
+    "db:reset": "pnpm --filter @repo/db run reset",
+    "db:doctor": "pnpm --filter @repo/db run doctor",
+    "db:create-admin": "pnpm --filter @repo/db run create-admin",
     "services:up": "bash scripts/dev-services.sh up",
     "services:down": "bash scripts/dev-services.sh down",
     "services:status": "bash scripts/dev-services.sh status"

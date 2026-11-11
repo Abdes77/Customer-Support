@@ -148,6 +148,25 @@ export const ENV_SPEC = {
     secret: true,
     required: "optional",
   },
+  DATABASE_POOL_MAX: {
+    schema: z.coerce.number().int().min(1).max(50),
+    group: "supabase",
+    description:
+      "Connections each server instance may open to PostgreSQL. Keep it small on serverless.",
+    example: "5",
+    secret: false,
+    required: "optional",
+    default: "5",
+  },
+  SEED_USER_PASSWORD: {
+    schema: z.string().min(12),
+    group: "supabase",
+    description:
+      "Password that pnpm db:seed gives the demo users (at least 12 characters). Required to seed a Supabase database; a local database falls back to the documented demo password.",
+    example: "",
+    secret: true,
+    required: "optional",
+  },
   SUPABASE_STORAGE_BUCKET: {
     schema: nonEmpty,
     group: "supabase",
@@ -182,6 +201,15 @@ export const ENV_SPEC = {
     group: "security",
     description:
       "Retired keys still needed to decrypt old rows during rotation, as id:base64key pairs separated by commas.",
+    example: "",
+    secret: true,
+    required: "optional",
+  },
+  LOCAL_AUTH_SECRET: {
+    schema: z.string().min(32),
+    group: "security",
+    description:
+      "Local development and CI only: switches on the built-in sign-in that stands in for Supabase Auth when no Supabase project is configured, and signs its session cookie (at least 32 characters). Ignored on Vercel. Never set it in production.",
     example: "",
     secret: true,
     required: "optional",
