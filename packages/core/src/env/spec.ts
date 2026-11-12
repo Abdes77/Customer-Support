@@ -470,6 +470,15 @@ export const ENV_SPEC = {
     secret: false,
     required: "feature",
   },
+  GOOGLE_PUBSUB_PUSH_AUDIENCE: {
+    schema: url,
+    group: "google",
+    description:
+      "Audience of the Pub/Sub push token, as set on the push subscription. Default: <APP_URL>/api/webhooks/email/gmail (Pub/Sub's default audience is the push endpoint).",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
 
   // --- microsoft -------------------------------------------------------------------------
   MICROSOFT_CLIENT_ID: {
@@ -501,7 +510,7 @@ export const ENV_SPEC = {
     schema: z.string().min(16),
     group: "microsoft",
     description:
-      "Random string sent with Graph subscriptions and checked on every change notification.",
+      "Secret from which each Graph subscription's clientState is derived (one per inbox) and checked on every change notification. Generate with: openssl rand -base64 32",
     example: "",
     secret: true,
     required: "feature",

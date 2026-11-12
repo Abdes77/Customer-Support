@@ -84,7 +84,7 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Plain text as minimal HTML paragraphs. C11 replaces this with the business's template. */
+/** Plain text as minimal HTML paragraphs, for an email channel without a composer (tests). */
 export function textToHtml(text: string): string {
   return text
     .split(/\n\s*\n/)
@@ -231,6 +231,55 @@ export async function prepareSend(
 
   const payload = asRecord(message.payload);
   const text = message.text ?? "";
+
+  let email: SendTargetInfo["email"] = null;
+  if (conversation.channel === "email") {
+    const envelope = asRecord(asRecord(lastInbound?.payload)["email"]);
+    const inReplyTo =
+      typeof envelope["messageIdHeader"] === "string" ? envelope["messageIdHeader"] : null;
+    const subject =
+      typeof envelope["subject"] === "string" ? envelope["subject"] : (conversation.subject ?? "");
+    email = {
+      inReplyTo,
+      references: [
+        ...stringArray(envelope["references"]),
+        ...(inReplyTo === null ? [] : [inReplyTo]),
+      ],
+      subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`.trim(),
+    };
+  }
+  // The channel's composer (C11: the business's email) turns text and email messages into
+  // what it sends; the subject is the thread's ("Re: …") unless the reply chose a new one.
+  const composer = p.outboundComposers.find((item) => item.channel === conversation.channel);
+  if (composer !== undefined && (message.kind === "email" || message.kind === "text")) {
+    const stored = typeof payload["subject"] === "string" ? payload["subject"].trim() : "";
+    const ownSubject =
+      message.kind === "email" &&
+      stored.length > 0 &&
+      stored.toLowerCase() !== (conversation.subject ?? "").trim().toLowerCase();
+    const composed = await composer.compose(ctx, {
+      messageId: message.id,
+      conversationId: message.conversationId,
+      author,
+      text,
+      subject: ownSubject ? stored : (email?.subject ?? stored),
+      now,
+    });
+    const target: SendTargetInfo = {
+      channel: conversation.channel,
+      connectionId: message.connectionId,
+      conversationId: message.conversationId,
+      recipientExternalId: identity.externalId,
+      externalThreadId: conversation.externalThreadId,
+      replyToExternalMessageId: lastInbound?.externalMessageId ?? null,
+      window,
+      email,
+      sentByHuman,
+    };
+    if (windowClosed) return { kind: "window_closed", target, author };
+    return { kind: "send", parts: [composed], target, author, freeForm: true };
+  }
+
   let parts: OutboundMessage[] = [];
   switch (message.kind) {
     case "email": {
@@ -303,23 +352,6 @@ export async function prepareSend(
           : { kind: "text", text: chunk },
       );
     }
-  }
-
-  let email: SendTargetInfo["email"] = null;
-  if (conversation.channel === "email") {
-    const envelope = asRecord(asRecord(lastInbound?.payload)["email"]);
-    const inReplyTo =
-      typeof envelope["messageIdHeader"] === "string" ? envelope["messageIdHeader"] : null;
-    const subject =
-      typeof envelope["subject"] === "string" ? envelope["subject"] : (conversation.subject ?? "");
-    email = {
-      inReplyTo,
-      references: [
-        ...stringArray(envelope["references"]),
-        ...(inReplyTo === null ? [] : [inReplyTo]),
-      ],
-      subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`.trim(),
-    };
   }
 
   const target: SendTargetInfo = {

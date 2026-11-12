@@ -70,6 +70,11 @@ export const channelConnections = pgTable(
       t.channel,
       sql`(${t.config} ->> 'businessAccountId')`,
     ),
+    // A provider subscription (C11: a Microsoft Graph change-notification subscription) names
+    // one connection: `directory.findChannelConnectionBySubscription`.
+    uniqueIndex("channel_connections_subscription_key")
+      .on(t.channel, sql`(${t.state} ->> 'subscriptionId')`)
+      .where(sql`(${t.state} ->> 'subscriptionId') is not null`),
     check("channel_connections_channel_check", oneOf(t.channel, CHANNEL_IDS)),
     check("channel_connections_status_check", oneOf(t.status, CONNECTION_STATUSES)),
     ...businessPolicies("channel_connections"),

@@ -69,6 +69,13 @@ const samples: { [TName in keyof typeof EVENT_CATALOG]: unknown } = {
     businessId: ids.businessId,
     importRunId: "0a2c4e6a-8c0e-4e2a-a4e6-2a4c6e8a0c11",
   },
+  "email.sync_requested": {
+    traceId: ids.traceId,
+    agencyId: ids.agencyId,
+    businessId: ids.businessId,
+    connectionId: "3c5e7a9c-1e3a-4c5e-a7c9-4e6a8c0e2a12",
+    reason: "push",
+  },
 };
 
 describe("event catalogue", () => {

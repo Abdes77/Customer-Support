@@ -661,6 +661,37 @@ describe("directory", () => {
     );
   });
 
+  it("finds the connection of a provider subscription, which names exactly one (C11)", async () => {
+    const { a1, b1 } = world.businesses;
+    const subscription = `sub-${Date.now()}`;
+    const [row] = await t.admin
+      .insert(channelConnections)
+      .values({
+        ...a1.tenant,
+        channel: "email",
+        externalAccountId: `${subscription}@acme.example`,
+        state: { subscriptionId: subscription },
+      })
+      .returning({ id: channelConnections.id });
+    expect(
+      await t.db.directory.findChannelConnectionBySubscription("email", subscription),
+    ).toMatchObject({ connectionId: row!.id, ...a1.tenant, channel: "email" });
+    expect(
+      await t.db.directory.findChannelConnectionBySubscription("whatsapp", subscription),
+    ).toBeNull();
+    expect(await t.db.directory.findChannelConnectionBySubscription("email", "")).toBeNull();
+    expect(await t.db.directory.findChannelConnectionBySubscription("email", "other")).toBeNull();
+    // A second connection, even of another business, cannot claim the same subscription.
+    await expect(
+      t.admin.insert(channelConnections).values({
+        ...b1.tenant,
+        channel: "email",
+        externalAccountId: `${subscription}@other.example`,
+        state: { subscriptionId: subscription },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("finds a business's agency and lists active businesses for cron runs", async () => {
     const { a1, a2, a3, b1 } = world.businesses;
     expect(await t.db.directory.findBusiness(a1.tenant.businessId)).toEqual({

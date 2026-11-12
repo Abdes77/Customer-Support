@@ -45,7 +45,13 @@ type ClaimSend =
   | { readonly kind: "done"; readonly reason: string };
 
 type PartResult =
-  | { readonly ok: true; readonly externalMessageId: string; readonly sentAt: string }
+  | {
+      readonly ok: true;
+      readonly externalMessageId: string;
+      readonly sentAt: string;
+      /** The provider's own id when it differs (C11 review: Gmail's message id). */
+      readonly providerMessageId?: string;
+    }
   | {
       readonly ok: false;
       readonly code: string;
@@ -129,6 +135,7 @@ const JournalEntry = z.object({
   runId: z.string(),
   externalMessageId: z.string().min(1),
   sentAt: z.string(),
+  providerMessageId: z.string().min(1).optional(),
 });
 
 /**
@@ -180,6 +187,9 @@ export async function sendPart(
       ok: true,
       externalMessageId: journaled.data.externalMessageId,
       sentAt: journaled.data.sentAt,
+      ...(journaled.data.providerMessageId === undefined
+        ? {}
+        : { providerMessageId: journaled.data.providerMessageId }),
     };
   }
   if (part.kind !== "template") {
@@ -198,6 +208,34 @@ export async function sendPart(
         message: "The messaging window closed before the message could be sent.",
         windowClosed: true,
       };
+    }
+  }
+  // The account's sending limit (C11: emails per inbox per hour and day): wait for the next
+  // window instead of sending; the job retries the step after the wait.
+  const throttle = p.sendThrottles.find((item) => item.channel === info.channel);
+  if (throttle !== undefined) {
+    const verdict = await scope.run((ctx) =>
+      throttle.acquire(ctx, {
+        connectionId: info.connectionId,
+        messageId: data.messageId,
+        author: info.sentByHuman ? "human_agent" : "bot",
+        now: p.clock(),
+      }),
+    );
+    if (!verdict.ok) {
+      p.logger.info("send.throttled", {
+        traceId: data.traceId,
+        businessId: data.businessId,
+        messageId: data.messageId,
+        reason: verdict.reason,
+        retryAfterSeconds: verdict.retryAfterSeconds,
+      });
+      throw new ExternalServiceError(`Sending is held back: ${verdict.reason}`, {
+        provider: info.channel,
+        retryable: true,
+        retryAfterSeconds: verdict.retryAfterSeconds,
+        details: { code: "throttled", reason: verdict.reason },
+      });
     }
   }
   const connection = await scope.run((ctx) =>
@@ -226,8 +264,15 @@ export async function sendPart(
   };
   const result = await adapter.send(part, target);
   if (result.ok) {
+    const providerId =
+      result.providerMessageId === undefined ? {} : { providerMessageId: result.providerMessageId };
     const entry = JSON.stringify({
-      [journalKey]: { runId, externalMessageId: result.externalMessageId, sentAt: result.sentAt },
+      [journalKey]: {
+        runId,
+        externalMessageId: result.externalMessageId,
+        sentAt: result.sentAt,
+        ...providerId,
+      },
     });
     try {
       await scope.run(async (ctx) => {
@@ -247,7 +292,12 @@ export async function sendPart(
         error,
       });
     }
-    return { ok: true, externalMessageId: result.externalMessageId, sentAt: result.sentAt };
+    return {
+      ok: true,
+      externalMessageId: result.externalMessageId,
+      sentAt: result.sentAt,
+      ...providerId,
+    };
   }
   const { error } = result;
   if (error.retryable && !error.windowClosed) {
@@ -397,8 +447,15 @@ async function markSent(
   parts: readonly Extract<PartResult, { ok: true }>[],
 ): Promise<void> {
   const first = parts[0]!;
+  const providerIds = parts
+    .map((part) => part.providerMessageId)
+    .filter((id): id is string => id !== undefined);
   const delivery = JSON.stringify({
-    delivery: { runId, parts: parts.map((part) => part.externalMessageId) },
+    delivery: {
+      runId,
+      parts: parts.map((part) => part.externalMessageId),
+      ...(providerIds.length === 0 ? {} : { providerIds }),
+    },
   });
   const now = p.clock();
   await ctx.tx

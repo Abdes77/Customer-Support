@@ -43,6 +43,13 @@ catalog:
   "@anthropic-ai/sdk": ^1.8.0
   htmlparser2: ^12.0.0
 
+  # Email (C11): MIME parsing and building, IMAP and SMTP clients; test servers for the round trip
+  postal-mime: ^4.2.1
+  nodemailer: ^10.5.0
+  imapflow: ^2.11.0
+  smtp-server: ^3.21.4
+  imapkit: ^5.3.1
+
 # pnpm 10 blocks dependency install scripts unless they are listed here.
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { hkdfSync, randomBytes } from "node:crypto";
 
 import { createModelClientFromEnv, type ModelMode, modelModeFromEnv } from "@repo/ai";
 import { createGraphClient, type FetchLike } from "@repo/channel-meta";
@@ -9,6 +9,29 @@ import {
   type MetaPagesService,
   metaChannelGuard,
 } from "@repo/channel-messenger-instagram/server";
+import {
+  createEmailAdapter,
+  createGmailClient,
+  createGraphMailClient,
+  type FetchLike as EmailFetch,
+  type MailNetworkPolicy,
+} from "@repo/channel-email";
+import {
+  createAccessTokens,
+  createEmailComposer,
+  createEmailConnectionService,
+  createEmailJobs,
+  createEmailSendThrottle,
+  createGmailPushHandler,
+  createGraphNotificationHandler,
+  emailChannelGuard,
+  type EmailConnectionService,
+  type EmailJobOptions,
+  type EmailServerDeps,
+  type JsonWebKeySet,
+  publicUrl,
+  ROUTES as EMAIL_ROUTES,
+} from "@repo/channel-email/server";
 import { createTestChannelAdapter, type TestChannelAdapter } from "@repo/channel-test";
 import { createWhatsAppAdapter, type MediaReader } from "@repo/channel-whatsapp";
 import {
@@ -72,7 +95,10 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
  * WhatsApp (C9) with its window fallback, account-event handler and voice-message enricher,
  * and the connection services (`whatsapp`) behind Embedded Signup and the admin panel;
  * Messenger and Instagram (C10) with their account-event handlers and channel guard, and the
- * connection services (`metaPages`) behind Facebook Login and the admin panel.
+ * connection services (`metaPages`) behind Facebook Login and the admin panel; email (C11)
+ * with its composer, send throttle and channel guard, the jobs `email-sync`, `email-poll` and
+ * `email-watch-renew`, the Gmail and Graph notification handlers and the connection services
+ * (`email`) behind the OAuth routes, the IMAP connect route and the admin panel.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -104,6 +130,18 @@ export interface ServerPipeline {
    * (C10); null when the deployment has no Meta app.
    */
   readonly metaPages: MetaPagesService | null;
+  /**
+   * Email (C11): the inbox connections for the admin panel and the connect routes, and the
+   * handlers of the two notification routes. IMAP/SMTP needs no vendor account; Gmail and
+   * Microsoft 365 are offered when their OAuth apps are configured.
+   */
+  readonly email: ServerEmail;
+}
+
+export interface ServerEmail {
+  readonly connections: EmailConnectionService;
+  readonly gmailPush: ReturnType<typeof createGmailPushHandler>;
+  readonly graphNotifications: ReturnType<typeof createGraphNotificationHandler>;
 }
 
 export interface ServerPipelineOptions {
@@ -121,6 +159,31 @@ export interface ServerPipelineOptions {
   readonly storage?: (tenant: BusinessTenant) => TenantStorage;
   /** Tests inject a fake Graph API (and the speech-to-text service) behind this fetch. */
   readonly metaFetch?: FetchLike;
+  /** Tests inject fakes of the Gmail API, Microsoft Graph and their OAuth endpoints. */
+  readonly emailFetch?: EmailFetch;
+  /** Tests widen the mail-server address rules to reach a local IMAP/SMTP server. */
+  readonly mailPolicy?: MailNetworkPolicy;
+  /** Tests inject Google's signing keys for Pub/Sub push tokens. */
+  readonly googleKeys?: () => Promise<JsonWebKeySet>;
+  /** Tests shorten the debounce of `email-sync`. */
+  readonly emailJobs?: EmailJobOptions;
+}
+
+/**
+ * The key that signs the email OAuth `state`, derived from the credentials key with HKDF so
+ * no other secret has to be configured (a different purpose label than the encryption).
+ */
+function oauthStateKey(env: Env): Uint8Array | null {
+  if (env.CREDENTIALS_ENCRYPTION_KEY === undefined) return null;
+  return new Uint8Array(
+    hkdfSync(
+      "sha256",
+      Buffer.from(env.CREDENTIALS_ENCRYPTION_KEY, "base64"),
+      Buffer.alloc(0),
+      "hsrb/email-oauth-state/v1",
+      32,
+    ),
+  );
 }
 
 /**
@@ -264,6 +327,60 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
           logger: metaPagesDeps.logger,
         };
 
+  // Email (C11). The adapter sends through Gmail, Graph or SMTP; inbound mail comes from the
+  // sync job, which calls the pipeline's ingest (bound once the pipeline exists).
+  const emailFetch: EmailFetch = options.emailFetch ?? ((input, init) => fetch(input, init));
+  let ingestEmail: EmailServerDeps["ingest"] = () =>
+    Promise.reject(new Error("The pipeline is not ready yet."));
+  const appUrl = env.APP_URL ?? "http://localhost:3000";
+  const emailDeps: EmailServerDeps = {
+    db,
+    logger: logger.child({ component: "email" }),
+    gmail: createGmailClient(emailFetch),
+    graph: createGraphMailClient(emailFetch),
+    fetch: emailFetch,
+    google:
+      env.GOOGLE_CLIENT_ID === undefined || env.GOOGLE_CLIENT_SECRET === undefined
+        ? null
+        : {
+            app: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET },
+            pubsubTopic: env.GOOGLE_PUBSUB_TOPIC ?? null,
+            pushServiceAccount: env.GOOGLE_PUBSUB_PUSH_SERVICE_ACCOUNT ?? null,
+            pushAudience:
+              env.GOOGLE_PUBSUB_PUSH_AUDIENCE ?? publicUrl(appUrl, EMAIL_ROUTES.gmailPush),
+          },
+    microsoft:
+      env.MICROSOFT_CLIENT_ID === undefined || env.MICROSOFT_CLIENT_SECRET === undefined
+        ? null
+        : {
+            app: {
+              clientId: env.MICROSOFT_CLIENT_ID,
+              clientSecret: env.MICROSOFT_CLIENT_SECRET,
+              tenant: env.MICROSOFT_TENANT_ID,
+            },
+            clientStateSecret: env.MICROSOFT_GRAPH_CLIENT_STATE ?? null,
+          },
+    appUrl,
+    oauthStateKey: oauthStateKey(env),
+    ingest: (parsed) => ingestEmail(parsed),
+    events: {
+      send: (list) => events.send(list),
+    },
+    storage,
+    ...(options.mailPolicy === undefined ? {} : { mailPolicy: options.mailPolicy }),
+    ...(options.googleKeys === undefined ? {} : { googleKeys: options.googleKeys }),
+  };
+  const emailTokens = createAccessTokens(emailDeps);
+  const emailReader = storageMediaReader(storage);
+  const emailAdapter = createEmailAdapter({
+    accessToken: (connection) => emailTokens.forConnection(connection),
+    gmail: emailDeps.gmail,
+    graph: emailDeps.graph,
+    media: emailReader,
+    ...(options.mailPolicy === undefined ? {} : { mailPolicy: options.mailPolicy }),
+    logger: emailDeps.logger,
+  });
+
   const channelAdapters: ChannelAdapter[] = [];
   if (testChannel !== null) channelAdapters.push(testChannel.adapter);
   if (widgetAdapter !== null) channelAdapters.push(widgetAdapter);
@@ -274,6 +391,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
       createInstagramAdapter(metaAdapterOptions),
     );
   }
+  channelAdapters.push(emailAdapter);
   const adapters = createAdapterRegistry(channelAdapters);
 
   const inngest =
@@ -324,9 +442,14 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
             createMetaPagesEventHandler(metaPagesDeps, "instagram"),
           ],
           attachmentEnrichers: [createVoiceMessageEnricher({ transcriber })],
-          channelGuards: [metaChannelGuard],
         }),
+    // Email (C11): the business's email (greeting, signature, quote, HTML), the sending
+    // limits per inbox, and the guard against automatic mail and loops.
+    outboundComposers: [createEmailComposer()],
+    sendThrottles: [createEmailSendThrottle()],
+    channelGuards: [...(metaPagesDeps === null ? [] : [metaChannelGuard]), emailChannelGuard],
   });
+  ingestEmail = (parsed) => pipeline.ingest(parsed);
   const widget =
     widgetSecret === undefined
       ? null
@@ -347,7 +470,9 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   const leadJobs = createLeadJobs({ db, events, logger });
   // `whatsapp-template-sync` (C9).
   const whatsappJobs = whatsappDeps === null ? [] : createWhatsAppJobs(whatsappDeps);
-  const jobs = [...pipeline.jobs(), ...knowledgeJobs, ...leadJobs, ...whatsappJobs];
+  // `email-sync`, `email-poll`, `email-watch-renew` (C11).
+  const emailJobs = createEmailJobs(emailDeps, options.emailJobs);
+  const jobs = [...pipeline.jobs(), ...knowledgeJobs, ...leadJobs, ...whatsappJobs, ...emailJobs];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
     jobs: mode,
@@ -357,6 +482,10 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     widget: widget === null ? "off" : realtime === null ? "polling" : "realtime",
     whatsapp: whatsappDeps !== null,
     messengerInstagram: metaPagesDeps !== null,
+    email: {
+      gmail: emailDeps.google !== null,
+      microsoft: emailDeps.microsoft !== null,
+    },
   });
   return {
     pipeline,
@@ -371,6 +500,11 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     widget,
     whatsapp: whatsappDeps === null ? null : createConnectionService(whatsappDeps),
     metaPages: metaPagesDeps === null ? null : createMetaPagesService(metaPagesDeps),
+    email: {
+      connections: createEmailConnectionService(emailDeps),
+      gmailPush: createGmailPushHandler(emailDeps),
+      graphNotifications: createGraphNotificationHandler(emailDeps),
+    },
   };
 }
 

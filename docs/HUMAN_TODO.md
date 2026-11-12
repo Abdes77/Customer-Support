@@ -550,6 +550,104 @@ Format of an entry:
   6. Messenger's default rate-limit waits and Instagram's 1,000-byte text limit (texts are
      split at 900 characters and trimmed in bytes).
 
+### 14. Email: Gmail, Microsoft 365 and IMAP/SMTP inboxes (C11)
+
+- **What:** the email channel is built and tested without any mail account: IMAP/SMTP against
+  a real IMAP and SMTP server started inside the tests (ImapKit with TLS and STARTTLS), Gmail
+  and Microsoft Graph against fakes of their APIs (`pnpm verify`: threads on all three, the
+  minute poll, Gmail push with its OIDC token, Graph notifications with the handshake and
+  `clientState`, OAuth with PKCE and the cookie-bound state, auto-replies, newsletters and
+  bounces ignored, a bounce marking our email failed, a person's reply from the mailbox
+  handing over, the daily reply limit per thread, the sending limits, private mail servers
+  refused). Google's and Microsoft's docs were read on 2026-11-12 (Gmail push, sync and
+  `history.list`; Pub/Sub push authentication; Graph `sendMail` with MIME, change
+  notifications, `message: delta`). Nothing reached Google or Microsoft: no credentials in the
+  build VM. Needed:
+  1. **Google Cloud project** (the same one C12's Google Calendar will use):
+     - APIs: enable the **Gmail API** and **Cloud Pub/Sub API**.
+     - OAuth consent screen: External (or Internal for one Workspace), app name, support
+       email, the scopes `https://www.googleapis.com/auth/gmail.readonly` and
+       `https://www.googleapis.com/auth/gmail.send`. Both are **restricted** scopes: until
+       Google verifies the app (with a security assessment for restricted scopes) only test
+       users you list can connect, at most 100.
+     - Credentials, OAuth client ID, type Web application, authorized redirect URI
+       `<APP_URL>/api/oauth/email/google/callback`. Its id and secret are `GOOGLE_CLIENT_ID`
+       and `GOOGLE_CLIENT_SECRET`.
+     - Pub/Sub: create a topic (`GOOGLE_PUBSUB_TOPIC`, e.g. `projects/<project>/topics/gmail-push`)
+       and give `gmail-api-push@system.gserviceaccount.com` the **Pub/Sub Publisher** role on
+       it. Create a **push** subscription to it with endpoint
+       `<APP_URL>/api/webhooks/email/gmail`, **Enable authentication** on, a service account
+       you create for it (its email is `GOOGLE_PUBSUB_PUSH_SERVICE_ACCOUNT`), audience left
+       empty (it then is the endpoint URL) or set and copied into
+       `GOOGLE_PUBSUB_PUSH_AUDIENCE`. Without the topic, Gmail inboxes are polled every
+       minute instead.
+  2. **Microsoft Entra app registration:** Accounts in any organizational directory and
+     personal Microsoft accounts (`MICROSOFT_TENANT_ID=common`), Web redirect URI
+     `<APP_URL>/api/oauth/email/microsoft/callback`, a client secret
+     (`MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`), delegated Graph permissions
+     `offline_access`, `User.Read`, `Mail.Read`, `Mail.Send` (a tenant admin may have to
+     consent for work accounts). `MICROSOFT_GRAPH_CLIENT_STATE`: `openssl rand -base64 32`.
+     Change notifications need `APP_URL` to be public https; otherwise Microsoft inboxes are
+     polled every minute.
+  3. **IMAP/SMTP inboxes** need no account of ours: the agency enters the client's mail
+     server, user name and password (an app password where the provider requires one). Only
+     standard ports (IMAP 993 or 143 with STARTTLS, SMTP 465, 587, 25 or 2525) and public
+     addresses are accepted.
+- **Where:** Vercel environment variables; Google Cloud console; Microsoft Entra admin center.
+- **Variables:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_PUBSUB_TOPIC`,
+  `GOOGLE_PUBSUB_PUSH_SERVICE_ACCOUNT`, `GOOGLE_PUBSUB_PUSH_AUDIENCE` (optional),
+  `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID`,
+  `MICROSOFT_GRAPH_CLIENT_STATE`, and `APP_URL` (redirect and notification URLs).
+  `CREDENTIALS_ENCRYPTION_KEY` also signs the OAuth state (a derived key).
+- **Live checks that were skipped:**
+  1. An IMAP/SMTP inbox you own: `pnpm --filter @repo/channel-email live:check --address
+     office@yourdomain.com --imap-host imap.yourdomain.com --smtp-host smtp.yourdomain.com
+     --to you@gmail.com` (the password is asked for on standard input). It logs in to both
+     servers with the app's address and TLS rules, finds the Sent folder and sends a test
+     email; reply to it and run the command again to see the reply's In-Reply-To.
+  2. A real conversation on each connection type: run the app where Google and Microsoft can
+     reach it (a preview deployment, or `pnpm dev` behind `cloudflared tunnel --url
+     http://localhost:3000` with `APP_URL` set to the tunnel), sign in as agency staff, and
+     connect from the browser's console until C16's page exists:
+     `fetch("/api/oauth/email/google", {method: "POST", headers: {"content-type":
+     "application/json"}, body: JSON.stringify({businessId: "<id>", returnTo: "/"})}).then(r =>
+     r.json()).then(r => location.href = r.authorizationUrl)` (and `microsoft`), or `POST
+     /api/channels/email/imap` with the server details. Then write to the inbox from another
+     account. Expect within a minute (push) or two (poll): one reply in the same thread
+     (Gmail and Outlook show it threaded), the signature and the quoted message; reply again
+     and get the next answer in the thread. Then answer the customer yourself from the
+     mailbox: the bot must stay silent in that thread (`takeover_locks` source
+     `provider_inbox`; only mail found in the Sent folder hands over, never mail that merely
+     says it is from the business). Send yourself an out-of-office reply and a newsletter: no
+     answer. Write with another person in Cc: the bot's reply goes to the sender only
+     (`channels.email.reply_to` default `sender`).
+  3. Graph's lifecycle: wait for (or force, by deleting the subscription with Graph Explorer)
+     a `subscriptionRemoved` lifecycle notification and check that the next sync recreates
+     the subscription (`channel_connections.state.subscriptionId` changes).
+- **Unverified details (check them in live check 2):**
+  1. **Not verified anywhere:** whether Gmail's API keeps our `Message-ID` and the
+     `X-HSRB-Loop` header on what it sends, and whether Exchange Online does on MIME
+     `sendMail`. Google's sending guide and Graph's `sendMail` reference (re-read 2026-11-12
+     in the C11 review) say nothing either way. What the code does about it: our copy in Sent
+     is recognized by the loop header, else by its Message-ID, else (Gmail) by the message id
+     `messages.send` returned, else by its words (one of our replies of the same thread
+     appearing whole above the quote; the only way left on Graph, whose `sendMail` returns no
+     id). Any of the last three logs `email.own_send_without_marker`. Check after the first
+     bot reply on each provider: that log line must not appear (if it does, the provider
+     rewrote the headers: tell the team, threading of customers' replies then rests on
+     Gmail's thread id and Outlook's conversation id), no `takeover_locks` row with source
+     `provider_inbox` exists for the thread, and the bot answers the customer's next email.
+  2. Whether Graph's `message: delta` with `changeType=created` and the `receivedDateTime ge`
+     filter returns new messages only once per folder in practice (duplicates are harmless:
+     the Message-ID is the idempotency key).
+  3. Gmail's `history.list` without a `labelId` on a busy mailbox (pages of 100; one run reads
+     at most 8 × 25 messages, the next notification or poll reads on).
+  4. The Pub/Sub token's audience when the push subscription leaves it empty (Google's docs
+     say it is the endpoint URL; set `GOOGLE_PUBSUB_PUSH_AUDIENCE` if pushes are refused with
+     401 and the log says `audience`).
+  5. Real mail programs' quoting and signature styles beyond the fixtures (Gmail, Outlook,
+     Apple Mail, iPhone): the cleaner keeps a forwarded message and cuts only reply quotes.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -576,8 +674,8 @@ already listed and described in `.env.example`.
 | Account | Needed for | Variables (group in `.env.example`) | Entry added by |
 | --- | --- | --- | --- |
 | Meta developer app, business verification, App Review | WhatsApp, Instagram, Messenger | Meta | C9, C10, C18 |
-| Google Cloud project (OAuth client, Pub/Sub topic) | Gmail, Google Calendar | Google | C11, C12 |
-| Microsoft Entra app registration | Outlook mail and calendar | Microsoft | C11, C12 |
+| Google Cloud project (OAuth client, Pub/Sub topic) | Google Calendar (Gmail: entry 14) | Google | C12 |
+| Microsoft Entra app registration | Outlook calendar (mail: entry 14) | Microsoft | C12 |
 | Twilio account and number | Alert SMS, escalation calls | Twilio | C13 |
 | SMTP sender for alerts | Alert email | Alert delivery | C13 |
 | Calendly developer app | Calendly scheduling links | Calendly | C12 |
@@ -635,6 +733,11 @@ already listed and described in `.env.example`.
   Their capabilities were checked against the docs: Messenger 2,000 characters, Instagram
   1,000 bytes, 13 quick replies of 20 characters, a 24-hour standard window and seven days
   with the HUMAN_AGENT tag.
+- **Email (C11).** Built from Google's and Microsoft's docs read on 2026-11-12. IMAP/SMTP is
+  tested against a real IMAP and SMTP server inside the tests (ImapKit, TLS); Gmail and Graph
+  against fakes of their APIs. No request reached Google or Microsoft (entry 14). The email
+  capabilities in `CHANNEL_CAPABILITIES` are ours to choose: one email per reply, up to
+  100,000 characters, images and files as attachments, no messaging window.
 - **Supabase (C1).** The schema, the row-level security and both access paths are tested on
   plain PostgreSQL 16 with a compatibility bootstrap that creates Supabase's roles and
   `auth.uid()`. Not yet seen on a real project: the `postgres` role switching to

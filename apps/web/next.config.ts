@@ -22,6 +22,9 @@ const workspacePackages = Object.keys(packageJson.dependencies).filter((name) =>
 
 const nextConfig: NextConfig = {
   transpilePackages: workspacePackages,
+  // The IMAP and SMTP clients (C11) load parts of themselves at run time (worker threads,
+  // optional modules): run them from node_modules instead of bundling them.
+  serverExternalPackages: ["imapflow", "nodemailer"],
   reactStrictMode: true,
   poweredByHeader: false,
   typedRoutes: true,

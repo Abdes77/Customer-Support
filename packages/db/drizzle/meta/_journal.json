@@ -71,6 +71,13 @@
       "when": 1794488962641,
       "tag": "0009_delivery_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794496607855,
+      "tag": "0010_email_subscriptions",
+      "breakpoints": true
     }
   ]
 }

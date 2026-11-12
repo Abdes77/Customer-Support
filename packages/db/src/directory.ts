@@ -65,6 +65,16 @@ export interface Directory {
     businessAccountId: string,
   ): Promise<ChannelConnectionRef[]>;
 
+  /**
+   * The connection a provider subscription belongs to (C11: a Microsoft Graph change
+   * notification names its subscription). Matches `state.subscriptionId`, which only the
+   * channel's own connect and renew code writes; the index makes it unique per channel.
+   */
+  findChannelConnectionBySubscription(
+    channel: ChannelId,
+    subscriptionId: string,
+  ): Promise<ChannelConnectionRef | null>;
+
   /** The agency of a business, for callers that hold only a business id. */
   findBusiness(businessId: BusinessId): Promise<BusinessRef | null>;
 
@@ -131,6 +141,29 @@ export function createDirectory(connection: Connection): Directory {
         )
         .orderBy(channelConnections.createdAt)
         .limit(100);
+    },
+
+    async findChannelConnectionBySubscription(channel, subscriptionId) {
+      if (subscriptionId.length === 0) return null;
+      const rows = await db
+        .select({
+          connectionId: channelConnections.id,
+          agencyId: channelConnections.agencyId,
+          businessId: channelConnections.businessId,
+          channel: channelConnections.channel,
+          status: channelConnections.status,
+          businessStatus: businesses.status,
+        })
+        .from(channelConnections)
+        .innerJoin(businesses, eq(businesses.id, channelConnections.businessId))
+        .where(
+          and(
+            eq(channelConnections.channel, channel),
+            sql`(${channelConnections.state} ->> 'subscriptionId') = ${subscriptionId}`,
+          ),
+        )
+        .limit(1);
+      return rows[0] ?? null;
     },
 
     async findBusiness(businessId) {

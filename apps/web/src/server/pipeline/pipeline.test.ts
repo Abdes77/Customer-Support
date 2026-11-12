@@ -220,6 +220,10 @@ describe("composition", () => {
       "knowledge-import",
       // C5: lead events a failed turn left behind.
       "leads-outbox",
+      // C11: reading inboxes, the minute poll, and keeping Gmail and Graph push alive.
+      "email-sync",
+      "email-poll",
+      "email-watch-renew",
     ]);
     // Every definition converts to an Inngest function that /api/inngest can serve.
     expect(inngestFunctions(withInngest)).toHaveLength(withInngest.jobs.length);

@@ -558,6 +558,64 @@ Business), Graph API v27.0.
   tagged automatically when needed; the connection page calls `getMetaPages()` and posts the
   login code to `/api/oauth/meta/facebook`.
 
+### As built (C11)
+
+Email: `packages/channels/email` (stateless core and the adapter; `/server` for what touches
+the database; `/testing` for raw fixtures, fakes of the Gmail API and Graph, and a local
+IMAP/SMTP server), the notification routes `/api/webhooks/email/gmail` and
+`/api/webhooks/email/microsoft`, the connect routes `/api/oauth/email/{google|microsoft}`
+(+ `/callback`) and `/api/channels/email/imap` in `apps/web`. Built from Google's and
+Microsoft's docs read on 2026-11-12.
+
+- **Connections.** One `channel_connections` row per inbox, `external_account_id` = the
+  address (a mailbox belongs to one business). `config`: provider (`gmail`, `microsoft`,
+  `imap` with its IMAP and SMTP servers and Sent folder) and a loop token; `state`: the
+  cursors (Gmail history id and watch expiry; Graph subscription id, its expiry and a delta
+  link per folder; IMAP UIDVALIDITY and last UID per folder), last sync and its error;
+  credentials (OAuth tokens or the two passwords) encrypted. Gmail and Microsoft connect by
+  OAuth with PKCE and a signed state bound to a cookie; IMAP/SMTP after both logins worked
+  on a checked public address (`resolveMailHost`, the crawler's address rules). Tokens are
+  refreshed under the secret's row lock; a refused refresh or login marks the connection
+  `error` ("connect it again").
+- **Inbound** (no `parseWebhook`): a Gmail push (Pub/Sub OIDC token checked, the address
+  names the connection), a Graph notification (`clientState` per connection, matched by
+  subscription id; the handshake echoed) or the minute poll emits `email.sync_requested`;
+  `email-sync` reads the inbox and Sent folder from the cursor as raw messages, and
+  `processEmail` parses, classifies (`classifyEmail`), finds the thread, stores the files and
+  calls `ingest`: a customer's email as a message (text = the new text only, quotes and
+  signatures cut, hidden HTML text dropped), a bounce of ours as a `failed` status, the
+  business's own reply in a customer thread as `human_agent_replied` (takeover) only when it
+  was read from the mailbox's Sent folder through the authenticated API or IMAP session (mail
+  in the INBOX "from" the business is never a hand-over: From can be forged) and is not a
+  copy of our own send (loop header, Message-ID, the provider's id returned by the send, or
+  its words: `ownSentCopy`), automatic mail only inside a conversation of ours (marked,
+  never answered), everything else dropped.
+  The provider message id of an email is its Message-ID (ours too), the thread key the
+  thread of what it answers, else the provider's thread, else the root of References.
+- **Outbound:** the send step's `prepare` hands text and email messages to the channel's
+  composer (`outboundComposers`, new in `PipelineDeps`): greeting, sign-off and signature
+  from settings, the customer's message quoted, the others on the customer's email copied
+  only when `channels.email.reply_to` is `all` (default `sender`), sender name, HTML that
+  looks typed. The adapter builds the MIME message (Message-ID from the idempotency key,
+  In-Reply-To and References of the thread, the loop header) and sends it with Gmail
+  (`threadId`; Gmail's message id comes back as `SendResult.providerMessageId` and is kept in
+  `payload.delivery.providerIds`), Graph (MIME `sendMail`) or SMTP (then copies it to Sent). Per-inbox limits
+  are a `sendThrottles` entry (new in `PipelineDeps`): the bot's emails wait for the next
+  hour or day.
+- **Guard** (`emailChannelGuard` in `channelGuards`): automatic mail, threads the team wrote
+  in from the mailbox (`channels.email.skip_staffed_threads`), the daily replies per thread,
+  and twice that many per contact across its threads (a correspondent that never threads).
+- **Jobs:** `email-sync`, `email-poll` (every minute), `email-watch-renew` (hourly).
+- **For C12:** Google and Microsoft OAuth apps are shared through env
+  (`GOOGLE_CLIENT_ID`, `MICROSOFT_CLIENT_ID`...): add the calendar scopes and redirect URIs in
+  C12's own flow; reuse nothing from this package's code. **For C13:** follow-ups on email
+  need no channel code (no window); the composer signs them like any reply. **For C16:** the
+  connection page calls `getEmail()` (`apps/web/src/server/email`): `availability`, `list`,
+  `syncNow`, `disconnect`, and `connectImap`; OAuth starts with `POST /api/oauth/email/{google|microsoft}`
+  (JSON `{ businessId, returnTo }`, answer `{ authorizationUrl }` plus the flow's cookie) and
+  comes back to `returnTo?email=connected|cancelled|in_use|failed|...`. A manual reply on
+  email is a `text` message: the composer makes it an email without the bot's signature.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -708,8 +766,9 @@ Rules for every function:
 | `handoff-emergency-chain` | `lead.emergency` | alert, wait for acknowledgement, call, next contact | C13 |
 | `handoff-takeover-release` | `conversation.takeover_started` | sleeps for the idle timeout, cancelled by manual release | C13 |
 | `whatsapp-template-sync` | cron, every six hours | one step per connected number; webhooks keep statuses current in between | C9 |
-| `email-imap-poll` | cron, every minute | one step per inbox, limit per inbox | C11 |
-| `email-watch-renew` | cron | renews Gmail watches and Graph subscriptions before expiry | C11 |
+| `email-sync` | `email.sync_requested` | debounce and limit 1 per inbox; reads from the stored cursor, batches of 25 | C11 |
+| `email-poll` | cron, every minute | IMAP inboxes, and Gmail/Graph ones without push or not read for 15 minutes | C11 |
+| `email-watch-renew` | cron, hourly | renews Gmail watches (daily) and Graph subscriptions before expiry | C11 |
 | `integrations-sync` | `lead.*` | per connection, idempotency key, backoff | C14 |
 | `knowledge-playbook-generate` | `playbook.generation_requested` | limit 1 per segment; one step per model call; progress on `playbook_generations` | C6 |
 | `knowledge-import` | `knowledge.import_requested` | website crawl; limit 1 per business; one step per page; progress on `import_runs` | C6 |
@@ -731,7 +790,7 @@ Event names reserved so far are the keys of `EVENT_CATALOG`: `message.received`,
 `message.send_requested`, `message.send_failed`, `conversation.takeover_started`,
 `conversation.takeover_released`, `lead.qualified`, `lead.meeting_requested`, `lead.handoff`,
 `lead.disqualified`, `lead.emergency`, `playbook.generation_requested`,
-`knowledge.import_requested`. A chunk that needs a new cross-package event adds its
+`knowledge.import_requested`, `email.sync_requested` (C11). A chunk that needs a new cross-package event adds its
 schema under `packages/core/src/events` and registers it in the catalogue.
 
 Vercel limits one function invocation, so one Inngest step must finish within the route's

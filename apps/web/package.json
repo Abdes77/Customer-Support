@@ -14,8 +14,9 @@
   },
   "dependencies": {
     "@repo/ai": "workspace:*",
-    "@repo/channel-meta": "workspace:*",
+    "@repo/channel-email": "workspace:*",
     "@repo/channel-messenger-instagram": "workspace:*",
+    "@repo/channel-meta": "workspace:*",
     "@repo/channel-test": "workspace:*",
     "@repo/channel-whatsapp": "workspace:*",
     "@repo/channel-widget": "workspace:*",
@@ -29,8 +30,10 @@
     "@repo/widget-embed": "workspace:*",
     "@supabase/ssr": "catalog:",
     "@supabase/supabase-js": "catalog:",
+    "imapflow": "catalog:",
     "inngest": "catalog:",
     "next": "catalog:",
+    "nodemailer": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "zod": "catalog:"

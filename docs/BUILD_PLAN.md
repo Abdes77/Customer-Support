@@ -222,6 +222,17 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   Microsoft calendar access even though the OAuth apps are shared), connection screens (C16).
 - **Must deliver:** a local mail server recipe for the IMAP/SMTP round-trip test that runs
   inside `pnpm verify` or a documented separate command.
+- **Delivered, for C12, C13, C16 and C17:** `@repo/channel-email` (adapter, MIME parsing and
+  building, body cleaning, classification of automatic mail, threading, composition, Gmail,
+  Graph and IMAP/SMTP clients, the SSRF rules for mail servers), `/server` (connection
+  service, notification handlers, `email-sync`, `email-poll`, `email-watch-renew`, the
+  composer, the send throttle and `emailChannelGuard`) and `/testing` (raw fixtures, fake
+  Gmail and Graph, `startLocalMailServer`: ImapKit with TLS, used by the round trip inside
+  `pnpm verify`, e.g. `pnpm --filter @repo/web test -- src/server/email`). The pipeline gained
+  `outboundComposers` and `sendThrottles` (`PipelineDeps`) and `human_agent_replied.externalThreadId`.
+  `getEmail()` in `apps/web/src/server/email` and the routes `POST /api/oauth/email/{google|microsoft}`
+  (+ callback) and `POST /api/channels/email/imap` are for C16's connection page.
+  ARCHITECTURE §2 "As built (C11)" has the rest.
 
 ### C12 · Scheduling
 
@@ -296,6 +307,26 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
     windows (one row per session per minute polled) and photos stored under
     `{agency}/{business}/uploads/` whose message was never ingested (ingest failed, or a
     retried duplicate) are not cleaned up yet: the retention jobs should cover them.
+- **Open from the C11 review (email, `packages/channels/email`):**
+  - Hand-over now rests only on mail read from the mailbox's Sent folder through the
+    authenticated API or IMAP session (DECISIONS 193). A colleague who answers a customer
+    from another mailbox with the shared inbox in copy reaches us only through the INBOX,
+    where From is unauthenticated, so it no longer hands over. If that case matters, accept it
+    only with an authenticated origin: the receiving provider's own `Authentication-Results`
+    (the topmost one, added by Gmail or Exchange Online for this mailbox) showing
+    `dmarc=pass` for the business's domain, or the colleague's own mailbox connected too.
+  - Own-send recognition without headers (DECISIONS 194) falls back to matching the words of
+    our reply on Graph. Once HUMAN_TODO 14's live check shows whether Gmail and Exchange keep
+    `Message-ID` and `X-HSRB-Loop`, decide whether Graph should send through a draft
+    (`POST /me/messages` with MIME, then `/send`) to get an id, and whether
+    `email.own_send_without_marker` should alert.
+  - Reflection: anyone can write "from" (or with Reply-To) an address of their choosing and
+    the bot answers that address, quoting their text, from the business's inbox. Bounded by
+    the per-thread, per-contact and per-inbox limits; consider a per-recipient-domain limit
+    and not quoting the customer's message to an address that never wrote before.
+  - A forged delivery report naming one of our Message-IDs (known to its recipients) can
+    mark that reply `failed`. Only a status; consider requiring the report to come through
+    the provider's own bounce path (Gmail and Exchange deliver DSNs from their own daemons).
 
 ### C18 · End-to-end tests and launch preparation
 

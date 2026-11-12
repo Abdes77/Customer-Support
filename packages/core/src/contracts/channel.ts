@@ -164,6 +164,11 @@ export const ChannelSignal = z.discriminatedUnion("type", [
      * before treating it as a person's reply (C10).
      */
     attribution: z.enum(["external", "unverified"]).optional(),
+    /**
+     * The thread the reply belongs to, on channels where one contact can hold several
+     * conversations (email, C11). Absent: the contact's most recent open conversation.
+     */
+    externalThreadId: z.string().min(1).nullable().optional(),
   }),
   /**
    * The customer's app reported that every message the business sent before `watermark`
@@ -414,6 +419,10 @@ export type OutboundMessage =
       readonly subject: string;
       readonly text: string;
       readonly html: string;
+      /** Others to copy (reply to all, C11); never the customer or the inbox itself. */
+      readonly cc?: readonly EmailAddress[];
+      /** The sender's display name (`channels.email.from_name`, C11). */
+      readonly fromName?: string | null;
     };
 
 /**
@@ -479,7 +488,18 @@ export interface SendFailure {
 }
 
 export type SendResult =
-  | { readonly ok: true; readonly externalMessageId: string; readonly sentAt: IsoDateTime }
+  | {
+      readonly ok: true;
+      readonly externalMessageId: string;
+      readonly sentAt: IsoDateTime;
+      /**
+       * The provider's own id of what was sent, when it differs from `externalMessageId`
+       * (C11 review: Gmail's message id, while the email is known by its Message-ID). Recorded
+       * with the message (`payload.delivery.providerIds`), so the channel can recognize its
+       * own sent copy even if the provider rewrote the headers.
+       */
+      readonly providerMessageId?: string;
+    }
   | { readonly ok: false; readonly error: SendFailure };
 
 export interface ChannelAdapter {

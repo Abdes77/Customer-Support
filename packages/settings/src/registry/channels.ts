@@ -246,12 +246,12 @@ export const channelsSettings = defineCategory("channels", {
     }),
     "channels.email.reply_to": setting({
       label: "Reply to",
-      help: "Who gets the bot's reply when the customer's email had other people in copy.",
+      help: "Who gets the bot's reply when the customer's email had other people in copy. Only the sender by default: the others may be other contractors the customer wrote to, or strangers.",
       field: f.select([
         ["all", "Everyone on the email"],
         ["sender", "Only the sender"],
       ]),
-      default: "all",
+      default: "sender",
     }),
     "channels.email.quote_original": setting({
       label: "Quote the customer's email",
@@ -261,13 +261,13 @@ export const channelsSettings = defineCategory("channels", {
     }),
     "channels.email.skip_staffed_threads": setting({
       label: "Stay out of threads the team is in",
-      help: "The bot does not reply in an email thread where someone at the business has already written. Turn this off only for an inbox that the bot alone answers.",
+      help: "The bot does not reply in an email thread where someone at the business has already written from the mailbox (found in its Sent folder). Turn this off only for an inbox that the bot alone answers.",
       field: f.boolean(),
       default: true,
     }),
     "channels.email.internal_domains": setting({
       label: "Internal domains",
-      help: "Mail from these domains is treated as internal and never answered. The inbox's own domain is always internal.",
+      help: "Mail from these domains is treated as internal and never answered. The inbox's own domain is internal too, unless it is a public mail service such as gmail.com.",
       field: f.stringList({ itemLabel: "domain", format: "domain", maxItems: 30 }),
       default: [],
     }),

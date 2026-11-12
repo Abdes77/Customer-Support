@@ -154,6 +154,9 @@ async function recordHumanReply(
     )
     .limit(1);
   if (identity === undefined) return null;
+  // On channels with threads (email) the reply names its thread; otherwise the contact's
+  // most recent open conversation on the connection is the one.
+  const thread = signal.externalThreadId ?? null;
   const [conversation] = await ctx.tx
     .select({ id: conversations.id })
     .from(conversations)
@@ -162,6 +165,7 @@ async function recordHumanReply(
         eq(conversations.channelConnectionId, ref.connectionId),
         eq(conversations.contactId, identity.contactId),
         eq(conversations.status, "open"),
+        thread === null ? undefined : eq(conversations.externalThreadId, thread),
       ),
     )
     .orderBy(sql`${conversations.lastMessageAt} desc nulls last`)

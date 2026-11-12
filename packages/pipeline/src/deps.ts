@@ -13,6 +13,7 @@ import {
   type LeadSnapshot,
   type Logger,
   type ModelCallSink,
+  type OutboundMessage,
   type PlaybookSnapshot,
   type TurnTrigger,
   type WindowFallbackResolver,
@@ -114,6 +115,51 @@ export interface AttachmentEnricher {
   }): Promise<string | null>;
 }
 
+/**
+ * Turns a stored text or email message into the provider message the channel sends (C11:
+ * the business's email with greeting, sign-off, signature, the customer's message quoted, an
+ * HTML part, the sender name and the people to copy). Runs in the send step's `prepare`
+ * transaction, so it reads what it needs (settings, business, contact, the message it
+ * answers) and its result is memoized with the step. Registered by the infrastructure root.
+ */
+export interface OutboundComposer {
+  readonly channel: ChannelId;
+  compose(
+    ctx: BusinessContext,
+    input: {
+      readonly messageId: string;
+      readonly conversationId: ConversationId;
+      readonly author: "bot" | "human_agent";
+      readonly text: string;
+      /** The subject the message goes out with ("Re: …" of the thread, or a new one). */
+      readonly subject: string;
+      readonly now: Date;
+    },
+  ): Promise<Extract<OutboundMessage, { kind: "email" }>>;
+}
+
+/**
+ * Holds a send back while the channel's account has reached its sending limit (C11: the
+ * emails an inbox sends per hour and per day). `acquire` counts the send when it may go out
+ * now; otherwise the send step waits `retryAfterSeconds` and asks again (the job retries the
+ * step), and after the last retry the message fails like any other (invariant I7).
+ */
+export interface SendThrottle {
+  readonly channel: ChannelId;
+  acquire(
+    ctx: BusinessContext,
+    input: {
+      readonly connectionId: string;
+      readonly messageId: string;
+      readonly author: "bot" | "human_agent";
+      readonly now: Date;
+    },
+  ): Promise<
+    | { readonly ok: true }
+    | { readonly ok: false; readonly retryAfterSeconds: number; readonly reason: string }
+  >;
+}
+
 export interface PipelineOptions {
   /** How long a turn may hold the conversation before another run may take over. */
   readonly leaseSeconds: number;
@@ -184,6 +230,10 @@ export interface PipelineDeps {
   readonly windowFallbacks?: readonly WindowFallbackResolver[];
   readonly providerEvents?: readonly ProviderEventHandler[];
   readonly attachmentEnrichers?: readonly AttachmentEnricher[];
+  /** What a channel sends for a stored text or email message (C11: the business's email). */
+  readonly outboundComposers?: readonly OutboundComposer[];
+  /** Per-account sending limits of a channel (C11: emails per inbox per hour and day). */
+  readonly sendThrottles?: readonly SendThrottle[];
   readonly storage?: (tenant: BusinessTenant) => TenantStorage;
   readonly logger?: Logger;
   /** Injected clock. Default: the system clock. */
@@ -207,6 +257,8 @@ export interface PipelineContext {
   readonly windowFallbacks: readonly WindowFallbackResolver[];
   readonly providerEvents: readonly ProviderEventHandler[];
   readonly attachmentEnrichers: readonly AttachmentEnricher[];
+  readonly outboundComposers: readonly OutboundComposer[];
+  readonly sendThrottles: readonly SendThrottle[];
   readonly storage: (tenant: BusinessTenant) => TenantStorage;
   readonly logger: Logger;
   readonly clock: () => Date;
@@ -241,6 +293,8 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
     windowFallbacks: deps.windowFallbacks ?? [],
     providerEvents: deps.providerEvents ?? [],
     attachmentEnrichers: deps.attachmentEnrichers ?? [],
+    outboundComposers: deps.outboundComposers ?? [],
+    sendThrottles: deps.sendThrottles ?? [],
     storage,
     logger,
     clock: deps.clock ?? (() => new Date()),
