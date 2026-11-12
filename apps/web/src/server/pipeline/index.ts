@@ -2,9 +2,12 @@ import { randomBytes } from "node:crypto";
 
 import { createModelClientFromEnv, type ModelMode, modelModeFromEnv } from "@repo/ai";
 import { createTestChannelAdapter, type TestChannelAdapter } from "@repo/channel-test";
-import { ConfigError, logger as rootLogger, type Logger } from "@repo/core";
-import { type DeploymentInfo, deploymentInfo, type Env, getEnv } from "@repo/core/env";
-import { type Database, getDatabase } from "@repo/db";
+import { createRealtimeNotifier, createWidgetAdapter, silentNotifier } from "@repo/channel-widget";
+import { createWidgetService, type WidgetService } from "@repo/channel-widget/server";
+import { type ChannelAdapter, ConfigError, logger as rootLogger, type Logger } from "@repo/core";
+import { type DeploymentInfo, deploymentInfo, type Env, getEnv, hasEnv } from "@repo/core/env";
+import { type BusinessTenant, type Database, getDatabase } from "@repo/db";
+import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
 import {
   createInngestClient,
   createInngestEventSender,
@@ -38,7 +41,8 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
  *
  * Registered so far besides the pipeline's own jobs: `knowledge-playbook-generate` and
  * `knowledge-import` (C6), and the knowledge services the admin panel and the import API use;
- * `leads-outbox` (C5).
+ * `leads-outbox` (C5). Channel adapters: the test channel (C3) and the website chat (C8),
+ * whose public API service (`widget`) serves `/api/widget/v1`.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -57,6 +61,8 @@ export interface ServerPipeline {
   readonly runner: LocalJobRunner | null;
   /** Null when this deployment has no test channel (hosted without TEST_CHANNEL_SECRET). */
   readonly testChannel: { readonly adapter: TestChannelAdapter; readonly secret: string } | null;
+  /** The website chat's public API; null on a hosted deployment without WIDGET_SESSION_SECRET. */
+  readonly widget: WidgetService | null;
 }
 
 export interface ServerPipelineOptions {
@@ -68,11 +74,17 @@ export interface ServerPipelineOptions {
   readonly runner?: LocalJobRunner;
   /** Tests inject a fixed test-channel secret. */
   readonly testChannelSecret?: string;
+  /** Tests inject a fixed widget session secret. */
+  readonly widgetSecret?: string;
+  /** Tests inject file storage. */
+  readonly storage?: (tenant: BusinessTenant) => TenantStorage;
 }
 
 // The local test-channel secret when none is configured: valid for this process only, which
 // is all the in-process dev chat page needs.
 const processTestSecret = randomBytes(32).toString("base64url");
+// The same for website-chat sessions: a local visitor starts a new session after a restart.
+const processWidgetSecret = randomBytes(32).toString("base64url");
 
 function unconfiguredSender(): EventSender {
   return {
@@ -98,7 +110,42 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     testSecret === undefined
       ? null
       : { adapter: createTestChannelAdapter({ secret: testSecret }), secret: testSecret };
-  const adapters = createAdapterRegistry(testChannel === null ? [] : [testChannel.adapter]);
+  // The website chat (C8). Live pokes go through Supabase Realtime when the project is
+  // configured; otherwise the visitor's browser polls.
+  const widgetSecret =
+    options.widgetSecret ??
+    env.WIDGET_SESSION_SECRET ??
+    (deployment.environment === "local" ? processWidgetSecret : undefined);
+  const realtime = hasEnv(
+    env,
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+  )
+    ? {
+        url: env.NEXT_PUBLIC_SUPABASE_URL!,
+        apiKey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY!,
+      }
+    : null;
+  const widgetAdapter =
+    widgetSecret === undefined
+      ? null
+      : createWidgetAdapter({
+          secret: widgetSecret,
+          notifier:
+            realtime === null
+              ? silentNotifier
+              : createRealtimeNotifier({
+                  url: realtime.url,
+                  serviceRoleKey: realtime.serviceRoleKey,
+                }),
+          logger,
+        });
+  const channelAdapters: ChannelAdapter[] = [];
+  if (testChannel !== null) channelAdapters.push(testChannel.adapter);
+  if (widgetAdapter !== null) channelAdapters.push(widgetAdapter);
+  const adapters = createAdapterRegistry(channelAdapters);
 
   const inngest =
     mode === "inngest"
@@ -120,7 +167,26 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   // model client is infrastructure: it is chosen here, from this deployment's environment.
   const modelMode = modelModeFromEnv(env, deployment);
   const model = createModelClientFromEnv({ env, deployment, logger });
-  const pipeline = createPipeline({ db, adapters, events, logger, model });
+  const storage = options.storage ?? getTenantStorage;
+  const pipeline = createPipeline({
+    db,
+    adapters,
+    events,
+    logger,
+    model,
+    ...(options.storage === undefined ? {} : { storage: options.storage }),
+  });
+  const widget =
+    widgetSecret === undefined
+      ? null
+      : createWidgetService({
+          db,
+          ingest: (parsed) => pipeline.ingest(parsed),
+          storage,
+          secret: widgetSecret,
+          realtime: realtime === null ? null : { url: realtime.url, apiKey: realtime.apiKey },
+          logger,
+        });
   // Without a key on a developer machine a playbook is the built-in starter document and
   // website facts come from structured data only; a hosted deployment without a key fails
   // those jobs instead (the model client throws a configuration error).
@@ -135,8 +201,20 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     model: modelMode,
     channels: adapters.channels(),
     testChannel: testChannel !== null,
+    widget: widget === null ? "off" : realtime === null ? "polling" : "realtime",
   });
-  return { pipeline, mode, modelMode, jobs, events, knowledge, inngest, runner, testChannel };
+  return {
+    pipeline,
+    mode,
+    modelMode,
+    jobs,
+    events,
+    knowledge,
+    inngest,
+    runner,
+    testChannel,
+    widget,
+  };
 }
 
 // One per process, kept on globalThis so a hot reload of the dev server does not start a

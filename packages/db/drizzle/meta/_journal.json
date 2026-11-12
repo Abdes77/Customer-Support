@@ -57,6 +57,13 @@
       "when": 1794468564408,
       "tag": "0007_lead_outbox",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794485062266,
+      "tag": "0008_widget_session_profile",
+      "breakpoints": true
     }
   ]
 }

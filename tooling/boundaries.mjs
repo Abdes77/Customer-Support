@@ -35,7 +35,8 @@ export const ALLOWED_DEPENDENCIES = {
   "@repo/scheduling": DOMAIN_BASE,
   "@repo/integrations": DOMAIN_BASE,
   "@repo/channel-test": DOMAIN_BASE,
-  "@repo/channel-widget": DOMAIN_BASE,
+  // The widget reads business hours through @repo/ai to show its closed notice (DECISIONS).
+  "@repo/channel-widget": DOMAIN_WITH_MODEL,
   "@repo/channel-meta": ["@repo/core", "@repo/observability"],
   "@repo/channel-whatsapp": [...DOMAIN_BASE, "@repo/channel-meta"],
   "@repo/channel-messenger-instagram": [...DOMAIN_BASE, "@repo/channel-meta"],

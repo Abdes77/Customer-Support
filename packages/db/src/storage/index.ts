@@ -42,6 +42,8 @@ export {
   isObjectPath,
   sanitizeFileName,
   tenantPrefix,
+  type UploadLocation,
+  uploadPath,
 } from "./paths";
 export {
   createLocalObjectStore,

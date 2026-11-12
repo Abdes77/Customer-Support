@@ -9,11 +9,13 @@
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@repo/ai": "workspace:*",
     "@repo/channel-test": "workspace:*",
+    "@repo/channel-widget": "workspace:*",
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/jobs": "workspace:*",
@@ -21,6 +23,7 @@
     "@repo/leads": "workspace:*",
     "@repo/pipeline": "workspace:*",
     "@repo/settings": "workspace:*",
+    "@repo/widget-embed": "workspace:*",
     "@supabase/ssr": "catalog:",
     "@supabase/supabase-js": "catalog:",
     "inngest": "catalog:",
@@ -30,6 +33,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@playwright/test": "catalog:",
     "@tailwindcss/postcss": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
@@ -37,6 +41,7 @@
     "eslint": "catalog:",
     "postcss": "catalog:",
     "tailwindcss": "catalog:",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

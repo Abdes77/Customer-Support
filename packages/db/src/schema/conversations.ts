@@ -409,7 +409,13 @@ export const widgetSessions = pgTable(
     userAgent: text("user_agent"),
     /** A keyed hash of the visitor's IP address, for rate limits. Never the address itself. */
     ipHash: text("ip_hash"),
+    /**
+     * What the visitor typed into the pre-chat form (name, phone, email) before the first
+     * message created the contact. Copied into every message's sender, so the contact gets it.
+     */
+    profile: jsonb("profile").$type<Record<string, string>>().notNull().default({}),
     lastSeenAt: timestamptz("last_seen_at"),
+    lastMessageAt: timestamptz("last_message_at"),
     expiresAt: timestamptz("expires_at"),
     revokedAt: timestamptz("revoked_at"),
     createdAt: createdAt(),

@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-340 settings in 22 categories.
+342 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -154,7 +154,7 @@ placeholder a setting does not list is a validation error.
 | [Knowledge](#knowledge) | 7 | How business knowledge is gathered and used in replies. |
 | [Client portal](#client_portal) | 9 | What the business's own users may see and do when they have a login. |
 | [Model and effort](#model) | 14 | Which Claude model does each task, and how hard it thinks. |
-| [Limits and spend caps](#limits) | 11 | Rate limits and model-spend caps that stop floods and runaway cost. |
+| [Limits and spend caps](#limits) | 13 | Rate limits and model-spend caps that stop floods and runaway cost. |
 | [Data retention](#data) | 6 | How long conversations, files and model records are kept. |
 
 <a id="qualification"></a>
@@ -1533,6 +1533,8 @@ Rate limits and model-spend caps that stop floods and runaway cost.
 | `limits.on_limit` | **When a limit is reached.** What happens to conversations that hit a limit or a spend cap. The agency is alerted in both cases. | one of: `pause_bot`, `handoff` | `"pause_bot"` | all |  |
 | `limits.max_inbound_characters` | **Longest customer message.** The bot reads this much of a single customer message; the rest is kept in the inbox but not given to the model. | whole number, 500 to 50000 characters | `6000` | all |  |
 | `limits.widget_messages_per_minute` | **Website chat: messages per visitor per minute.** A visitor who sends more than this in a minute is asked to slow down. | whole number, 3 to 120 messages | `12` | all |  |
+| `limits.widget_messages_per_business_per_minute` | **Website chat: messages per business per minute.** The most website-chat messages the business accepts in a minute from all visitors together. Visitors beyond it are asked to try again shortly. | whole number, 10 to 10000 messages | `300` | all |  |
+| `limits.widget_photos_per_visitor_per_hour` | **Website chat: photos per visitor per hour.** The most photos one website-chat visitor can send in an hour. Stops a single visitor from filling the business's storage. | whole number, 1 to 200 photos | `20` | all |  |
 | `limits.widget_sessions_per_ip_per_hour` | **Website chat: new visitors per address per hour.** The most new chat sessions from one network address in an hour. | whole number, 1 to 1000 sessions | `30` | all |  |
 
 <a id="data"></a>

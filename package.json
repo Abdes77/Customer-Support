@@ -18,6 +18,7 @@
     "test:tooling": "node --test \"tooling/scripts/*.test.mjs\"",
     "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
     "eval": "pnpm --filter @repo/evals run eval",
+    "e2e": "pnpm --filter @repo/web run e2e",
     "check:boundaries": "node tooling/scripts/check-boundaries.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

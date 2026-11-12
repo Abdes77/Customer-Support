@@ -414,6 +414,44 @@ development and CI tool: nothing in `apps/web` imports it.
   `EvalSandbox.settingsVerdict`). Add the new handler there when it has such a rule, and
   keep `pnpm eval --mode mock` green.
 
+### As built (C8)
+
+The website chat: `packages/channels/widget` (server), `packages/widget-embed` (browser) and
+the public API `/api/widget/v1` in `apps/web`.
+
+- **Embedding.** `<script src="{APP_URL}/api/widget/v1/widget.js" data-key="wpk_..." async>`.
+  The key is the widget connection's `external_account_id`; one connection per business,
+  created, re-keyed and switched off by `ensureWidgetConnection`, `rotateWidgetKey` and
+  `setWidgetEnabled`, and shown to the admin panel by `widgetEmbedInfo` (snippet, key, status,
+  allowed sites), all in `@repo/channel-widget/server`.
+- **API** (`createWidgetService`, routes in `apps/web/src/app/api/widget/v1`, HTTP plumbing in
+  `apps/web/src/server/widget`): `GET config?key=` (appearance, greeting, pre-chat fields,
+  photo rules, privacy note, closed notice), `POST session` (new or resumed; returns the
+  token and, with Supabase, the Realtime topic), `POST profile` (pre-chat name, phone,
+  email), `POST messages` (JSON text, or multipart with a photo; a client message id makes a
+  retry a duplicate) and `GET messages?after=` (the visitor's conversation, a cursor that
+  never passes a reply still on its way, and a typing flag). Shapes: `contracts/widget.ts`.
+  Every call checks the Origin against `channels.widget.allowed_origins`; a refused origin
+  gets 403 without CORS headers. No cookies; the session token travels in `Authorization`.
+- **Into the pipeline.** `POST messages` builds a `NormalizedInboundMessage` (sender = the
+  session's visitor id and pre-chat details; photo as a `storage` attachment under
+  `{agency}/{business}/uploads/...`) and calls `pipeline.ingest`. The reply and send
+  functions are the same as for every channel; the widget adapter's `send` stores nothing
+  (the message is already in the database) and only pokes the visitor's browser.
+- **Updates.** A content-free Realtime broadcast per visitor topic when Supabase is
+  configured, otherwise polling (1.5 s while a reply is pending, 6 s while open, none while
+  closed and idle). The visitor sees customer messages and bot or staff messages with status
+  sent, delivered or read; never drafts, superseded or failed ones, never another visitor's.
+- **Limits.** Sessions per hashed IP per hour, messages per session and per business per
+  minute, photos per session per hour (`limits.widget_*`), polls per session per minute (120),
+  photo size and type, 16 KB JSON bodies, 25 MB uploads at most. The script redraws photos
+  over 4 MB as JPEG (Vercel refuses request bodies over 4.5 MB).
+- **Browser script.** One IIFE (about 7 KB gzipped, budget 12 KB, checked by a test with the
+  freshness of `src/bundle.generated.ts`), drawn in a shadow root; one request on page load;
+  full screen under 640 px; session and open state kept in `localStorage` per key.
+- **End to end.** `pnpm e2e` (Playwright, `apps/web/e2e`): a sample site on an allowed and a
+  refused origin, a qualifying conversation with a photo at 1280×800 and 390×844.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |

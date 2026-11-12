@@ -5,3 +5,4 @@ export * from "./knowledge";
 export * from "./lead";
 export * from "./settings";
 export * from "./tenancy";
+export * from "./widget";

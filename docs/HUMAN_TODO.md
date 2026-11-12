@@ -342,6 +342,46 @@ Format of an entry:
   - many "NOT PLAYED (serving)" lines: rate limits. Lower `--concurrency` (default 6) and
     finish with `--resume`.
 
+### 11. Website chat: session secret, Supabase Realtime and a first real site (C8)
+
+- **What:** the website chat works end to end locally (`pnpm e2e`: a sample site embeds it,
+  a visitor fills the pre-chat form, chats with the offline bot, sends a photo, reloads the
+  page) but has not run on a hosted deployment or on a real business website. Three things
+  are needed there:
+  1. **A session secret.** Without `WIDGET_SESSION_SECRET` a hosted deployment has no website
+     chat (the API answers 503). Generate one with `openssl rand -base64 48`. Changing it
+     later ends every visitor session (visitors simply start a new chat).
+  2. **Supabase Realtime for instant replies.** With `NEXT_PUBLIC_SUPABASE_URL`,
+     `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` set (entry 3), the
+     server pokes the visitor's browser through a Realtime broadcast
+     (`POST {project}/realtime/v1/api/broadcast`) and the browser listens on its Realtime
+     websocket; without them the browser polls (every 1.5 s while a reply is pending, every
+     6 s otherwise while the chat is open). The broadcast endpoint and the websocket join
+     message were written from memory of the Supabase Realtime protocol (Phoenix, `vsn=1.0.0`,
+     public broadcast channel) and tested only against a mocked `fetch`: the docs site was not
+     reachable from the build VM. In the project, Realtime must allow public broadcast
+     channels (Project Settings, Realtime: "Allow public access" on, which is the default
+     for projects created before private-only mode). A poke carries no message text. The
+     browser sends the key as the join's `access_token` only when it is a JWT (a legacy anon
+     key); with a publishable key (`sb_publishable_...`) it relies on the `apikey` parameter.
+     If the project refuses the join, the widget simply polls (every 6 s while open): in the
+     live check, the websocket's frames must show a `phx_reply` with `"status":"ok"` for the
+     `realtime:widget-...` topic.
+  3. **The business's site on its allowed list.** In the admin panel (C16) or, until then,
+     the setting `channels.widget.allowed_origins` of the business: every address the site is
+     served from, for example `https://www.example.com` and `https://example.com`. With an
+     empty list the chat shows nowhere.
+- **Where:** Vercel project environment variables (entry 3 for Supabase).
+- **Variables:** `WIDGET_SESSION_SECRET` (required for the widget), and the three Supabase
+  variables above (optional: polling works without them).
+- **Live check:** deploy a preview, set the business's allowed origins to a test page you
+  control, paste the snippet the admin panel shows (`widgetEmbedInfo` in
+  `@repo/channel-widget/server`) into that page, and chat. With Realtime configured, the
+  browser's network tab shows one websocket to `<project>.supabase.co/realtime/v1/websocket`
+  and replies appear without `GET /api/widget/v1/messages` polls every 1.5 s. Locally, the
+  browser test is `pnpm services:up && pnpm e2e` (Chromium for Playwright:
+  `pnpm --filter @repo/web exec playwright install chromium`).
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -434,3 +474,9 @@ already listed and described in `.env.example`.
   (create a user) and `packages/db/src/storage/supabase-store.ts` (upload, download, delete,
   signed link) are written from the documented REST APIs and tested with a mocked `fetch`.
   The Supabase docs site was not consulted from the build VM.
+- **Website chat (C8).** The Supabase Realtime broadcast (`packages/channels/widget/src/realtime.ts`)
+  and the browser's Realtime client (`packages/widget-embed/src/browser/realtime.ts`) follow the
+  Phoenix protocol as remembered, not as read in current docs, and have not met a real project
+  (entry 11). Everything else of the widget runs in `pnpm verify` and `pnpm e2e`. The widget's
+  capabilities in `CHANNEL_CAPABILITIES` are ours to choose (no vendor): 2,000 characters a
+  message, photos only.

@@ -45,6 +45,26 @@ export function attachmentPath(tenant: BusinessTenant, location: AttachmentLocat
   return `${tenantPrefix(tenant)}${location.conversationId}/${location.messageId}/${sanitizeFileName(location.fileName)}`;
 }
 
+export interface UploadLocation {
+  /** What the upload belongs to until a message refers to it, for example a widget session. */
+  readonly ownerId: string;
+  /** A fresh id per upload. */
+  readonly uploadId: string;
+  readonly fileName: string | null | undefined;
+}
+
+/**
+ * The path of a file a customer uploaded before there is a message to hang it on (website
+ * chat photos): `{agencyId}/{businessId}/uploads/{ownerId}/{uploadId}/{file}`. Inside the
+ * tenant's prefix like every other object, so the pipeline accepts it as an attachment.
+ */
+export function uploadPath(tenant: BusinessTenant, location: UploadLocation): string {
+  if (!UUID.test(location.ownerId) || !UUID.test(location.uploadId)) {
+    throw new TenantAccessError("An upload path needs an owner id and an upload id.");
+  }
+  return `${tenantPrefix(tenant)}uploads/${location.ownerId}/${location.uploadId}/${sanitizeFileName(location.fileName)}`;
+}
+
 /** True when `path` is a well-formed object path (no traversal, no empty segments). */
 export function isObjectPath(path: string): boolean {
   const segments = path.split("/");

@@ -22,6 +22,7 @@ import {
   sanitizeFileName,
   serveLocalObject,
   tenantPrefix,
+  uploadPath,
 } from "./index";
 
 const tenantA = {
@@ -98,6 +99,23 @@ describe("tenant storage", () => {
     expect(await storage.signedUrl(saved.path, 999_999)).toContain("expires_in=3600");
     await storage.remove([saved.path]);
     expect(await storage.get(saved.path)).toBeNull();
+  });
+
+  it("stores an upload that has no message yet inside the tenant", async () => {
+    const store = new MemoryObjectStore("attachments");
+    const storage = createTenantStorage(store, tenantA);
+    const upload = {
+      ownerId: "0b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a40",
+      uploadId: "1c2d3e4f-5061-4b72-9c83-ad9e8f7a6b51",
+      fileName: "../../roof photo.jpg",
+    };
+    const saved = await storage.putUpload(upload, bytes, { contentType: "image/jpeg" });
+    expect(saved.path).toBe(
+      `${tenantA.agencyId}/${tenantA.businessId}/uploads/${upload.ownerId}/${upload.uploadId}/roof_photo.jpg`,
+    );
+    expect(saved.path.startsWith(tenantPrefix(tenantA))).toBe(true);
+    expect(await storage.get(saved.path)).toEqual({ bytes, contentType: "image/jpeg" });
+    expect(() => uploadPath(tenantA, { ...upload, ownerId: "../x" })).toThrow(TenantAccessError);
   });
 
   it("cannot read, sign or remove another tenant's file", async () => {

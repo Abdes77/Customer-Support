@@ -71,6 +71,18 @@ export const limitsSettings = defineCategory("limits", {
     field: f.integer({ min: 3, max: 120, unit: "messages" }),
     default: 12,
   }),
+  "limits.widget_messages_per_business_per_minute": setting({
+    label: "Website chat: messages per business per minute",
+    help: "The most website-chat messages the business accepts in a minute from all visitors together. Visitors beyond it are asked to try again shortly.",
+    field: f.integer({ min: 10, max: 10_000, unit: "messages" }),
+    default: 300,
+  }),
+  "limits.widget_photos_per_visitor_per_hour": setting({
+    label: "Website chat: photos per visitor per hour",
+    help: "The most photos one website-chat visitor can send in an hour. Stops a single visitor from filling the business's storage.",
+    field: f.integer({ min: 1, max: 200, unit: "photos" }),
+    default: 20,
+  }),
   "limits.widget_sessions_per_ip_per_hour": setting({
     label: "Website chat: new visitors per address per hour",
     help: "The most new chat sessions from one network address in an hour.",

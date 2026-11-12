@@ -170,6 +170,12 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 - **Must not touch:** the admin screen that shows the embed code (C16; expose the data).
 - **Must deliver:** the embed script small enough not to slow the host page, with its size
   checked in a test.
+- **Delivered, for C16 and C17:** `@repo/channel-widget/server` has `widgetEmbedInfo` (the
+  snippet, key, status and allowed sites for the connection page), `ensureWidgetConnection`,
+  `rotateWidgetKey` and `setWidgetEnabled` (call them in the business's system scope after
+  checking the user); the allowed sites are the setting `channels.widget.allowed_origins`.
+  `pnpm e2e` runs Playwright against a fresh database (`apps/web/e2e/support/app-server.ts`):
+  add specs next to `widget.spec.ts`. ARCHITECTURE §2 "As built (C8)" has the rest.
 
 ### C9 · WhatsApp
 
@@ -262,6 +268,19 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   contracts intact.
 - **Must not touch:** product behaviour that is not a finding (no refactors for taste), the
   eval baseline without re-running `pnpm eval`, production systems.
+- **Open from the C8 review (website chat, `/api/widget/v1`):**
+  - Client address: `clientIp` in `apps/web/src/server/widget/http.ts` takes the last
+    `x-forwarded-for` hop, which is right on Vercel alone. With a CDN or another proxy in front,
+    that hop is the proxy: decide which header the deployment trusts. The address feeds only
+    `limits.widget_sessions_per_ip_per_hour`.
+  - Edge limits: `GET config` and `POST session` are not counted per address before the
+    database is reached (only new sessions are), and polls are counted per session (120 a
+    minute, `READS_PER_SESSION_PER_MINUTE`), so a client that starts many sessions can still
+    make many cheap reads. Consider a platform rate limit (Vercel firewall) on `/api/widget/v1`.
+  - Growth: `widget_sessions` rows (one per new visitor, kept until expiry), `usage_counters`
+    windows (one row per session per minute polled) and photos stored under
+    `{agency}/{business}/uploads/` whose message was never ingested (ingest failed, or a
+    retried duplicate) are not cleaned up yet: the retention jobs should cover them.
 
 ### C18 · End-to-end tests and launch preparation
 

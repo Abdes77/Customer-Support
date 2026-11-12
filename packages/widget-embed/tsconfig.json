@@ -1,6 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src", "scripts", "test", "*.config.ts", "*.config.mts"],
+  "include": ["src", "*.config.ts", "*.config.mts"],
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": []

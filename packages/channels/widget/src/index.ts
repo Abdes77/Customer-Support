@@ -1,10 +1,25 @@
 /**
  * @repo/channel-widget (owner: C8)
  *
- * Server side of the website chat widget: channel adapter, visitor sessions, allowed origins
- * and rate limiting.
- *
- * Placeholder created by C0. What this package owns, what it may import and the contracts it
- * implements are in docs/BUILD_PLAN.md and docs/ARCHITECTURE.md.
+ * Server side of the website chat widget: the channel adapter, visitor session tokens,
+ * allowed origins, photo checks and the Realtime poke. The database half (sessions,
+ * configuration, messages, rate limits, the embed data for the admin panel) is
+ * `@repo/channel-widget/server`. Server only.
  */
-export {};
+export { createWidgetAdapter, type WidgetAdapterOptions } from "./adapter";
+export { isOriginAllowed, normalizeOrigin } from "./origins";
+export {
+  createRealtimeNotifier,
+  silentNotifier,
+  visitorTopic,
+  type WidgetNotifier,
+  type WidgetPokeEvent,
+} from "./realtime";
+export {
+  assertWidgetSecret,
+  hashIp,
+  signWidgetToken,
+  verifyWidgetToken,
+  type WidgetTokenClaims,
+} from "./token";
+export { MEGABYTE, photoFileName, sniffImage, type SniffedImage } from "./uploads";

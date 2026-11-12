@@ -1,5 +1,11 @@
 import type { BusinessTenant } from "../context";
-import { type AttachmentLocation, assertTenantPath, attachmentPath } from "./paths";
+import {
+  type AttachmentLocation,
+  assertTenantPath,
+  attachmentPath,
+  type UploadLocation,
+  uploadPath,
+} from "./paths";
 
 export interface StoredObject {
   readonly bytes: Uint8Array;
@@ -36,6 +42,12 @@ export interface TenantStorage {
     bytes: Uint8Array,
     options: { readonly contentType: string },
   ): Promise<{ readonly bucket: string; readonly path: string }>;
+  /** Stores a customer upload that no message refers to yet (`uploadPath`). */
+  putUpload(
+    location: UploadLocation,
+    bytes: Uint8Array,
+    options: { readonly contentType: string },
+  ): Promise<{ readonly bucket: string; readonly path: string }>;
   get(path: string): Promise<StoredObject | null>;
   remove(paths: readonly string[]): Promise<void>;
   /** Default lifetime: five minutes. */
@@ -61,6 +73,12 @@ export function createTenantStorage(store: ObjectStore, tenant: BusinessTenant):
 
     async putAttachment(location, bytes, options) {
       const path = attachmentPath(tenant, location);
+      await store.put(path, bytes, options);
+      return { bucket: store.bucket, path };
+    },
+
+    async putUpload(location, bytes, options) {
+      const path = uploadPath(tenant, location);
       await store.put(path, bytes, options);
       return { bucket: store.bucket, path };
     },
