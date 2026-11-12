@@ -52,7 +52,7 @@ Format of an entry:
     `strictTools: false` where the engine is created (`packages/pipeline/src/composition`).
   - If the first call of a conversation is slow, that is the one-time compilation of the
     tool schemas; later calls reuse it for 24 hours.
-  C7 adds `pnpm eval`, the full quality check.
+  The full quality check is `pnpm eval` (entry 10); run this smaller one first.
 
 ### 3. Supabase project (C1)
 
@@ -256,6 +256,92 @@ Format of an entry:
   the dev chat (`/dev/chat`): the turn's `update_lead_fields` result carries the routing
   decision, and `lead_reports` holds the report after every turn.
 
+### 10. First live evaluation, prompt tuning and the baseline (C7)
+
+- **What:** the evaluation suite has never run against the Claude API. Everything in
+  `pnpm verify` and every `pnpm eval` so far ran against stand-ins (a rule-based bot model, a
+  rule-based customer, a judge that evaluates nothing): that proves the harness, not the
+  bot. **No quality number exists yet, and no baseline is saved.** The first live run is
+  also the first evidence of how the bot handles a renter, a price shopper or a gas smell.
+  It needs the key of entry 2 and nothing else. The bot runs on `claude-fable-5-2`; the
+  simulated customers and the judge run on `claude-opus-5-5`, so the key's organization
+  needs access to both models.
+- **Where:** a developer machine with the key in `.env.local` and local PostgreSQL
+  (`pnpm services:up`; the evaluation plays in a throwaway database and writes nothing
+  else). Nothing is sent to anyone.
+- **Variable:** `ANTHROPIC_API_KEY`. For CI: the same key as a repository secret named
+  `ANTHROPIC_API_KEY` (GitHub, Settings, Secrets and variables, Actions).
+- **Steps, in this order:**
+
+  1. Check the judge before trusting it (eight judge calls, about a minute):
+
+     ```
+     pnpm eval --calibrate-judge
+     ```
+
+     It shows the judge eight hand-made conversations with one known fault each (an invented
+     visit time, a guarantee and a license number the business never stated, a price
+     written out in words, a revealed lead score, a mishandled emergency, a booking where
+     nobody is booked, a bot that ignores the customer) and one clean one, and prints where
+     the verdict is the expected one. It must agree on all of them. Where it does not, read
+     what it said: either the rubric needs sharpening (`packages/evals/src/grade/rubric.ts`)
+     or the expectation was wrong (`packages/evals/src/calibration/probes.ts`).
+  2. A first, smaller run, then the whole suite:
+
+     ```
+     pnpm eval --core          # 24 conversations
+     pnpm eval                 # all 72
+     ```
+
+     Each prints one line per conversation, the verdict and the measured cost, and writes
+     `evals-output/<run>/report.html`. Open the report and read conversations, the failing
+     ones first: this is what the agency's clients will get.
+  3. Expect failures on the first run: the prompt has never been read by the model it was
+     written for (entry 2). Fix causes, not conversations: change the prompt as a new
+     version (`packages/ai/src/prompt/core`, the tests there say how), or the engine, and
+     run again. `pnpm eval --scenario roofing.renter` replays one scenario, `--persona
+     emergency` one kind of customer, `--resume <dir>` finishes a run the API interrupted.
+     A change to a default setting needs a line in `docs/DECISIONS.md`.
+  4. When every scenario passes with zero setting-compliance failures, save the baseline
+     and commit it:
+
+     ```
+     pnpm eval --save-baseline
+     git add packages/evals/baseline/live.json
+     ```
+
+     From then on a live run also fails when quality drops against that file.
+  5. Add the repository secret (above). The workflow `eval` then runs live on every pull
+     request that touches the engine, the prompts, the playbook and knowledge code, lead
+     scoring or the settings registry. Until the secret exists it runs against stand-ins
+     and says so in its summary. To spend less per pull request, set the repository
+     variable `EVAL_ARGS` to `--core`. The workflow file (`.github/workflows/eval.yml`)
+     was checked for syntax only: it has not run on GitHub yet. Open a pull request that
+     touches `packages/ai` and confirm that the `eval` job runs, prints "Live evaluation"
+     and attaches the report as the `eval-report` artifact.
+- **What it costs and how long it takes: not measured.** No live call was made, so any
+  figure here would be a guess. A conversation is roughly 4 to 10 bot turns of one or two
+  model calls each on `claude-fable-5-2` (most of the prompt is read from the cache), one
+  short call per customer turn and one judge call on `claude-opus-5-5`. Every run prints
+  its cost from the tokens the API reported; `--core` first tells you what a full run will
+  cost (three times as much).
+- **To decide after the first live runs:**
+  - the thresholds (`DEFAULT_THRESHOLDS` in `packages/evals/src/grade/rubric.ts`: pass at
+    4.0 of 5, floors, allowed drops). They were set without data. Run `pnpm eval --core
+    --reps 3` once to see how much a scenario's score moves between identical runs, and
+    keep the allowed drops above that noise;
+  - reply effort: replies run at effort `medium` (DECISIONS 50). Compare with `high` by
+    changing `model.reply.effort` in a profile of `packages/evals/src/scenarios/profiles.ts`
+    for one run, and look at the score, the cost and "Time to write a reply" in the report;
+  - whether the simulated customers read like real ones. If they are too cooperative or
+    too articulate, edit the persona briefs in `packages/evals/src/scenarios/personas.ts`.
+- **If something fails at once:**
+  - every conversation "NOT PLAYED (config)": the key is missing or refused (entry 2);
+  - a 400 about `strict`: the organization uses customer-managed encryption keys; run with
+    `--no-strict` (the judge's answer is validated in code either way);
+  - many "NOT PLAYED (serving)" lines: rate limits. Lower `--concurrency` (default 6) and
+    finish with `--resume`.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -315,6 +401,15 @@ already listed and described in `.env.example`.
   (one-hour breakpoints on the step prompts); the quality of the playbooks. The fact
   extraction request (one strict tool, a page as data) is as untested against the live
   model. The live checks of entry 8 cover all of this.
+
+- **Evaluation harness (C7).** The simulated customer and the judge are requests to
+  `claude-opus-5-5` built from the same API reference as the engine's (effort always sent,
+  no `thinking` or sampling parameters, `tool_choice: auto`, one strict tool for the judge,
+  server-side fallbacks, a cached system prompt). No request was sent. Not yet seen live:
+  that the judge calls its tool with a valid verdict on the first attempt; that its quotes
+  match the transcript often enough to count; that it catches the eight calibration faults;
+  how real the simulated customers sound; how long and how expensive a run is; whether six
+  conversations at once fit the organization's rate limits. Entry 10 covers all of it.
 
 - Nothing in C0 calls a vendor. The Claude API rules in `docs/ARCHITECTURE.md` §5 come from
   the API reference bundled with the build tools (cached 2026-11-03), not from a live request;

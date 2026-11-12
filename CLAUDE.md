@@ -18,8 +18,8 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 
 | Command | What it does |
 | --- | --- |
-| `pnpm install` | Install everything |
-| `pnpm verify` | The gate: typecheck, lint (ESLint, package boundaries, Prettier check), tests |
+| `pnpm install` / `pnpm verify` | Install everything / the gate: typecheck, lint (ESLint, package boundaries, Prettier check), tests |
+| `pnpm eval` (`--help`, `--core`, `--mode mock`) | The evaluation suite (ARCHITECTURE "As built (C7)"): live with `ANTHROPIC_API_KEY`, stand-ins without. A change to `packages/ai`, prompts, playbooks or default settings must pass it (HUMAN_TODO 10) |
 | `pnpm typecheck` / `pnpm lint` / `pnpm test`; `pnpm --filter @repo/<name> test` | One part of verify; the tests of one package (also `typecheck`, `lint`) |
 | `pnpm format` / `pnpm check:boundaries` | Fix formatting with Prettier / check package dependencies against `tooling/boundaries.mjs` |
 | `pnpm env:example` / `pnpm settings:docs` | Regenerate `.env.example` (from `packages/core/src/env/spec.ts`) / `docs/SETTINGS.md` (from the registry) |

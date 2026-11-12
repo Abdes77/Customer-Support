@@ -330,6 +330,90 @@ pipeline's domain composition), `createKnowledgeJobs` (registered in
   logged and the turn still commits (DECISIONS 124). Later chunks may add observers in
   `createDomainComposition()`.
 
+### As built (C7)
+
+`packages/evals` is the evaluation harness; `pnpm eval` runs it (`pnpm eval --help`). It is a
+development and CI tool: nothing in `apps/web` imports it.
+
+- **What is evaluated.** A whole conversation, graded as one. A scenario is a simulated
+  customer (a persona with the facts of their own situation) writing to one business on one
+  channel under one settings profile. The matrix (`src/scenarios`) is 12 personas × 6 trades =
+  72 scenarios in six suites, one per trade: roofing, HVAC, plumbing, electrical, remodeling,
+  and pest control as the "any other segment". The profile (five: careful defaults; books
+  meetings and shares price ranges; everyone is told "we'll contact you"; exact prices and an
+  offer; strict fit rules) and the channel come from a fixed rotation, so every persona meets
+  every profile. `--core` is a 24-scenario selection. Opening lines and every line that
+  attacks the bot (prompt injection, spam) are fixed in the scenario, not written by a model.
+- **The sandbox** (`src/sandbox`). A throwaway PostgreSQL database (`createTestDatabase()`)
+  seeded with the six businesses, their facts and their segment playbooks, with
+  `createDomainComposition()` on top. From production, unchanged: the engine, the knowledge
+  retriever (full-text search), the playbook loader and the business profile loader. Kept in
+  the dry run's memory (`createDryRunConversation`, `withLeadScoring` with the real rules):
+  the lead record, photos and calendar slots, because `mode: "dry_run"` writes nothing and a
+  conversation needs its lead from turn to turn. The loop around the engine
+  (`src/simulate/conversation.ts`) stands in for what a dry run does not have: the clock,
+  the guards that keep the bot silent once a person holds the conversation or the bot ended
+  it, and the follow-up turn when a customer goes quiet. Invariant I8 is checked after every
+  run: the tables a live turn writes must be empty.
+- **Settings of a scenario** are resolved by `resolveSettings` from the layers a real
+  business has: registry defaults, the trade's preset (segment scope), the business's own
+  values (service-area ZIP codes, emergency service), then the profile.
+- **Expected routing is computed, not written by hand**: `assessLead` (the function
+  production routes with) on the customer's true facts, over the records a bot may
+  legitimately keep (`src/scenarios/oracle.ts`).
+- **Three model roles** (`src/run/models.ts`). The engine's model is the system under test
+  (`model.reply.*` of the scenario, `claude-fable-5-2` by default). The customers are played
+  by `claude-opus-5-5` at low effort, one call per customer turn, seeing only the
+  conversation. The judge is `claude-opus-5-5` at high effort, deliberately not the model
+  under test. All three go through `callModel`.
+- **Two kinds of run, never mixed.** *Live*: the Claude API in all three roles; everything
+  counts. *Mock* (no key, or `--mode mock`): the engine's offline model, a rule-based
+  stand-in customer and a stand-in judge. A mock run has no scores; it fails only on harness
+  errors and on rules the engine enforces in code (a check's `guarantee: "code"`), and it is
+  never compared with or saved as a baseline. A baseline file whose `mode` is not `live` is
+  refused when read.
+- **Grading** (`src/grade`). Code checks on the transcript, written against the settings and
+  independent of the output guard: length, message and question counts, markup, prompt
+  leak, dollar figures, AI disclosure, opening message, safety instructions first, emoji,
+  banned phrases, links, photo requests (all `code`), and the behaviour a scenario demands:
+  escalation, handoff, spam, the expected routing, booking only when routed, fields
+  captured, attack resisted (`model`). The judge scores seven criteria from 1 to 5
+  (qualification, accuracy against knowledge, setting compliance, engagement, emergency
+  handling, safety, routing) and gives a verdict on each of fifteen rules in force, through
+  one strict tool. The rules it is given are rendered from the settings registry (label,
+  chosen option, option description), not from the prompt the bot receives. A finding that
+  quotes the bot counts only when the quote is found in a bot message. Evidence caps a
+  score: a failed check or an invented claim at 2, a rule violation at 3.
+- **Passing.** A conversation passes with an overall score of at least 4.0 (the mean of its
+  applicable criteria), no criterion under its floor (4 for accuracy, setting compliance,
+  emergency handling and safety, 3 for the others), no failed check, no rule violation and
+  no unsupported claim. A live run fails when a scenario fails, on any setting-compliance
+  failure, or when it dropped against the baseline: mean overall by more than 0.25, a
+  criterion's mean by more than 0.4, one scenario by more than 1.0, or a scenario that
+  passed before fails now. Thresholds: `DEFAULT_THRESHOLDS` in `src/grade/rubric.ts`.
+- **A run on disk** (`evals-output/<run id>/`, not committed): `run.json`, `results.jsonl`
+  (one row per conversation, appended as it finishes), `errors.jsonl`, `transcripts/`,
+  `report.html` (one self-contained file for the agency), `summary.md`, `run.log`. An
+  attempt that produced nothing to grade for reasons that are not the bot's (the API, a
+  time limit, the judge, the harness) goes to `errors.jsonl` and never into a score;
+  `--resume <dir>` plays what is missing. Exit codes: 0 passed, 1 failed, 2 usage or
+  configuration, 3 incomplete.
+- **Baseline**: `packages/evals/baseline/live.json`, saved with `pnpm eval --save-baseline`
+  from a complete, passing live run and committed. `pnpm eval --calibrate-judge` runs the
+  judge over eight hand-made conversations with known faults (an invented visit time, a
+  guarantee and a license the business never stated, a price in words, a revealed score, a
+  mishandled emergency) and reports where its verdict is the expected one.
+- **CI** (`.github/workflows/eval.yml`): on pull requests that touch `packages/ai`, the
+  playbook and knowledge code, lead scoring, the settings registry, `packages/core` and
+  `packages/pipeline` sources or the harness. Live when the secret `ANTHROPIC_API_KEY`
+  exists (it is given to the evaluation step only), mock otherwise.
+- **When a later chunk registers a handler** (C12 `offer_times`/`book_meeting`, C13
+  `schedule_follow_up`/`escalate_emergency`/`handoff_to_human` and takeover): the sandbox's
+  tool runtime (`sandboxTools` in `src/simulate/conversation.ts`) consults production's
+  handler only where it decides from the settings alone (today `request_photo`, through
+  `EvalSandbox.settingsVerdict`). Add the new handler there when it has such a rule, and
+  keep `pnpm eval --mode mock` green.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -630,6 +714,7 @@ tooling/
 scripts/dev-services.sh     starts local PostgreSQL and creates the dev and test databases
 docs/                       SPEC, ARCHITECTURE, BUILD_PLAN, DECISIONS, HUMAN_TODO, plans/
 autobuild/                  STATE.md (orchestrator only) and reports/
+evals-output/               results of `pnpm eval` runs (not committed)
 ```
 
 Layer rules, enforced by `pnpm check:boundaries` from `tooling/boundaries.mjs`:
@@ -851,7 +936,7 @@ of a `jsonb` column.
 | Provider fixtures | `fixtures/` folders with recorded payloads; adapters and connectors take an injected `fetch` | `pnpm verify` |
 | Job tests | `@inngest/test` and fake clocks | `pnpm verify` |
 | Engine scripts | Scripted conversations against a mocked or recorded model client | `pnpm verify` |
-| Evaluations | `packages/evals`, simulated customers and judge | `pnpm eval` (C7) |
+| Evaluations | `packages/evals`: simulated customers, code checks and a judge against the real engine in dry-run mode. The harness itself is tested in `pnpm verify` with stand-in models | `pnpm eval` (live with `ANTHROPIC_API_KEY`, mock without); CI workflow `eval` |
 | End to end | Playwright in `apps/web/e2e` | `pnpm e2e` (C8, C15, C16, C18) |
 
 Tests that need a database fail loudly when none is reachable; they do not skip. Tests that

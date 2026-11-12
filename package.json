@@ -17,6 +17,7 @@
     "test": "turbo run test && pnpm run test:tooling",
     "test:tooling": "node --test \"tooling/scripts/*.test.mjs\"",
     "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
+    "eval": "pnpm --filter @repo/evals run eval",
     "check:boundaries": "node tooling/scripts/check-boundaries.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -151,6 +151,14 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   `pnpm verify` green.
 - **Must not touch:** production wiring, settings defaults without recording the reason in
   DECISIONS.
+- **Delivered, for every later chunk:** `pnpm eval` (ARCHITECTURE §2 "As built (C7)").
+  Without a key it is a mock run against stand-ins, which still fails when a rule the
+  engine enforces in code breaks: keep `pnpm eval --mode mock` green. A chunk that
+  registers an action handler (C12, C13) looks at `sandboxTools` in
+  `packages/evals/src/simulate/conversation.ts`; a chunk that adds a setting the bot must
+  obey adds it to the judge's rules (`packages/evals/src/grade/rules.ts`) and, where code
+  can check it, to `packages/evals/src/grade/checks.ts`. No live baseline exists yet
+  (HUMAN_TODO 10).
 
 ### C8 · Website chat widget
 
