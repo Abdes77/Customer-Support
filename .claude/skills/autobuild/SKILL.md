@@ -28,21 +28,26 @@ Quality first, cost second, and both are served by the same two habits:
 - **The cheapest setting that something independent can check.** A cheaper model is "the same
   result" only when the step's checks or its review would catch a wrong result.
 
-Fable at `xhigh` effort is what drains a usage allowance fastest. It is rationed to a few
-short design steps that each carry a written reason; the default for Fable is `high`, retries
-never raise effort above `high`, and Fable at `max` is not used. Section 6 of
-`references/planning.md` has the rules, and the plan check enforces them.
+Fable at `xhigh` effort is what drains a usage allowance fastest, so it is rationed. The
+default for Fable is `high`. `xhigh` is for a few short design steps that each carry a written
+reason; retries never raise effort above `high`; Fable at `max` is not used. Section 6 of
+`references/planning.md` has the rules, the plan check enforces them, and the same restraint
+applies to every agent you start yourself during planning and review.
 
 ## 0. Before anything: new build or resume
 
-- `autobuild/state.json` exists and is not finished: this is a run in progress. Read
-  `autobuild/ORCHESTRATOR.md` and continue its loop. Ask nothing.
-- The repository has an `AUTOBUILD.md` from the older kit and the user asks to run or continue
-  it: follow that file as written. This skill is for new builds.
-- Otherwise it is a new build. Look at what is there: an empty repository, or existing code
-  with its own stack, tests and conventions that the plan has to fit. If the session has no
-  repository at all, the work would not survive the session, so the first question is which
-  repository to use.
+- **A run exists.** If `autobuild/state.json` is in the repository and is not finished, a
+  build is in progress or was interrupted. Continue it only when the user asks you to
+  continue, or when the message is the automatic check-in: make sure the checkout is on the
+  build branch (`branch` in `autobuild/plan.json`), read `autobuild/ORCHESTRATOR.md`, and
+  carry on with its loop without asking anything. If the user came for something else, do
+  that, and mention the unfinished build in one line; another session may be running it.
+- **An older kit.** If the repository has an `AUTOBUILD.md` and the user asks to run or
+  continue it, follow that file as written. This skill is for new builds.
+- **A new build.** Look at what is there: an empty repository, or existing code with its own
+  stack, tests and conventions that the plan has to fit. If the session has no repository at
+  all, the work would not survive the session, so the first question is which repository to
+  use.
 
 ## 1. Questions
 
@@ -74,39 +79,43 @@ could not have foreseen. After that, no more questions for the rest of the run.
 Do this immediately after the answers and before any planning. Planning takes a while and the
 user will leave; anything that might need them has to surface now.
 
-1. **Session settings.** Call `get_session` if the tool exists. The run needs permission mode
-   **Auto**; in any other mode it will stop at the first command that needs approval. You
-   cannot change the mode yourself.
+1. **Session settings.** Call `get_session` if the tool exists and read the permission mode,
+   the model and the effort. The run needs permission mode **Auto**; in any other mode it
+   stops at the first command that needs approval, and you cannot change the mode yourself.
 2. **Branch.** Use the branch this session is told to develop on; otherwise create
-   `claude/autobuild` from the default branch.
+   `claude/autobuild` from the default branch. This is the build branch.
 3. **Copy the tooling** from this skill's folder into the repository:
    `scripts/ab.mjs` to `autobuild/ab.mjs`, `assets/RULES.md` to `autobuild/RULES.md`, and
-   `assets/ORCHESTRATOR.md` to `autobuild/ORCHESTRATOR.md`. Commit and push once, so a push
-   problem shows up now.
+   `assets/ORCHESTRATOR.md` to `autobuild/ORCHESTRATOR.md`. Commit and push, so a push problem
+   shows up now.
 4. **Model ping.** Start four subagents in parallel, one per tier (`haiku`, `sonnet`, `opus`,
    `fable`), effort `low`, prompt "Reply with the single word READY." The tiers that answer
    become `plan.models`. This also brings up any usage consent while the user is there.
 5. **Scheduled check-in.** If the session can schedule a recurring message back into itself
    (in Claude Code cloud sessions: `create_trigger` with `cron_expression` `0 * * * *`,
-   `initiation` `own_followup`, no session id), create one named "Autobuild check-in" with
-   this prompt, and keep its id for step 4 of the plan review:
+   `initiation` `own_followup`, and no session id), create one named "Autobuild check-in" with
+   this prompt, putting the build branch in place of BRANCH, and keep its id:
 
    > Automatic autobuild check-in, not a message from the user. If you are in the middle of
-   > the autobuild loop, ignore this and carry on. Otherwise: if autobuild/state.json exists,
-   > read autobuild/ORCHESTRATOR.md, run "node autobuild/ab.mjs next" and continue the run. If
-   > it does not exist yet, continue the autobuild planning where it stopped. If next prints
-   > "finished", delete this scheduled task.
+   > the autobuild loop, ignore this and carry on. Otherwise make sure the checkout is on
+   > BRANCH (git fetch origin BRANCH, git checkout BRANCH). Then: if autobuild/state.json
+   > exists, read autobuild/ORCHESTRATOR.md, run "node autobuild/ab.mjs next" and continue the
+   > run. If it does not exist yet, continue the autobuild planning from what is committed. If
+   > next prints "finished", delete this scheduled task.
 
    This is what restarts the run after a usage limit, an error or an early stop.
 6. **Settings file.** Run `node autobuild/ab.mjs settings` and merge what it prints into
    `.claude/settings.json` with the Write or Edit tool: a few allow rules and a Stop hook that
-   keeps the session from ending while steps remain. Merge, never overwrite. If the write is
-   refused, skip it; the check-in covers the same need.
+   keeps the session from ending while steps remain. Merge, never overwrite. It may only take
+   effect in later sessions on this repository, and if the write is refused, skip it; the
+   check-in covers the same need either way.
 7. **Tell the user, in a few lines, and keep going in the same turn:**
    - that you have all you need and what will happen (plan, review, build, test, report);
-   - if the mode is not Auto: to switch it now, because nothing else can;
-   - if the session's own effort is `xhigh` or `max`: that they can lower it to `high`, since
-     this session only plans and coordinates and the build agents get their own settings;
+   - the permission mode: if it is not Auto, or you could not read it, that the run needs
+     Auto and only they can switch it;
+   - if the session's own effort is `xhigh` or `max`: that they can lower it to `high` now,
+     because this session only plans and coordinates and the build agents get their own
+     settings;
    - that they can ask "status" or say "pause" at any time, and what arrives at the end.
 
 ## 3. Plan
@@ -119,9 +128,10 @@ In short:
 
 1. Write `docs/SPEC.md`: numbered requirements, the KPIs with targets and how each is
    measured, what you decided by default, what is out of scope.
-2. Have one subagent on the strongest available tier at `xhigh` write
-   `docs/ARCHITECTURE.md`, with the contracts between components spelled out. In an existing
-   codebase it reads the code first.
+2. Have one subagent on the strongest available tier write `docs/ARCHITECTURE.md`, with the
+   contracts between components spelled out. It runs at `high`; `xhigh` only for a large or
+   unusual system, as section 3 of the planning guide defines it. In an existing codebase it
+   reads the code first.
 3. Write `autobuild/plan.json` and one brief per step in `autobuild/steps/`, using
    `assets/plan.example.json` and `assets/step-brief.md` as the shapes. Fill in the
    "Environment" section of `autobuild/RULES.md`.
@@ -129,13 +139,15 @@ In short:
    strongest tier at `high` with the spec, the architecture and the path of
    `references/planning.md`, and check its result.
 
+Commit and push after each of these, so a restarted session finds the work.
+
 ## 4. Plan review
 
 The plan is the one thing nobody will correct later, so it is attacked before it runs.
 
 1. `node autobuild/ab.mjs validate`. Fix every error. It checks structure, that every
-   requirement and KPI is covered, that cheap steps have something to catch them, and the
-   Fable-at-xhigh budget.
+   requirement and KPI is covered, that every step has something that would catch a wrong
+   result, and the Fable-at-xhigh budget.
 2. Start three critics in parallel as read-only subagents. Each gets the paths of
    `docs/SPEC.md`, `docs/ARCHITECTURE.md`, `autobuild/plan.json`, `autobuild/steps/` and this
    skill's `references/planning.md`, is told to look for problems and not to praise, and
@@ -143,8 +155,8 @@ The plan is the one thing nobody will correct later, so it is attacked before it
    - **Completeness and architecture** (strongest tier, `high`): what is missing, what will
      break when the parts meet, which requirement or KPI is covered only on paper.
    - **Step design** (`opus`, `high`): steps that are too big, briefs an agent with no other
-     context could not build from, "Done when" items no command proves, wrong or missing
-     dependencies, a step that is really two.
+     context could not build from, "Done when" items no command proves, checks that would pass
+     without testing anything, wrong or missing dependencies, a step that is really two.
    - **Model, effort and cost** (`opus`, `high`): where a cheaper model or lower effort gives
      the same result given the checks and review; where a split would allow it; where a step
      is too weak for its model. It challenges every Fable step and, above all, every Fable
@@ -156,8 +168,8 @@ The plan is the one thing nobody will correct later, so it is attacked before it
    for each finding or warning you did not act on. Then `node autobuild/ab.mjs init`, and
    `node autobuild/ab.mjs watchdog <id>` with the check-in's id.
 5. Tell the user in four or five lines, without asking anything: the number of steps and
-   milestones, the model mix, the steps that run Fable at xhigh and why, and the KPIs with
-   targets. Then start the run in the same turn.
+   milestones, the model mix, the steps that run Fable at xhigh and why (or that none do),
+   and the KPIs with targets. Then start the run in the same turn.
 
 ## 5. Run
 
@@ -167,10 +179,12 @@ follow it. The loop is:
 1. `node autobuild/ab.mjs next` prints one action.
 2. For `build` or `review`, start one subagent with exactly the model, effort and prompt it
    printed, in the foreground.
-3. `node autobuild/ab.mjs gate --wait 540` (tool timeout 600000 ms) checks the result: the
-   agent's report, the verify command, the step's own checks. It commits and pushes on a pass,
-   and on a failure decides the retry: same model with the failure explained, then the next
-   model up, then the strongest.
+3. `node autobuild/ab.mjs gate --wait 540` (tool timeout 600000 ms) judges the result: the
+   agent's report, the verify command, the step's own checks. On a pass it commits and pushes.
+   On a failure it decides the retry: the same model with the failure explained, then the next
+   model up, then the strongest, never above `high` effort unless the plan said so. When an
+   agent did nothing at all, usually because a usage limit was hit, it counts no attempt and
+   tells you to stop and let the check-in resume the run.
 4. Repeat until `next` prints `finish`.
 
 You coordinate; you do not write product code, and you do not read the agents' work. The
@@ -178,10 +192,9 @@ script holds all the state, so a compacted or resumed conversation loses nothing
 
 ## 6. Finish
 
-Follow "Finish" in `autobuild/ORCHESTRATOR.md`: remove the Stop hook, close the run, delete
-the scheduled check-in, open the pull request if the user chose one, and report. The report
-states every KPI with target, reading and verdict, and says plainly what was not met and what
-could not be verified.
+Follow "Finish" in `autobuild/ORCHESTRATOR.md`: close the run, delete the scheduled check-in,
+open the pull request if the user chose one, and report. The report states every KPI with
+target, reading and verdict, and says plainly what was not met and what could not be verified.
 
 ## What holds from the last answer to the final report
 
@@ -199,8 +212,8 @@ could not be verified.
 
 In a chat with no repository, shell or subagents, do stages 1, 3 and 4 as far as possible
 without the script, and hand over the `autobuild/` folder and the `docs/` files as a download,
-with this line to paste into a Claude Code session on the repository, model Fable, permission
-mode Auto: "Read autobuild/ORCHESTRATOR.md and run the build it describes."
+with this line to paste into a Claude Code session on the repository (model Fable, effort
+high, permission mode Auto): "Read autobuild/ORCHESTRATOR.md and run the build it describes."
 
 ## Files in this skill
 

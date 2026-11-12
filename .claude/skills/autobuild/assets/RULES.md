@@ -16,8 +16,9 @@ The build is unattended: nobody is watching and nobody can answer a question.
    conflicts with `docs/ARCHITECTURE.md` or with the code that exists, do the closest correct
    thing and describe it under "Deviations" in your report.
 4. **Tests are part of the step.** Add or update the tests that prove each "Done when" item.
-   Never delete, skip, loosen or special-case a test or a check to get a pass. When a test is
-   itself wrong, correct it and say why in the report.
+   Never delete, skip, loosen or special-case a test or a check to get a pass, and never make
+   the verify command or a test script do less than it did. When a test is itself wrong,
+   correct it and say why in the report.
 5. **Finished means finished.** No placeholder implementations, stubs or TODO comments passed
    off as done. When part of the step truly cannot be done, report `STATUS: BLOCKED` and say
    what is missing; a false DONE is found by the gate and costs a full retry.
@@ -25,7 +26,10 @@ The build is unattended: nobody is watching and nobody can answer a question.
    naming, error handling, folder layout, test style. Add a dependency only when the brief or
    the architecture calls for it.
 7. **Prove it yourself.** Before you report, run the verify command and every command under
-   "Done when", and make them pass. The orchestrator runs them again.
+   "Done when", and make them pass. The orchestrator runs them again. A command that needs
+   more than a few minutes does not fit in one shell call: run it in the background and wait
+   for it, or run the narrowest part of it that covers your change, and say in the report which
+   you did.
 8. **Secrets.** Never print or commit a key. Configuration comes from environment variables;
    keep `.env.example` current. When the step needs an account, key or approval that is not in
    the environment, build it completely against mocks or recorded fixtures, skip only the live
@@ -35,9 +39,11 @@ The build is unattended: nobody is watching and nobody can answer a question.
    resources. Put the exact commands in `docs/HUMAN_TODO.md` instead.
 10. **Git belongs to the orchestrator.** Do not commit, push, stash, reset, switch branches or
     open pull requests. Leave your work in the working tree.
-11. **Hands off the build files.** Do not edit anything under `autobuild/` except your own
-    report, and do not edit `.claude/`. Changes there are detected and undone, and the attempt
-    counts as failed.
+11. **Hands off the build files.** Under `autobuild/` you write only your own report; the one
+    other file that may change there is `autobuild/kpi.json`, which the KPI measurement
+    writes. Never run `autobuild/ab.mjs`: it belongs to the orchestrator. Edits to the plan,
+    the briefs, the rules or the state are detected and undone, and the attempt counts as
+    failed. Do not edit `.claude/` either.
 12. **When a tool call is refused** by the permission system, do not try the same thing in
     another form. Reach the outcome another way, or record it in `docs/HUMAN_TODO.md`.
 13. **Report.** Finish by writing `autobuild/reports/<step id>.md`:
@@ -70,7 +76,8 @@ cannot: wrong behaviour that happens to pass, and work that will hurt later step
    inside the step: no refactors for taste, no new features, no style-only edits.
 4. Keep the verify command and the step's "Done when" commands passing, and run them before
    you finish.
-5. Rules 1 and 8 to 12 for builders apply to you too.
+5. Rules 1 and 7 to 12 for builders apply to you too, including the ban on weakening the
+   verify command or a test.
 6. Finish by writing `autobuild/reports/<step id>.review.md`: each problem found, how serious,
    and what you changed; or `No changes needed.` followed by what you checked. Your final
    message is a three-line summary.

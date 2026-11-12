@@ -27,18 +27,17 @@
   "steps": [
     {
       "id": "S01", "title": "Contracts: lead, score, reply and connector interfaces", "milestone": "M0", "kind": "design",
-      "model": "fable", "effort": "xhigh",
-      "xhigh_reason": "Every later step implements or calls these types; a wrong contract is rebuilt everywhere, and the step is a short document plus type files, not an implementation.",
-      "why": "Design decisions that no command can verify; reviewed because nothing else checks them.",
+      "model": "fable", "effort": "high",
+      "why": "Design decisions that no command can verify, so the strongest model; high is enough for a system this small, and it is reviewed because nothing else checks it.",
       "depends_on": [], "covers": ["R1", "R2", "R3"], "checks": [],
       "review": { "model": "opus", "effort": "high" }, "skip_verify": true
     },
     {
       "id": "S02", "title": "Scaffold repository, verify command, CI and CLAUDE.md", "milestone": "M0", "kind": "build",
       "model": "haiku", "effort": "medium",
-      "why": "Fully determined by the architecture's layout section; install and verify prove it.",
+      "why": "Fully determined by the architecture's layout section, so the cheapest model builds it; reviewed because every later step is judged by the verify command it creates.",
       "depends_on": ["S01"], "covers": [], "checks": ["pnpm install --frozen-lockfile"],
-      "review": null
+      "review": { "model": "opus", "effort": "high" }
     },
     {
       "id": "S03", "title": "Evaluation harness: simulated leads, rubric, kpi.json", "milestone": "M0", "kind": "build",

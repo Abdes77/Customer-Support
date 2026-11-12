@@ -9,7 +9,8 @@
 //   next                  print the next action as JSON (build, review, rescue, finish, ...)
 //   gate [--wait N]       check the action just issued: report, verify command, step checks
 //   replan                re-validate after the plan was edited (rescue or milestone refresh)
-//   block "<reason>"      give up on the step that is in rescue; its dependents are skipped
+//   retry                 rescue option: one more attempt on the strongest model
+//   block "<reason>"      rescue option: give up on the step; its dependents are skipped
 //   pause "<reason>"      stop issuing actions (also lets the Stop hook release the session)
 //   resume                undo pause
 //   status [--json]       progress table
@@ -47,10 +48,12 @@ const ME = `node ${P.self}`;
 
 const TIERS = ['haiku', 'sonnet', 'opus', 'fable'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const HIGH = EFFORTS.indexOf('high');
 const KINDS = ['design', 'build', 'test', 'integrate', 'optimize', 'harden', 'accept', 'docs'];
 const FINAL = ['done', 'blocked', 'skipped'];
 const DEFAULT_ATTEMPTS = 4;
 const DEFAULT_TIMEOUT_S = 1800;
+const HOLD_MS = 2 * 3600 * 1000;
 
 // ---------- small helpers ----------
 
@@ -67,6 +70,7 @@ const writeJSON = (f, obj) => writeFile(f, JSON.stringify(obj, null, 2) + '\n');
 const out = (obj) => { console.log(JSON.stringify(obj, null, 2)); };
 const die = (message, extra = {}) => { out({ result: 'error', message, ...extra }); process.exit(1); };
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha = (text) => crypto.createHash('sha256').update(text ?? '').digest('hex');
 const tail = (text, chars = 1500) => (text.length > chars ? '…' + text.slice(-chars) : text).trim();
 const str = (v) => typeof v === 'string' && v.trim().length > 0;
@@ -82,6 +86,9 @@ const branch = () => {
   if (r.status !== 0) r = git('rev-parse', '--abbrev-ref', 'HEAD');
   return r.status === 0 ? r.stdout.trim() : null;
 };
+const wrongBranch = (plan) => (isRepo() && branch() !== plan.branch
+  ? `The checkout is on branch "${branch()}" but this build lives on "${plan.branch}". Run "git fetch origin ${plan.branch}" and "git checkout ${plan.branch}", then try again.`
+  : null);
 
 // Commit everything. Returns { ok, sha, error }. "Nothing to commit" is ok.
 function commit(message, plan) {
@@ -94,27 +101,34 @@ function commit(message, plan) {
   return { ok: true, sha: head() };
 }
 
-// Push the current branch, retrying network errors. Never fatal.
-function push() {
+// Push the current branch, retrying network errors. Never fatal; counts failures in a row so
+// the orchestrator can tell a blip from a branch that can no longer be pushed.
+function push(s) {
   if (!isRepo()) return 'no git repository';
   if (git('remote', 'get-url', 'origin').status !== 0) return 'no remote named origin';
   const b = branch();
   let err = '';
   for (let i = 0; i < 4; i++) {
     const r = git('push', '-q', '-u', 'origin', b);
-    if (r.status === 0) return 'pushed';
+    if (r.status === 0) {
+      if (s && s.push_failures) { s.push_failures = 0; saveState(s); }
+      return 'pushed';
+    }
     err = tail(r.stderr || '', 300);
     if (i < 3) sleep(2000 * 2 ** i);
   }
-  return `push failed (will retry after the next step): ${err}`;
+  let n = 1;
+  if (s) { s.push_failures = (s.push_failures || 0) + 1; n = s.push_failures; saveState(s); }
+  return `push failed (${n} in a row${n >= 2 ? `; see "If something outside the script fails" in ${P.orch}` : '; it is retried after the next step'}): ${err}`;
 }
 
-// Take uncommitted work out of the tree without destroying it. The work is saved twice: as a
-// patch file inside the repository (committed with the next commit, so it survives a fresh
-// clone) and as a git stash (handy while this checkout lives). Returns the patch path or null.
+// Take an agent's uncommitted work out of the tree without destroying it. The work is saved
+// twice: as a patch file inside the repository (committed with the next commit, so it survives
+// a fresh clone) and as a git stash (handy while this checkout lives). The plan, the briefs,
+// the reports and the two running documents stay where they are. Returns the patch path or null.
 function park(label, patchFile) {
   if (!isRepo()) return null;
-  const keep = [`:(top,exclude)${P.state}`, `:(top,exclude)${P.failed}`];
+  const keep = [P.state, P.failed, P.plan, P.steps, P.reports, 'docs/HUMAN_TODO.md', 'docs/DECISIONS.md'].map((f) => `:(top,exclude)${f}`);
   let saved = null;
   if (head()) {
     git('add', '-A');
@@ -126,6 +140,22 @@ function park(label, patchFile) {
   return saved;
 }
 
+// A hash of the whole working tree (tracked and untracked, minus ignored files and state.json).
+// Used to tell "the agent did nothing at all" from "the agent worked but wrote no report".
+function treeHash() {
+  if (!isRepo()) return null;
+  fs.mkdirSync(P.logs, { recursive: true });
+  const idx = path.resolve(P.logs, 'tree.index');
+  fs.rmSync(idx, { force: true });
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  const run = (...a) => spawnSync('git', a, { env, encoding: 'utf8' });
+  if (head()) run('read-tree', 'HEAD');
+  run('add', '-A', '--', ':(top)', `:(top,exclude)${P.state}`);
+  const r = run('write-tree');
+  fs.rmSync(idx, { force: true });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
 // ---------- plan ----------
 
 function loadPlan() {
@@ -133,6 +163,12 @@ function loadPlan() {
   if (text === null) return { plan: null, error: `${P.plan} not found` };
   try { return { plan: JSON.parse(text) }; } catch (e) { return { plan: null, error: `${P.plan}: ${e.message}` }; }
 }
+
+const stepIndex = (plan, id) => plan.steps.findIndex((s) => s && s.id === id);
+const maxAttempts = (plan) => plan.max_attempts || DEFAULT_ATTEMPTS;
+// The verify command runs for every step, or from the step that creates it when verify_from is set.
+const verifyRuns = (plan, step) => !step.skip_verify && (!plan.verify_from || stepIndex(plan, step.id) >= stepIndex(plan, plan.verify_from));
+const alwaysRun = (c) => typeof c === 'string' || !(Array.isArray(c.needs_env) && c.needs_env.length);
 
 function validate() {
   const errors = [], warnings = [];
@@ -153,6 +189,8 @@ function validate() {
   const msIds = new Set(milestones.map((m) => m && m.id));
   const steps = Array.isArray(plan.steps) ? plan.steps : [];
   if (!steps.length) E('plan.steps must be a non-empty array');
+  if (plan.verify_from !== undefined && !steps.some((s) => s && s.id === plan.verify_from)) E(`plan.verify_from "${plan.verify_from}" is not a step id (leave it out when the verify command already exists)`);
+  if (plan.max_attempts !== undefined && !(Number.isInteger(plan.max_attempts) && plan.max_attempts >= 1 && plan.max_attempts <= 6)) E('plan.max_attempts must be an integer from 1 to 6');
 
   const seen = new Map();
   const covered = new Set();
@@ -188,18 +226,24 @@ function validate() {
       if (models.length && !models.includes(s.review.model)) E(`${at}: review model "${s.review.model}" is not in plan.models`);
       // Opus reviewing Fable's work is the standard; below that, a reviewer should not be weaker than the builder.
       if (tier(s.review.model) < Math.min(tier(s.model), tier('opus'))) W(`${at}: the reviewer (${s.review.model}) is a weaker model than the builder (${s.model})`);
+      if (s.review.model === 'fable' && ['xhigh', 'max'].includes(s.review.effort)) E(`${at}: a review on fable runs at high at most`);
     }
-    const nChecks = checks ? checks.length : 0;
-    if (!s.review && !nChecks && ['haiku', 'sonnet'].includes(s.model)) E(`${at}: runs on ${s.model} with no checks of its own and no review, so nothing would catch a wrong result; add a check, a review, or a stronger model`);
-    if (!s.review && !nChecks && s.kind === 'design') E(`${at}: a design step with no checks needs a review`);
-    if (!nChecks && ['build', 'test', 'integrate', 'optimize', 'accept'].includes(s.kind)) W(`${at}: has no checks of its own; only the global verify command proves it`);
-    const costly = ['xhigh', 'max'].includes(s.effort);
+
+    // What would catch a wrong result? Only commands that always run count.
+    const own = checks ? checks.filter((c) => c && alwaysRun(c)).length : 0;
+    const viaVerify = str(s.id) && !s.skip_verify && (!plan.verify_from || steps.findIndex((x) => x && x.id === plan.verify_from) <= i);
+    if (!s.review && !own && !viaVerify) E(`${at}: nothing would check this step: no review, no check that always runs, and the verify command does not run for it`);
+    else if (!s.review && !own && ['haiku', 'sonnet'].includes(s.model)) E(`${at}: runs on ${s.model} with no always-run check of its own and no review, so nothing would catch a wrong result; add a check, a review, or a stronger model`);
+    else if (!s.review && !own && s.kind === 'design') E(`${at}: a design step with no checks needs a review`);
+    if (!s.review && s.id === plan.verify_from) E(`${at}: this step creates the verify command that every later step is judged by, so it needs a review`);
+    if (!own && ['build', 'test', 'integrate', 'optimize', 'accept'].includes(s.kind)) W(`${at}: has no always-run check of its own; only the global verify command proves it`);
+
+    // The costly settings.
     if (s.model === 'fable' && s.effort === 'max') E(`${at}: fable at max is not allowed; it is the costliest setting and xhigh is the ceiling for this build`);
-    else if (s.model === 'fable' && costly) {
+    else if (s.model === 'fable' && s.effort === 'xhigh') {
       if (!str(s.xhigh_reason)) E(`${at}: fable at xhigh needs "xhigh_reason": one sentence on why neither fable at high nor a split into a design step plus cheaper build steps would give the same result`);
       if (!['design', 'harden'].includes(s.kind)) W(`${at}: fable at xhigh on a "${s.kind}" step; that setting is meant for design decisions and the threat model, so split off the design or drop to high`);
     } else if (s.effort === 'max') W(`${at}: effort max is rarely worth its cost; prefer xhigh`);
-    if (s.review && s.review.model === 'fable' && ['xhigh', 'max'].includes(s.review.effort)) E(`${at}: a review on fable runs at high at most`);
 
     const brief = str(s.id) ? read(`${P.steps}/${s.id}.md`) : null;
     if (str(s.id) && brief === null) E(`${at}: brief ${P.steps}/${s.id}.md is missing`);
@@ -222,14 +266,11 @@ function validate() {
     const at = `kpi ${k && k.id ? k.id : `#${i + 1}`}`;
     for (const f of ['id', 'name', 'target', 'how']) if (!k || !str(k[f])) E(`${at}: ${f} is missing`);
     if (k && k.step) {
-      const st = seen.get(k.step);
-      if (!st) E(`${at}: step "${k.step}" is not in plan.steps`);
-      else if (!(st.checks || []).length) E(`${at}: step ${k.step} measures this KPI but has no check that runs the measurement`);
+      const x = seen.get(k.step);
+      if (!x) E(`${at}: step "${k.step}" is not in plan.steps`);
+      else if (!(x.checks || []).length) E(`${at}: step ${k.step} measures this KPI but has no check that runs the measurement`);
     } else if (!k || k.live_only !== true) E(`${at}: set "step" to the step whose checks measure it, or "live_only": true when it can only be measured in production`);
   });
-
-  if (plan.verify_from !== undefined && !seen.has(plan.verify_from)) E(`plan.verify_from "${plan.verify_from}" is not a step id`);
-  if (plan.max_attempts !== undefined && !(Number.isInteger(plan.max_attempts) && plan.max_attempts >= 1 && plan.max_attempts <= 6)) E('plan.max_attempts must be an integer from 1 to 6');
 
   if (steps.length && !errors.length) {
     const fx = steps.filter((s) => s.model === 'fable' && s.effort === 'xhigh').map((s) => s.id);
@@ -248,31 +289,41 @@ function validate() {
   return { plan, errors, warnings };
 }
 
-const stepIndex = (plan, id) => plan.steps.findIndex((s) => s.id === id);
-const maxAttempts = (plan) => plan.max_attempts || DEFAULT_ATTEMPTS;
-
 // Retry ladder: 2 = same model with the failure explained; 3 = one tier up; 4+ = strongest tier.
-// A retry raises effort to "high" at most. Effort above that (xhigh, max) is the most expensive
-// setting there is, so it only ever runs where the plan asked for it with a written reason.
-function ladder(plan, step, attempt) {
+// Effort above "high" is the most expensive setting there is, so a retry never adds it: effort
+// is raised to "high" at most, and a model the plan did not choose never runs above "high".
+// xhigh therefore runs only on the model the plan named, where the plan gave a written reason.
+function ladder(plan, step, attempt, forceTop = false) {
   const avail = TIERS.filter((t) => plan.models.includes(t));
   const top = avail.length - 1;
-  const HIGH = EFFORTS.indexOf('high');
-  let mi = Math.max(0, avail.indexOf(step.model));
+  const planned = Math.max(0, avail.indexOf(step.model));
+  let mi = planned;
   let ei = EFFORTS.indexOf(step.effort);
   if (attempt >= 2 && ei < HIGH) ei += 1;
-  if (attempt === 3) { mi = Math.min(mi + 1, top); ei = Math.max(ei, HIGH); }
-  if (attempt >= 4) { mi = top; ei = Math.max(ei, HIGH); }
+  if (attempt === 3) mi = Math.min(mi + 1, top);
+  if (attempt >= 4 || forceTop) mi = top;
+  if (attempt >= 3 || forceTop) ei = Math.max(ei, HIGH);
+  if (mi !== planned) ei = Math.min(ei, HIGH);
   return { model: avail[mi], effort: EFFORTS[ei] };
+}
+
+// Reviewer for each try: 1 and 2 = the planned reviewer; 3 = the strongest model, fresh.
+function reviewer(plan, step, reviewTry) {
+  if (reviewTry < 3) return { model: step.review.model, effort: step.review.effort };
+  const avail = TIERS.filter((t) => plan.models.includes(t));
+  const topModel = avail[avail.length - 1];
+  return topModel === step.review.model ? { model: topModel, effort: step.review.effort } : { model: topModel, effort: 'high' };
 }
 
 // ---------- state ----------
 
+const GUARD = `${P.logs}/guard.json`;
 function loadState() { return readJSON(P.state); }
+// Every legitimate write of state.json also refreshes the guard's copy of it.
 function saveState(s) {
   writeJSON(P.state, s);
-  const g = readJSON(`${P.logs}/guard.json`);
-  if (g && g.files) { g.state = read(P.state); g.files[P.state] = sha(g.state); writeJSON(`${P.logs}/guard.json`, g); }
+  const g = readJSON(GUARD);
+  if (g && g.files) { g.state = read(P.state); g.files[P.state] = sha(g.state); writeJSON(GUARD, g); }
 }
 const st = (s, id) => (s.steps[id] ??= { status: 'todo', attempts: 0 });
 
@@ -312,7 +363,7 @@ function buildPrompt(plan, step, c, failure) {
     `3. Finish by writing ${P.reports}/${step.id}.md the way the rules describe. Its first line must be "STATUS: DONE" or "STATUS: BLOCKED".`,
   ];
   if (c.attempt > 1 && failure) {
-    lines.push('', `This is attempt ${c.attempt} of ${maxAttempts(plan)}. The work from earlier attempts is still in the working tree: keep what is good and fix what failed.`, `What failed last time: ${failure.summary}`);
+    lines.push('', `This is attempt ${c.attempt}. The work from earlier attempts is still in the working tree: keep what is good and fix what failed.`, `What went wrong last time: ${failure.summary}`);
     if (failure.log) lines.push(`Full output: ${failure.log}`);
   }
   return lines.join('\n');
@@ -327,16 +378,20 @@ function reviewPrompt(plan, step, c, failure) {
     c.base && c.built ? `3. The step's changes are: git diff ${c.base} ${c.built}` : `3. The step's changes are the most recent commit: git show HEAD`,
     `4. Fix what you find in the working tree, keep "${plan.verify}" passing, and write ${P.reports}/${step.id}.review.md.`,
   ];
-  if (c.phase === 'review_fix' && failure) {
-    lines.push('', `A review of this step has already changed the working tree, and the checks now fail. Repair it so they pass again without undoing valid fixes.`, `What failed: ${failure.summary}`);
-    if (failure.log) lines.push(`Full output: ${failure.log}`);
+  const f = failure && failure.phase === 'review' ? failure : null;
+  if (c.review_try === 2 && f && f.no_report) {
+    lines.push('', `An earlier review of this step ended without writing its report. Anything it changed is still in the working tree (git status shows it). Review the step, check those changes as well, and write the report.`);
+  } else if (c.review_try === 2 && f) {
+    lines.push('', `An earlier review changed the working tree and the checks now fail. Repair it so they pass again without undoing valid fixes, and bring the review report up to date.`, `What failed: ${f.summary}`);
+    if (f.log) lines.push(`Full output: ${f.log}`);
+  } else if (c.review_try === 3) {
+    lines.push('', `Two earlier review attempts were discarded because they left the checks failing or wrote no report. The working tree is back at the committed code. Review it from scratch.`);
   }
   return lines.join('\n');
 }
 
-// ---------- guard: files a builder must not change ----------
+// ---------- guard: files an agent must not change ----------
 
-const GUARD = `${P.logs}/guard.json`;
 function guardFiles() {
   const briefs = fs.existsSync(P.steps) ? fs.readdirSync(P.steps).filter((f) => f.endsWith('.md')).sort().map((f) => `${P.steps}/${f}`) : [];
   return [P.plan, P.rules, P.orch, P.self, P.state, ...briefs];
@@ -344,12 +399,20 @@ function guardFiles() {
 function setGuard() {
   const files = {};
   for (const f of guardFiles()) files[f] = sha(read(f));
-  writeJSON(GUARD, { files, state: read(P.state) });
+  writeJSON(GUARD, { files, state: read(P.state), tree: treeHash() });
+}
+// The guard is armed between "next issued an agent" and "gate judged it".
+function guardArmed() {
+  const g = readJSON(GUARD);
+  try {
+    const gs = g && g.state ? JSON.parse(g.state) : null;
+    return !!(gs && gs.current && gs.current.issued && gs.current.phase !== 'rescue');
+  } catch { return false; }
 }
 // Returns the list of protected files that changed, after restoring them.
 function checkGuard() {
   const g = readJSON(GUARD);
-  if (!g) return [];
+  if (!g || !g.files) return [];
   const changed = Object.keys(g.files).filter((f) => sha(read(f)) !== g.files[f]);
   for (const f of changed) {
     if (f === P.state) writeFile(P.state, g.state);
@@ -362,10 +425,11 @@ function checkGuard() {
 
 function cmdValidate() {
   const { errors, warnings, plan } = validate();
+  const steps = plan && Array.isArray(plan.steps) ? plan.steps.filter((s) => s && typeof s === 'object') : [];
   const byModel = {};
-  if (plan && Array.isArray(plan.steps)) for (const s of plan.steps) byModel[`${s.model}/${s.effort}`] = (byModel[`${s.model}/${s.effort}`] || 0) + 1;
-  const fableXhigh = plan && Array.isArray(plan.steps) ? plan.steps.filter((s) => s.model === 'fable' && ['xhigh', 'max'].includes(s.effort)).map((s) => ({ id: s.id, title: s.title, reason: s.xhigh_reason || null })) : [];
-  out({ result: errors.length ? 'invalid' : 'valid', steps: plan && Array.isArray(plan.steps) ? plan.steps.length : 0, by_model: byModel, fable_at_xhigh: fableXhigh, errors, warnings });
+  for (const s of steps) byModel[`${s.model}/${s.effort}`] = (byModel[`${s.model}/${s.effort}`] || 0) + 1;
+  const fableXhigh = steps.filter((s) => s.model === 'fable' && ['xhigh', 'max'].includes(s.effort)).map((s) => ({ id: s.id, title: s.title, reason: s.xhigh_reason || null }));
+  out({ result: errors.length ? 'invalid' : 'valid', steps: steps.length, by_model: byModel, fable_at_xhigh: fableXhigh, errors, warnings });
   process.exit(errors.length ? 1 : 0);
 }
 
@@ -392,7 +456,7 @@ function cmdInit() {
   saveState(s);
   const c = commit(`autobuild: plan for ${plan.project} (${plan.steps.length} steps)`, plan);
   if (!c.ok) notes.push(`Commit failed: ${c.error}`);
-  out({ result: 'ready', steps: plan.steps.length, warnings, notes, push: push(), then: `${ME} next` });
+  out({ result: 'ready', steps: plan.steps.length, warnings, notes, push: push(s), then: `${ME} next` });
 }
 
 function cmdReplan() {
@@ -401,15 +465,18 @@ function cmdReplan() {
   const s = loadState() || die(`No ${P.state}. Run init first.`);
   if (s.current && s.current.phase !== 'rescue') die(`Step ${s.current.id} is in progress (${s.current.phase}). Finish it with next and gate before changing the plan.`);
   const fresh = plan.steps.map((x) => x.id).filter((id) => !(s.known || []).includes(id));
+  let parked = null;
   if (s.current) {
-    for (const id of fresh) st(s, id).rescue_child = true;
-    if (stepIndex(plan, s.current.id) >= 0) st(s, s.current.id).attempts = 0;
+    const id = s.current.id;
+    parked = park(`autobuild: ${id} replaced by replan`, `${P.failed}/${id}.patch`);
+    for (const f of fresh) st(s, f).rescue_child = true;
+    if (stepIndex(plan, id) >= 0) st(s, id).attempts = 0;
     s.current = null;
   }
   s.known = plan.steps.map((x) => x.id);
   saveState(s);
   commit('autobuild: replan', plan);
-  out({ result: 'replanned', new_steps: fresh, warnings, then: `${ME} next` });
+  out({ result: 'replanned', new_steps: fresh, partial_work: parked, warnings, then: `${ME} next` });
 }
 
 // ---------- command: next ----------
@@ -421,13 +488,16 @@ function cmdNext() {
   if (!s) { out({ action: 'init', hint: `No state yet. Run "${ME} init".` }); return; }
   if (s.status === 'paused') { out({ action: 'paused', reason: s.reason || '', hint: `Run "${ME} resume" to continue.` }); return; }
   if (s.status === 'finished') { out({ action: 'finished', hint: 'The run is closed. Nothing to do.' }); return; }
+  const wb = wrongBranch(plan);
+  if (wb) { out({ action: 'wrong_branch', hint: wb }); return; }
+  delete s.hold_at;
 
   let note;
   if (!s.current) {
     const step = pick(plan, s);
     if (!step) {
       saveState(s);
-      out({ action: 'finish', progress: counts(plan, s), hint: `No step is left to run. Do the finish procedure in ${P.orch}, which ends with "${ME} finish".` });
+      out({ action: 'finish', progress: counts(plan, s), hint: `No step is left to run. Do the finish procedure in ${P.orch}, which starts with "${ME} finish".` });
       return;
     }
     const x = st(s, step.id);
@@ -454,16 +524,18 @@ function cmdNext() {
 
   if (c.phase === 'rescue') {
     saveState(s);
+    const gaveUp = c.rescue_reason === 'blocked_report';
+    const options = [];
+    if (gaveUp && !st(s, step.id).retried) options.push(`Retry: when the report shows the builder gave up on something that can be done in this environment, run "${ME} retry". The step gets one attempt on the strongest model.`);
+    options.push(`Replan: when the step was too big or its brief was wrong, replace it in ${P.plan} with smaller or corrected steps (new ids such as ${step.id}a, ${step.id}b; repoint depends_on in later steps), write their briefs in ${P.steps}/, then run "${ME} replan". Never weaken a check to get a pass unless the check itself was wrong, and record that in docs/DECISIONS.md.`);
+    options.push(`Block: when the step needs something this run cannot get, run "${ME} block \\"<one-line reason>\\"". The step and everything that depends on it are left out, recorded in docs/HUMAN_TODO.md, and the run continues.`);
     out({
       action: 'rescue', id: step.id, title: step.title, progress,
+      why: gaveUp ? `The builder of step ${step.id} stopped and reported BLOCKED.` : `Step ${step.id} failed every attempt, the last on the strongest model.`,
       failure: s.last_failure || null,
-      instructions: [
-        `Step ${step.id} failed ${maxAttempts(plan)} attempts, the last on the strongest model. Its partial work was saved${st(s, step.id).partial_work ? ` as ${st(s, step.id).partial_work}` : ''} and the tree is back at the last good commit.`,
-        `Read the failure and the log, then choose one:`,
-        `(a) Replan: when the step was too big or its brief was wrong, replace it in ${P.plan} with smaller or corrected steps (new ids such as ${step.id}a, ${step.id}b; repoint depends_on in later steps), write their briefs in ${P.steps}/, then run "${ME} replan". Never weaken a check to get a pass unless the check itself was wrong, and record that in docs/DECISIONS.md.`,
-        `(b) Block: run "${ME} block \\"<one-line reason>\\"". The step and everything that depends on it are left out, recorded in docs/HUMAN_TODO.md, and the run continues.`,
-        `A step can be rescued once. If it or its replacements fail again they are blocked automatically.`,
-      ],
+      read: [`${P.steps}/${step.id}.md`, gaveUp ? `${P.reports}/${step.id}.md` : (s.last_failure && s.last_failure.log) || null].filter(Boolean),
+      choose_one: options,
+      note: `The step's partial work is still in the working tree. Replan and block take it out and save it under ${P.failed}/. A step can be rescued once: if it or its replacements fail again they are blocked automatically.`,
     });
     return;
   }
@@ -479,38 +551,40 @@ function cmdNext() {
   if (fresh) setGuard();
 
   const failure = s.last_failure && s.last_failure.id === step.id ? s.last_failure : null;
+  const then = { command: `${ME} gate --wait 540`, tool_timeout_ms: 600000 };
   if (c.phase === 'build') {
-    const { model, effort } = ladder(plan, step, c.attempt);
+    const { model, effort } = ladder(plan, step, c.attempt, c.top);
     out({
       action: 'build', id: step.id, title: step.title, attempt: c.attempt, of: maxAttempts(plan), progress, note,
       agent: { subagent_type: 'general-purpose', model, effort, run_in_background: false, description: `${step.id} build`, prompt: buildPrompt(plan, step, c, failure) },
-      then: { command: `${ME} gate --wait 540`, tool_timeout_ms: 600000 },
+      then,
     });
   } else {
+    const { model, effort } = reviewer(plan, step, c.review_try);
     out({
-      action: 'review', id: step.id, title: step.title, phase: c.phase, progress, note,
-      agent: { subagent_type: 'general-purpose', model: step.review.model, effort: step.review.effort, run_in_background: false, description: `${step.id} review`, prompt: reviewPrompt(plan, step, c, failure) },
-      then: { command: `${ME} gate --wait 540`, tool_timeout_ms: 600000 },
+      action: 'review', id: step.id, title: step.title, review_try: c.review_try, progress, note,
+      agent: { subagent_type: 'general-purpose', model, effort, run_in_background: false, description: `${step.id} review`, prompt: reviewPrompt(plan, step, c, failure) },
+      then,
     });
   }
 }
 
-// ---------- command: gate ----------
+// ---------- gate: the checks ----------
 
 const RESULT = `${P.logs}/gate.result.json`;
 const PID = `${P.logs}/gate.pid`;
+const TRIES = `${P.logs}/gate.tries.json`;
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const gateKey = (c) => `${c.id}.${c.phase}.${c.attempt}`;
+const gateKey = (c) => `${c.id}.${c.phase}.${c.attempt}${c.phase === 'review' ? `.r${c.review_try}` : ''}`;
 
-function gateCommands(plan, s, step) {
+function gateCommands(plan, step) {
   const cmds = [], skipped = [];
-  const from = plan.verify_from || plan.steps[0].id;
-  if (!step.skip_verify && stepIndex(plan, step.id) >= stepIndex(plan, from)) cmds.push({ cmd: plan.verify, timeout_s: plan.verify_timeout_s || DEFAULT_TIMEOUT_S, label: 'verify' });
+  if (verifyRuns(plan, step)) cmds.push({ cmd: plan.verify, timeout_s: plan.verify_timeout_s || DEFAULT_TIMEOUT_S });
   for (const c of step.checks) {
     const o = typeof c === 'string' ? { cmd: c } : c;
     const missing = (o.needs_env || []).filter((v) => !process.env[v]);
     if (missing.length) skipped.push({ cmd: o.cmd, missing });
-    else cmds.push({ cmd: o.cmd, timeout_s: o.timeout_s || DEFAULT_TIMEOUT_S, label: 'check' });
+    else cmds.push({ cmd: o.cmd, timeout_s: o.timeout_s || DEFAULT_TIMEOUT_S });
   }
   return { cmds, skipped };
 }
@@ -528,9 +602,11 @@ function runOne(c, logFile) {
     const start = fs.statSync(logFile).size;
     const fd = fs.openSync(logFile, 'a');
     const child = spawn(c.cmd, { shell: true, stdio: ['ignore', fd, fd], detached: process.platform !== 'win32', windowsHide: true, env: { ...process.env, CI: process.env.CI || 'true' } });
-    let timedOut = false;
+    let timedOut = false, settled = false;
     const timer = setTimeout(() => { timedOut = true; killTree(child.pid); }, c.timeout_s * 1000);
     const finish = (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       try { fs.closeSync(fd); } catch { /* closed */ }
       let text = '';
@@ -548,59 +624,118 @@ async function cmdRunGate(key) {
   const s = loadState();
   if (!plan || !s || !s.current || gateKey(s.current) !== key) process.exit(0);
   const step = plan.steps[stepIndex(plan, s.current.id)];
-  const { cmds, skipped } = gateCommands(plan, s, step);
+  const { cmds, skipped } = gateCommands(plan, step);
   const logFile = `${P.logs}/${key}.log`;
   fs.mkdirSync(P.logs, { recursive: true });
   fs.writeFileSync(logFile, `# gate ${key} ${now()}\n`);
   writeJSON(PID, { pid: process.pid, key, started: now() });
   const t0 = Date.now();
   let failed = null;
-  const ran = [];
+  const ran = [], flaky = [];
   for (const c of cmds) {
-    const r = await runOne(c, logFile);
+    let r = await runOne(c, logFile);
+    if (r.code !== 0 && !r.timedOut) {
+      // One rerun tells a flaky check from a broken step, far cheaper than a whole new attempt.
+      fs.appendFileSync(logFile, `\n# exit code ${r.code}; running it once more to rule out a flaky result\n`);
+      r = await runOne(c, logFile);
+      if (r.code === 0) flaky.push(c.cmd);
+    }
     ran.push(c.cmd);
     if (r.code !== 0) {
-      failed = { cmd: c.cmd, code: r.code, summary: `"${c.cmd}" ${r.timedOut ? `timed out after ${c.timeout_s}s` : `exited with code ${r.code}`}. Last output:\n${tail(r.output)}` };
+      failed = { cmd: c.cmd, code: r.code, summary: `"${c.cmd}" ${r.timedOut ? `timed out after ${c.timeout_s}s` : `exited with code ${r.code} (twice in a row)`}. Last output:\n${tail(r.output)}` };
       break;
     }
   }
-  writeJSON(RESULT, { key, ok: !failed, failed, ran, skipped, seconds: Math.round((Date.now() - t0) / 1000), log: logFile });
+  writeJSON(RESULT, { key, ok: !failed, failed, ran, skipped, flaky, seconds: Math.round((Date.now() - t0) / 1000), log: logFile });
   fs.rmSync(PID, { force: true });
 }
 
+// ---------- outcomes of a gate ----------
+
+// A build attempt failed.
 function fail(plan, s, step, summary, log) {
   const c = s.current;
   const x = st(s, step.id);
-  s.last_failure = { id: step.id, phase: c.phase, attempt: c.attempt, summary, log: log || null, at: now() };
-  if (c.phase === 'build') {
-    if (c.attempt < maxAttempts(plan)) {
-      c.attempt++; x.attempts = c.attempt; c.issued = false;
-      const up = ladder(plan, step, c.attempt);
-      saveState(s);
-      return { result: 'fail', id: step.id, summary, log, next_attempt: `${c.attempt} of ${maxAttempts(plan)} on ${up.model}/${up.effort}`, then: `${ME} next` };
-    }
-    const parked = park(`autobuild: ${step.id} failed after ${c.attempt} attempts`, `${P.failed}/${step.id}.patch`);
-    if (parked) x.partial_work = parked;
-    if (x.rescued || x.rescue_child) {
-      const r = block(plan, s, step, `failed ${c.attempt} attempts and one rescue. Last failure: ${summary.split('\n')[0]}`);
-      return { result: 'fail', id: step.id, summary, log, blocked: true, partial_work: parked, ...r };
-    }
-    x.rescued = true; c.phase = 'rescue'; c.issued = false;
+  s.last_failure = { id: step.id, phase: 'build', attempt: c.attempt, summary, log: log || null, at: now() };
+  c.idle = 0;
+  if (c.attempt < maxAttempts(plan) && !c.top) {
+    c.attempt++; x.attempts = c.attempt; c.issued = false;
+    const up = ladder(plan, step, c.attempt);
     saveState(s);
-    return { result: 'fail', id: step.id, summary, log, partial_work: parked, rescue: true, then: `${ME} next` };
+    return { result: 'fail', id: step.id, summary, log, next_attempt: `${c.attempt} of ${maxAttempts(plan)} on ${up.model}/${up.effort}`, then: `${ME} next` };
   }
-  if (c.phase === 'review') {
-    c.phase = 'review_fix'; c.issued = false;
+  if (x.rescued || x.rescue_child) {
+    const r = block(plan, s, step, `it failed every attempt and its one rescue. Last failure: ${summary.split('\n')[0]}`);
+    return { result: 'fail', id: step.id, summary, log, blocked: true, ...r };
+  }
+  return toRescue(s, step, 'exhausted', { result: 'fail', id: step.id, summary, log });
+}
+
+function toRescue(s, step, reason, res) {
+  const c = s.current;
+  st(s, step.id).rescued = true;
+  c.phase = 'rescue'; c.rescue_reason = reason; c.issued = false;
+  saveState(s);
+  return { ...res, rescue: true, then: `${ME} next` };
+}
+
+// The builder said it could not finish. A stronger model seldom changes that, so the retry
+// ladder is skipped and the orchestrator decides.
+function gaveUp(plan, s, step, reportText) {
+  const c = s.current;
+  const x = st(s, step.id);
+  const summary = `The builder reported STATUS: BLOCKED. Its report (${P.reports}/${step.id}.md) says:\n${reportText.split('\n').slice(1).join('\n').trim().slice(0, 1200) || '(nothing more)'}`;
+  s.last_failure = { id: step.id, phase: 'build', attempt: c.attempt, summary, log: null, at: now() };
+  if (x.rescued || x.rescue_child) {
+    const r = block(plan, s, step, `its builder reported BLOCKED again after a rescue. ${reportText.split('\n').find((l, i) => i > 0 && l.trim()) || ''}`.trim());
+    return { result: 'fail', id: step.id, summary, blocked: true, ...r };
+  }
+  return toRescue(s, step, 'blocked_report', { result: 'fail', id: step.id, summary });
+}
+
+// The agent was started but nothing changed: almost always the Agent call itself failed
+// (usage limit, overload, API error). That must not eat an attempt, or a usage limit would
+// march every remaining step up the ladder and into "blocked" within minutes.
+function noWork(plan, s, step) {
+  const c = s.current;
+  c.idle = (c.idle || 0) + 1;
+  if (c.idle >= 3) {
+    const msg = 'The agent was started three times and changed nothing each time.';
+    return c.phase === 'build' ? fail(plan, s, step, msg, null) : failReview(plan, s, step, msg, null, true);
+  }
+  c.issued = false;
+  s.hold_at = now();
+  saveState(s);
+  return {
+    result: 'no_work', id: step.id, count: c.idle,
+    hint: `The agent wrote nothing at all, so no attempt was counted. If the Agent call returned an error (usage limit, overloaded, API error), end your turn now without pausing: the scheduled check-in restarts the run. If the agent returned normally and simply did nothing, run "${ME} next" and start it again.`,
+  };
+}
+
+// A review attempt failed: it wrote no report, or it left the checks failing.
+function failReview(plan, s, step, summary, log, noReport = false) {
+  const c = s.current;
+  s.last_failure = { id: step.id, phase: 'review', attempt: c.attempt, review_try: c.review_try, summary, log: log || null, no_report: noReport, at: now() };
+  c.idle = 0;
+  if (c.review_try === 1) {
+    c.review_try = 2; c.issued = false;
     saveState(s);
-    return { result: 'fail', id: step.id, summary, log, note: 'The review left the checks failing. One repair attempt follows.', then: `${ME} next` };
+    return { result: 'fail', id: step.id, summary, log, note: 'The same reviewer gets one more attempt.', then: `${ME} next` };
   }
-  // review_fix failed: drop the review's changes and keep the build that passed.
-  const parked = park(`autobuild: ${step.id} review changes dropped`, `${P.failed}/${step.id}.review.patch`);
-  return { ...finalize(plan, s, step, 'reverted', false), note: 'The review could not be repaired, so its changes were taken out and the step is kept as built.', dropped_review: parked };
+  // The second attempt failed too: take the review's changes out and keep the build that passed.
+  const parked = park(`autobuild: ${step.id} review changes dropped (try ${c.review_try})`, `${P.failed}/${step.id}.review${c.review_try}.patch`);
+  if (c.review_try === 2) {
+    c.review_try = 3; c.issued = false;
+    saveState(s);
+    return { result: 'fail', id: step.id, summary, log, dropped_review: parked, note: 'The review changes were taken out. A fresh review on the strongest model follows.', then: `${ME} next` };
+  }
+  return { ...finalize(plan, s, step, 'dropped', false), dropped_review: parked, note: 'Three review attempts failed, so the step is kept as built and listed as not reviewed in the final report.' };
 }
 
 function block(plan, s, step, reason) {
   const x = st(s, step.id);
+  const parked = park(`autobuild: ${step.id} blocked`, `${P.failed}/${step.id}.patch`);
+  if (parked) x.partial_work = parked;
   x.status = 'blocked'; x.reason = reason; x.blocked_at = now();
   s.current = null;
   const skipped = cascade(plan, s);
@@ -610,14 +745,14 @@ function block(plan, s, step, reason) {
   writeFile(todo, (cur === null ? '# Human to-do\n\n' : cur.endsWith('\n') ? cur : cur + '\n') + line);
   saveState(s);
   commit(`${step.id}: blocked`, plan);
-  return { blocked_step: step.id, also_skipped: skipped, recorded_in: todo, push: push(), then: `${ME} next` };
+  return { blocked_step: step.id, also_skipped: skipped, partial_work: x.partial_work || null, recorded_in: todo, push: push(s), then: `${ME} next` };
 }
 
 function finalize(plan, s, step, review, strict = true) {
   const prev = JSON.stringify(s);
   const c = s.current;
   const x = st(s, step.id);
-  const used = ladder(plan, step, x.attempts || 1);
+  const used = ladder(plan, step, c.attempt, c.top);
   Object.assign(x, { status: 'done', done_at: now(), model: used.model, effort: used.effort, review });
   s.current = null;
   if (s.last_failure && s.last_failure.id === step.id) delete s.last_failure;
@@ -628,95 +763,150 @@ function finalize(plan, s, step, review, strict = true) {
     const back = JSON.parse(prev);
     for (const k of Object.keys(s)) delete s[k];
     Object.assign(s, back);
-    return fail(plan, s, step, `git commit was rejected:\n${r.error}`, null);
+    const msg = `git commit was rejected:\n${r.error}`;
+    return s.current.phase === 'build' ? fail(plan, s, step, msg, null) : failReview(plan, s, step, msg, null);
   }
   const prog = counts(plan, s);
-  const res = { result: 'pass', id: step.id, done: true, review, progress: `${prog.done} of ${prog.total} steps done`, push: push(), then: `${ME} next` };
-  if (step.kind === 'integrate') res.milestone_closed = `Read the section "Plan changes needed" in ${P.reports}/${step.id}.md. If it lists any, amend the upcoming steps and run "${ME} replan" before next.`;
+  const res = { result: 'pass', id: step.id, done: true, review, progress: `${prog.done} of ${prog.total} steps done`, push: push(s), then: `${ME} next` };
+  if (step.kind === 'integrate') res.milestone_closed = `Before the next step, read the section "Plan changes needed" in ${P.reports}/${step.id}.md. If it lists any, amend the upcoming steps and run "${ME} replan".`;
   return res;
 }
 
-function cmdGate(args) {
+// Checks that need no command: was a report written, and what does it say?
+function quickChecks(plan, s, step) {
+  const c = s.current;
+  const g = readJSON(GUARD) || {};
+  const untouched = () => !!g.tree && treeHash() === g.tree;
+  if (c.phase === 'build') {
+    const file = `${P.reports}/${step.id}.md`;
+    const text = read(file);
+    const first = ((text || '').split('\n').find((l) => l.trim()) || '').trim();
+    if (!first) return untouched() ? noWork(plan, s, step) : fail(plan, s, step, `The builder changed files but wrote no report at ${file}.`, null);
+    if (/^STATUS:\s*BLOCKED\b/.test(first)) return gaveUp(plan, s, step, text.trim());
+    if (first !== 'STATUS: DONE') return fail(plan, s, step, `The builder's report starts with "${first.slice(0, 200)}" instead of "STATUS: DONE".`, null);
+    return null;
+  }
+  if (read(`${P.reports}/${step.id}.review.md`) === null) {
+    return untouched() ? noWork(plan, s, step) : failReview(plan, s, step, `The reviewer changed files but wrote no report at ${P.reports}/${step.id}.review.md.`, null, true);
+  }
+  return null;
+}
+
+async function cmdGate(args) {
   const wi = args.indexOf('--wait');
   const wait = wi >= 0 ? Math.max(5, Number(args[wi + 1]) || 100) : 100;
   // Undo any edit an agent made to the protected files before trusting what they say.
   const pidNow = readJSON(PID);
-  const tampered = readJSON(RESULT) || (pidNow && alive(pidNow.pid)) ? [] : checkGuard();
+  const busy = readJSON(RESULT) || (pidNow && alive(pidNow.pid));
+  const tampered = guardArmed() && !busy ? checkGuard() : [];
   const { plan, error } = loadPlan();
   if (!plan) die(error);
   const s = loadState() || die(`No ${P.state}. Run init first.`);
+  const wb = wrongBranch(plan);
+  if (wb) die(wb);
   const c = s.current;
   if (!c) die('No step is in progress. Run next.');
-  if (c.phase === 'rescue') die(`Step ${c.id} is in rescue. Run next for the instructions, then replan or block.`);
+  if (c.phase === 'rescue') die(`Step ${c.id} is in rescue. Run next for the options.`);
   if (!c.issued) die('The next action has not been issued yet. Run next, start the agent it describes, then gate.');
   const step = plan.steps[stepIndex(plan, c.id)];
   const key = gateKey(c);
-  if (tampered.length) { out(fail(plan, s, step, `The agent changed files it must not touch (${tampered.join(', ')}). They were restored. Build the step without editing them.`, null)); return; }
+  const failNow = (summary, log) => (c.phase === 'build' ? fail(plan, s, step, summary, log) : failReview(plan, s, step, summary, log));
+  if (tampered.length) { out(failNow(`The agent changed files it must not touch (${tampered.join(', ')}). They were restored. Do the work without editing them.`, null)); return; }
 
   let res = readJSON(RESULT);
   if (!res || res.key !== key) {
     res = null;
     const p = readJSON(PID);
     let runner = p && p.key === key && alive(p.pid) ? p.pid : null;
+    let exited = false;
     if (!runner) {
-      // Quick checks before the slow ones.
-      if (c.phase === 'build') {
-        const first = ((read(`${P.reports}/${step.id}.md`) || '').split('\n').find((l) => l.trim()) || '').trim();
-        if (first !== 'STATUS: DONE') { out(fail(plan, s, step, first ? `The builder's report starts with "${first.slice(0, 200)}" instead of "STATUS: DONE". Read ${P.reports}/${step.id}.md for what blocked it.` : `The builder wrote no report at ${P.reports}/${step.id}.md.`, null)); return; }
-      } else if (read(`${P.reports}/${step.id}.review.md`) === null) {
-        out(fail(plan, s, step, `The reviewer wrote no report at ${P.reports}/${step.id}.review.md.`, null)); return;
+      const q = quickChecks(plan, s, step);
+      if (q) { out(q); return; }
+      const t = readJSON(TRIES) || {};
+      const n = t.key === key ? (t.n || 0) + 1 : 1;
+      writeJSON(TRIES, { key, n });
+      if (n > 3) {
+        res = { key, ok: false, failed: { summary: `The check runner could not finish three times. Its output:\n${tail(read(`${P.logs}/gate.runner.log`) || '(empty)')}` }, skipped: [], flaky: [], log: `${P.logs}/${key}.log` };
+      } else {
+        fs.rmSync(RESULT, { force: true });
+        const fd = fs.openSync(`${P.logs}/gate.runner.log`, 'a');
+        const child = spawn(process.execPath, [SELF, '_run-gate', key], { detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
+        child.on('exit', () => { exited = true; });
+        child.unref();
+        runner = child.pid;
       }
-      fs.mkdirSync(P.logs, { recursive: true });
-      fs.rmSync(RESULT, { force: true });
-      const fd = fs.openSync(`${P.logs}/gate.runner.log`, 'a');
-      const child = spawn(process.execPath, [SELF, '_run-gate', key], { detached: true, stdio: ['ignore', fd, fd], windowsHide: true });
-      child.unref();
-      runner = child.pid;
     }
     const deadline = Date.now() + wait * 1000;
-    while (Date.now() < deadline) {
-      sleep(1000);
+    while (!res && Date.now() < deadline) {
+      await delay(1000);
       let r = readJSON(RESULT);
       if (r && r.key === key) { res = r; break; }
-      if (!alive(runner)) {
-        sleep(1500);
+      if (exited || !alive(runner)) {
+        await delay(1500);
         r = readJSON(RESULT);
         if (r && r.key === key) { res = r; break; }
-        res = { key, ok: false, failed: { summary: `The check runner stopped without a result. Its output:\n${tail(read(`${P.logs}/gate.runner.log`) || '(empty)')}` }, skipped: [], log: `${P.logs}/${key}.log` };
-        break;
+        out({ result: 'running', id: step.id, hint: `The check runner stopped early (see ${P.logs}/gate.runner.log). Run the same gate command again to restart it.` });
+        return;
       }
     }
     if (!res) { out({ result: 'running', id: step.id, hint: `The checks are still running (log: ${P.logs}/${key}.log). Run the same gate command again; do nothing else in the meantime.` }); return; }
   }
   fs.rmSync(RESULT, { force: true });
+  fs.rmSync(TRIES, { force: true });
 
   const x = st(s, step.id);
+  c.idle = 0;
   if (res.skipped && res.skipped.length) x.skipped_checks = res.skipped;
-  if (!res.ok) { out(fail(plan, s, step, res.failed.summary, res.log)); return; }
+  if (res.flaky && res.flaky.length) x.flaky_checks = [...new Set([...(x.flaky_checks || []), ...res.flaky])];
+  if (!res.ok) { out(failNow(res.failed.summary, res.log)); return; }
 
   if (c.phase === 'build' && step.review) {
     const prev = JSON.stringify(s);
-    c.phase = 'review'; c.issued = false;
+    c.phase = 'review'; c.review_try = 1; c.issued = false;
     saveState(s);
     const r = commit(`${step.id}: ${step.title}`, plan);
-    if (!r.ok) { const back = JSON.parse(prev); for (const k of Object.keys(s)) delete s[k]; Object.assign(s, back); out(fail(plan, s, step, `git commit was rejected:\n${r.error}`, null)); return; }
+    if (!r.ok) {
+      const back = JSON.parse(prev);
+      for (const k of Object.keys(s)) delete s[k];
+      Object.assign(s, back);
+      out(fail(plan, s, step, `git commit was rejected:\n${r.error}`, null));
+      return;
+    }
     s.current.built = r.sha;
     saveState(s);
-    out({ result: 'pass', id: step.id, done: false, seconds: res.seconds, skipped_checks: res.skipped, note: 'Built and committed. The review comes next.', then: `${ME} next` });
+    out({ result: 'pass', id: step.id, done: false, seconds: res.seconds, skipped_checks: res.skipped, flaky_checks: res.flaky, note: 'Built and committed. The review comes next.', push: push(s), then: `${ME} next` });
     return;
   }
-  out({ ...finalize(plan, s, step, c.phase === 'build' ? 'none' : 'applied'), seconds: res.seconds, skipped_checks: res.skipped });
+  out({ ...finalize(plan, s, step, c.phase === 'build' ? 'none' : 'applied'), seconds: res.seconds, skipped_checks: res.skipped, flaky_checks: res.flaky });
 }
 
-// ---------- commands: block, pause, resume, status, settings, watchdog, finish, hook-stop ----------
+// ---------- commands: retry, block, pause, resume, status, settings, watchdog, finish, hook-stop ----------
 
-function cmdBlock(reason) {
+function rescueContext(name) {
   const { plan, error } = loadPlan();
   if (!plan) die(error);
   const s = loadState() || die(`No ${P.state}.`);
-  if (!s.current || s.current.phase !== 'rescue') die('block is only for a step in rescue (see the "rescue" action from next).');
+  if (!s.current || s.current.phase !== 'rescue') die(`${name} is only for a step in rescue (see the "rescue" action from next).`);
+  return { plan, s, step: plan.steps[stepIndex(plan, s.current.id)] };
+}
+
+function cmdRetry() {
+  const { plan, s, step } = rescueContext('retry');
+  const c = s.current;
+  const x = st(s, step.id);
+  if (c.rescue_reason !== 'blocked_report') die('retry is only offered when the builder reported BLOCKED. This step already ran on the strongest model: replan or block.');
+  if (x.retried) die('This step has already had its retry: replan or block.');
+  x.retried = true;
+  c.phase = 'build'; c.top = true; c.attempt += 1; x.attempts = c.attempt; c.issued = false;
+  delete c.rescue_reason;
+  saveState(s);
+  const up = ladder(plan, step, c.attempt, true);
+  out({ result: 'retrying', id: step.id, on: `${up.model}/${up.effort}`, then: `${ME} next` });
+}
+
+function cmdBlock(reason) {
+  const { plan, s, step } = rescueContext('block');
   if (!str(reason)) die('Give a one-line reason: block "<reason>"');
-  const step = plan.steps[stepIndex(plan, s.current.id)];
   out({ result: 'blocked', ...block(plan, s, step, reason.trim()) });
 }
 
@@ -743,7 +933,7 @@ function cmdStatus(json) {
     for (const p of plan.steps.filter((x) => x.milestone === m.id)) {
       const x = s.steps[p.id] || { status: 'todo' };
       const mark = { done: 'x', blocked: '!', skipped: '-', todo: ' ' }[x.status] || ' ';
-      console.log(`  [${mark}] ${p.id.padEnd(6)} ${p.model}/${p.effort}`.padEnd(30) + ` ${p.title}${x.attempts > 1 ? ` (${x.attempts} attempts)` : ''}${x.reason ? ` — ${x.reason}` : ''}`);
+      console.log(`  [${mark}] ${p.id.padEnd(6)} ${p.model}/${p.effort}`.padEnd(30) + ` ${p.title}${x.attempts > 1 ? ` (${x.attempts} attempts)` : ''}${x.review === 'dropped' ? ' (not reviewed)' : ''}${x.reason ? ` — ${x.reason}` : ''}`);
     }
   }
 }
@@ -753,10 +943,9 @@ function cmdSettings() {
   const tool = plan && str(plan.verify) ? plan.verify.trim().split(/\s+/)[0] : null;
   const allow = [`Bash(${ME} *)`, 'Bash(git status *)', 'Bash(git diff *)', 'Bash(git log *)'];
   if (tool && /^[\w.-]+$/.test(tool)) allow.push(`Bash(${tool} *)`);
-  out({
-    permissions: { allow },
-    hooks: { Stop: [{ hooks: [{ type: 'command', command: `node "$CLAUDE_PROJECT_DIR/${P.self}" hook-stop` }] }] },
-  });
+  // The hook does nothing once the run is finished, or if the autobuild folder is ever removed.
+  const hook = `[ -f "$CLAUDE_PROJECT_DIR/${P.self}" ] && node "$CLAUDE_PROJECT_DIR/${P.self}" hook-stop || true`;
+  out({ permissions: { allow }, hooks: { Stop: [{ hooks: [{ type: 'command', command: hook }] }] } });
 }
 
 function cmdWatchdog(id) {
@@ -776,15 +965,17 @@ function cmdFinish() {
     saveState(s);
     commit('autobuild: finished', plan);
   }
-  const list = (status) => plan.steps.filter((p) => (s.steps[p.id] || {}).status === status).map((p) => ({ id: p.id, title: p.title, reason: s.steps[p.id].reason }));
-  const reverted = plan.steps.filter((p) => (s.steps[p.id] || {}).review === 'reverted').map((p) => p.id);
-  const skippedChecks = plan.steps.filter((p) => ((s.steps[p.id] || {}).skipped_checks || []).length).map((p) => ({ id: p.id, checks: s.steps[p.id].skipped_checks }));
+  const of = (f) => plan.steps.filter((p) => f(s.steps[p.id] || {}));
+  const list = (status) => of((x) => x.status === status).map((p) => ({ id: p.id, title: p.title, reason: s.steps[p.id].reason }));
   out({
     result: 'finished', project: plan.project, progress: counts(plan, s),
-    blocked: list('blocked'), skipped: list('skipped'), reviews_dropped: reverted, live_checks_not_run: skippedChecks,
+    blocked: list('blocked'), skipped: list('skipped'),
+    not_reviewed: of((x) => x.review === 'dropped').map((p) => p.id),
+    live_checks_not_run: of((x) => (x.skipped_checks || []).length).map((p) => ({ id: p.id, checks: s.steps[p.id].skipped_checks })),
+    flaky_checks: of((x) => (x.flaky_checks || []).length).map((p) => ({ id: p.id, checks: s.steps[p.id].flaky_checks })),
     kpis: plan.kpis, kpi_readings: readJSON(P.kpi) || `no ${P.kpi} was written`,
-    push: push(),
-    still_to_do: [s.watchdog ? `Delete the scheduled check-in ${s.watchdog}.` : null, 'Remove the autobuild Stop hook from .claude/settings.json if it is still there, then commit and push.', 'Open the pull request if the user asked for one, then give the final report.'].filter(Boolean),
+    push: push(s),
+    still_to_do: [s.watchdog ? `Delete the scheduled check-in ${s.watchdog}.` : null, 'Open the pull request if the user chose one.', 'Give the final report.'].filter(Boolean),
   });
 }
 
@@ -794,6 +985,8 @@ function cmdHookStop() {
   const session = input && input.session_id ? String(input.session_id) : null;
   const s = loadState();
   if (!s || s.status !== 'running') process.exit(0);
+  // After "no_work" the session is meant to stop and wait for the scheduled check-in.
+  if (s.hold_at && Date.now() - Date.parse(s.hold_at) < HOLD_MS) process.exit(0);
   const { plan } = loadPlan();
   if (!plan || !Array.isArray(plan.steps)) process.exit(0);
   const prog = counts(plan, s);
@@ -806,8 +999,7 @@ function cmdHookStop() {
   const n = h.mark === mark ? (h.n || 0) + 1 : 1;
   try { writeJSON(file, { owner, mark, n, at: now() }); } catch { /* read-only tree */ }
   if (n > 3) process.exit(0); // no progress after three reminders: let the session stop
-  const left = prog.todo;
-  out({ decision: 'block', reason: `The autobuild run is not finished: ${prog.done} of ${prog.total} steps done${left ? `, ${left} left` : ''}. Run "${ME} next" and continue as ${P.orch} describes. Do not wait for the user. To stop on purpose, run "${ME} pause \\"<reason>\\"" first.` });
+  out({ decision: 'block', reason: `The autobuild run is not finished: ${prog.done} of ${prog.total} steps done${prog.todo ? `, ${prog.todo} left` : ''}. Run "${ME} next" and continue as ${P.orch} describes. Do not wait for the user. To stop on purpose, run "${ME} pause \\"<reason>\\"" first.` });
 }
 
 // ---------- main ----------
@@ -818,8 +1010,9 @@ switch (cmd) {
   case 'init': cmdInit(); break;
   case 'replan': cmdReplan(); break;
   case 'next': cmdNext(); break;
-  case 'gate': cmdGate(args); break;
+  case 'gate': await cmdGate(args); break;
   case '_run-gate': await cmdRunGate(args[0]); break;
+  case 'retry': cmdRetry(); break;
   case 'block': cmdBlock(args.join(' ')); break;
   case 'pause': cmdPause(args.join(' '), true); break;
   case 'resume': cmdPause('', false); break;
@@ -829,6 +1022,6 @@ switch (cmd) {
   case 'finish': cmdFinish(); break;
   case 'hook-stop': cmdHookStop(); break;
   default:
-    console.log(`Usage: ${ME} validate | init | next | gate [--wait N] | replan | block "<reason>" | pause "<reason>" | resume | status [--json] | settings | watchdog <id>|clear | finish`);
+    console.log(`Usage: ${ME} validate | init | next | gate [--wait N] | replan | retry | block "<reason>" | pause "<reason>" | resume | status [--json] | settings | watchdog <id>|clear | finish`);
     process.exit(cmd ? 1 : 0);
 }

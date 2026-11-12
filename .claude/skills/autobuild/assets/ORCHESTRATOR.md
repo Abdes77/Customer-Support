@@ -17,20 +17,26 @@ models, runs the checks, commits and pushes. Your part is to do what it prints.
 
    | `action` | What you do |
    | --- | --- |
-   | `build` or `review` | Start one subagent with the Agent tool, passing the `agent` fields exactly as printed: `subagent_type`, `model`, `effort`, `description`, `prompt`, in the foreground. Do not change the model or effort, and do not add to the prompt. When it returns, run the command in `then` with the tool timeout it gives. |
+   | `build` or `review` | Start one subagent with the Agent tool, passing the `agent` fields exactly as printed: `subagent_type`, `model`, `effort`, `description`, `prompt`, in the foreground. Do not change the model or the effort, and do not add to the prompt. When it returns, or fails, run the command in `then` with the tool timeout it gives. |
    | `rescue` | See "Rescue" below. |
    | `finish` | See "Finish" below. |
    | `fix_plan` | The plan file is invalid. Fix what the errors name, run `node autobuild/ab.mjs replan`, then `next`. |
+   | `wrong_branch` | Check out the branch the hint names, then `next`. |
    | `init` | Run `node autobuild/ab.mjs init`. |
    | `paused` | Someone paused the run. Stop, and say so in one line. |
    | `finished` | The run is closed. Nothing to do. |
 
-3. Read the gate's `result`:
-   - `pass` or `fail`: go to 1. The script has already decided what follows a failure (retry,
-     stronger model, rescue), so do not diagnose or repair anything yourself.
-   - `running`: the checks need longer. Run the same gate command again.
-   - `error`: do what the message says; it is nearly always "run next first".
-   - `milestone_closed` present: see "Milestone refresh" below, then go to 1.
+3. Read what the gate printed, in this order:
+   - `milestone_closed` is present: do the "Milestone refresh" below first.
+   - `result` is `pass` or `fail`: go to 1. The script has already decided what follows a
+     failure (retry, stronger model, rescue), so do not diagnose or repair anything yourself.
+   - `result` is `running`: the checks need longer. Run the same gate command again.
+   - `result` is `no_work`: the agent changed nothing, and no attempt was counted. This is
+     nearly always the Agent call itself failing. If that call returned an error (usage limit,
+     overloaded, API error), end your turn now, without pausing the run and without a summary:
+     the scheduled check-in starts the loop again later, when the limit may have reset. If the
+     agent returned normally and simply did nothing, go to 1.
+   - `result` is `error`: do what the message says; it is nearly always "run next first".
 4. Repeat until `next` prints `finish`. Do not summarize to the user, wait, or end your turn
    between steps.
 
@@ -44,6 +50,8 @@ gate decides whether the step is done.
 - Build, fix or review product code yourself, or skip the gate.
 - Edit `autobuild/state.json`, or mark a step done by hand.
 - Weaken a check, a test or a "Done when" item to get a pass.
+- Change the model or effort of an action. In particular, never raise an agent to `xhigh` or
+  `max`: those run only where the plan wrote down a reason.
 - Run two build agents at once. They share one working tree and would break each other's
   checks.
 - Touch production: no deploys, migrations, DNS or paid resources.
@@ -52,21 +60,26 @@ gate decides whether the step is done.
 
 ## Rescue
 
-`rescue` means a step failed every attempt, the last on the strongest model. Its partial work
-is saved as a patch under `autobuild/failed/` and the tree is back at the last good commit. This is the one place
-where you think about the build itself. Read `failure.summary` and the log it names, then the
-step's brief, and choose:
+`rescue` is the one place where you think about the build itself. It happens when a step
+failed every attempt, the last on the strongest model, or when its builder stopped and
+reported `STATUS: BLOCKED`. The step's partial work is still in the working tree. Read the
+`failure`, the files listed under `read`, and choose one of the options printed under
+`choose_one`:
 
-- **Replan** when the step was too big, its brief was wrong or unclear, or a check was
-  impossible as written. Replace the step in `autobuild/plan.json` with smaller or corrected
-  steps (new ids such as `S12a`, `S12b`), repoint `depends_on` in later steps, write the new
-  briefs in `autobuild/steps/`, and run `node autobuild/ab.mjs replan`. Change a check only
-  when the check itself was wrong, and record that in `docs/DECISIONS.md`.
-- **Block** when the step needs something this run cannot get (an account, a key, a host that
-  is not reachable) or no smaller split would help:
+- **Retry** (offered only after a BLOCKED report): the report shows the builder gave up on
+  something that can in fact be done in this environment. `node autobuild/ab.mjs retry` gives
+  the step one attempt on the strongest model.
+- **Replan:** the step was too big, its brief was wrong or unclear, or a check was impossible
+  as written. Replace the step in `autobuild/plan.json` with smaller or corrected steps (new
+  ids such as `S12a`, `S12b`), repoint `depends_on` in later steps, write the new briefs in
+  `autobuild/steps/`, and run `node autobuild/ab.mjs replan`. Change a check only when the
+  check itself was wrong, and record that in `docs/DECISIONS.md`.
+- **Block:** the step needs something this run cannot get (an account, a key, a host that is
+  not reachable), or no smaller split would help.
   `node autobuild/ab.mjs block "<one-line reason>"`. The step and everything that depends on
   it are left out and recorded in `docs/HUMAN_TODO.md`, and the run continues with the rest.
 
+Replan and block take the partial work out of the tree and save it under `autobuild/failed/`.
 A step can be rescued once. After that it, or its replacements, are blocked automatically.
 
 ## Milestone refresh
@@ -75,7 +88,8 @@ When a gate result carries `milestone_closed`, a milestone has just been integra
 section "Plan changes needed" in that step's report. If it lists upcoming steps whose briefs
 no longer match the code, correct those briefs (and `plan.json` if steps must be added, split
 or reordered), then run `node autobuild/ab.mjs replan`. If it says "none", go straight on.
-Never change a step that is already done.
+Never change a step that is already done, and keep every rule of the plan when you add steps:
+the plan check runs again.
 
 ## Check-ins
 
@@ -94,28 +108,36 @@ To continue later: `node autobuild/ab.mjs resume`, enable the check-in again, th
 
 When `next` prints `finish`, every step is done, blocked or skipped.
 
-1. If `.claude/settings.json` contains the Stop hook that runs `autobuild/ab.mjs hook-stop`,
-   remove that hook entry with the Edit tool and leave the rest of the file alone.
-2. Run `node autobuild/ab.mjs finish`. It closes the run, commits, pushes and prints the
-   summary: blocked and skipped steps, reviews that were dropped, live checks that could not
-   run, and the KPI readings.
-3. Delete the scheduled check-in named in `still_to_do`, if there is one.
-4. If the user chose a pull request at the start, open one from the build branch into the
+1. Run `node autobuild/ab.mjs finish`. It closes the run, commits, pushes and prints the
+   summary: blocked and skipped steps, steps that ended up not reviewed, live checks that
+   could not run, flaky checks, and the KPI readings.
+2. Delete the scheduled check-in named in `still_to_do`, if there is one.
+3. If the user chose a pull request at the start, open one from the build branch into the
    default branch, titled "Autobuild: <project>", with `docs/BUILD_REPORT.md` as the body and a
    pointer to `docs/HUMAN_TODO.md`. Do not merge it.
-5. Give the final report, and only now end your turn:
+4. Give the final report, and only now end your turn:
    - what was built, in two or three lines;
    - each KPI: target, measured value, met or not, and how it was measured. Say plainly which
      KPIs were missed and which can only be measured in production;
-   - what is unverified: blocked or skipped steps, dropped reviews, live checks not run;
+   - what is unverified: blocked or skipped steps, steps not reviewed, live checks not run,
+     flaky checks;
    - the first item of `docs/HUMAN_TODO.md`, which is the user's next action.
+
+Leave `.claude/settings.json` as it is. The Stop hook in it does nothing once the run is
+finished; mention in the report that it can be deleted.
 
 ## If something outside the script fails
 
-- A subagent call errors or returns nothing: run the gate anyway. It fails cleanly when there
-  is no report, and the retry follows.
-- A push fails: the script retries after the next step. Keep going.
-- `ab.mjs` itself crashes: read the error, fix only what it names (usually a malformed
+- **A subagent call errors or returns nothing:** run the gate anyway. It tells "did nothing"
+  (`no_work`, no attempt counted) from "worked but did not report" (a failed attempt).
+- **A push fails:** the gate output says so and counts failures in a row. One failure is
+  retried after the next step. From the second in a row, run `git fetch origin <branch>` and
+  `git status`. If the remote branch has commits this checkout lacks, another session is
+  pushing to it: run `node autobuild/ab.mjs pause "another session is pushing to this branch"`,
+  disable the check-in and stop. Otherwise keep going; unpushed work is lost if this machine
+  is replaced, so say so in the final report if pushes never recovered.
+- **`ab.mjs` itself crashes:** read the error, fix only what it names (usually a malformed
   `plan.json`), and run `next` again. Do not work around the script by hand.
-- Usage limits or errors stop the session: the scheduled check-in restarts the loop. Nothing
-  is lost, because the state is in `autobuild/state.json` and every finished step is pushed.
+- **Usage limits or errors stop the session:** the scheduled check-in restarts the loop.
+  Nothing is lost, because the state is in `autobuild/state.json` and every finished step is
+  pushed. Without a scheduled check-in, the run waits until the user says "continue".

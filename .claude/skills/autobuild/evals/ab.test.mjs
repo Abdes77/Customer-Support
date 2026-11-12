@@ -28,9 +28,12 @@ const ab = (...a) => {
   return { status: r.status, json, text: r.stdout + r.stderr };
 };
 const write = (f, text) => { fs.mkdirSync(path.join(dir, path.dirname(f)), { recursive: true }); fs.writeFileSync(path.join(dir, f), text); };
-const readJ = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+const readT = (f) => fs.readFileSync(path.join(dir, f), 'utf8');
+const readJ = (f) => JSON.parse(readT(f));
 const has = (f) => fs.existsSync(path.join(dir, f));
+const dirty = () => git('status', '--porcelain').stdout.trim().split('\n').filter(Boolean).map((l) => l.trim().split(/\s+/)[1]).sort();
 
+const OPUS = { model: 'opus', effort: 'high' };
 const step = (id, o = {}) => ({
   id, title: `Step ${id}`, milestone: 'M1', kind: 'build', model: 'sonnet', effort: 'medium',
   why: 'test', depends_on: [], covers: ['R1'], checks: [exists(`${id}.txt`)], review: null, ...o,
@@ -60,9 +63,10 @@ const build = (id, { produce = true, status = 'STATUS: DONE' } = {}) => {
   if (produce) write(`${id}.txt`, 'ok\n');
   write(`autobuild/reports/${id}.md`, `${status}\n\nproof\n`);
 };
-const review = (id) => write(`autobuild/reports/${id}.review.md`, 'No changes.\n');
+const review = (id) => write(`autobuild/reports/${id}.review.md`, 'No changes needed.\n');
 const gate = (...a) => ab('gate', '--wait', '60', ...a).json;
 const next = () => ab('next').json;
+const who = (a) => `${a.agent.model}/${a.agent.effort}`;
 
 let passed = 0;
 const test = (name, fn) => {
@@ -70,7 +74,7 @@ const test = (name, fn) => {
   fs.rmSync(dir, { recursive: true, force: true }); // keep the folder only when a test failed
 };
 
-// ---------------------------------------------------------------------------------------------
+// ----------------------------------- the plan check -----------------------------------------
 
 test('validate rejects a broken plan and names every problem', () => {
   const plan = project([step('A1'), step('A2', { depends_on: ['A9'], model: 'haiku', checks: [], covers: [] }), step('A3', { model: 'gpt', effort: 'huge' })]);
@@ -81,11 +85,11 @@ test('validate rejects a broken plan and names every problem', () => {
   const r = ab('validate');
   assert.equal(r.status, 1);
   const all = r.json.errors.join('\n');
-  for (const needle of ['depends_on "A9"', 'no checks of its own and no review', 'model must be one of', 'effort must be one of', 'A3.md is missing', 'requirement R2', 'kpi K2']) assert.ok(all.includes(needle), `missing error: ${needle}\n${all}`);
+  for (const needle of ['depends_on "A9"', 'no always-run check of its own and no review', 'model must be one of', 'effort must be one of', 'A3.md is missing', 'requirement R2', 'kpi K2']) assert.ok(all.includes(needle), `missing error: ${needle}\n${all}`);
 });
 
 test('validate accepts a good plan and warns about weak spots', () => {
-  project([step('A1', { review: { model: 'haiku', effort: 'low' } }), step('A2', { depends_on: ['A1'] }), step('A3', { depends_on: ['A2'] }), step('A4', { model: 'fable', effort: 'high', review: { model: 'opus', effort: 'high' } })]);
+  project([step('A1', { review: { model: 'haiku', effort: 'low' } }), step('A2', { depends_on: ['A1'] }), step('A3', { depends_on: ['A2'] }), step('A4', { model: 'fable', effort: 'high', review: OPUS })]);
   const r = ab('validate');
   assert.equal(r.status, 0, r.text);
   assert.equal(r.json.result, 'valid');
@@ -94,6 +98,21 @@ test('validate accepts a good plan and warns about weak spots', () => {
   assert.ok(!w.includes('step A4'), 'opus reviewing fable is the standard and must not warn');
   assert.ok(w.includes('no step of kind "harden"'));
   assert.ok(w.includes('has 4 steps but no "integrate" step'));
+});
+
+test('every step needs something that would catch a wrong result', () => {
+  const live = { cmd: 'exit 1', needs_env: ['SOME_KEY'] };
+  project([
+    step('A1', { model: 'opus', effort: 'high', checks: [], skip_verify: true }),
+    step('A2', { model: 'opus', effort: 'high', checks: [live] }),
+    step('A3', { model: 'haiku', effort: 'low' }),
+    step('A4', { model: 'opus', effort: 'high', checks: [live] }),
+  ], { verify_from: 'A3' });
+  const all = ab('validate').json.errors.join('\n');
+  assert.ok(all.includes('step A1: nothing would check this step'), all);
+  assert.ok(all.includes('step A2: nothing would check this step'), `a live-only check before verify exists is not a safeguard\n${all}`);
+  assert.ok(all.includes('step A3: this step creates the verify command'), all);
+  assert.ok(!all.includes('step A4'), `verify covers A4\n${all}`);
 });
 
 test('fable at xhigh needs a written reason, max is refused, and retries never add effort to it', () => {
@@ -114,10 +133,20 @@ test('fable at xhigh needs a written reason, max is refused, and retries never a
   assert.deepEqual(r.json.fable_at_xhigh.map((s) => s.id), ['A1']);
   ab('init');
   next(); build('A1'); gate();
-  const efforts = [];
-  for (let i = 1; i <= 4; i++) { const a = next(); efforts.push(`${a.agent.model}/${a.agent.effort}`); build('A2', { produce: false }); gate(); }
-  assert.deepEqual(efforts, ['fable/high', 'fable/high', 'fable/high', 'fable/high']);
+  const seen = [];
+  for (let i = 1; i <= 4; i++) { seen.push(who(next())); build('A2', { produce: false }); gate(); }
+  assert.deepEqual(seen, ['fable/high', 'fable/high', 'fable/high', 'fable/high']);
 });
+
+test('a step planned on opus at xhigh never climbs to fable at xhigh', () => {
+  project([step('A1', { model: 'opus', effort: 'xhigh' })]);
+  ab('init');
+  const seen = [];
+  for (let i = 1; i <= 4; i++) { seen.push(who(next())); build('A1', { produce: false }); gate(); }
+  assert.deepEqual(seen, ['opus/xhigh', 'opus/xhigh', 'fable/high', 'fable/high']);
+});
+
+// ----------------------------------- the normal path ----------------------------------------
 
 test('init refuses the wrong branch, then creates state and commits', () => {
   const plan = project([step('A1')]);
@@ -127,8 +156,8 @@ test('init refuses the wrong branch, then creates state and commits', () => {
   const r = ab('init');
   assert.equal(r.json.result, 'ready', r.text);
   assert.equal(readJ('autobuild/state.json').status, 'running');
-  assert.ok(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8').includes('autobuild/logs/'));
-  assert.equal(git('status', '--porcelain').stdout.trim(), '');
+  assert.ok(readT('.gitignore').includes('autobuild/logs/'));
+  assert.deepEqual(dirty(), []);
 });
 
 test('a step without review: build, gate, done, committed', () => {
@@ -136,7 +165,7 @@ test('a step without review: build, gate, done, committed', () => {
   ab('init');
   const a = next();
   assert.equal(a.action, 'build');
-  assert.deepEqual([a.agent.model, a.agent.effort, a.attempt], ['haiku', 'low', 1]);
+  assert.deepEqual([who(a), a.attempt], ['haiku/low', 1]);
   assert.ok(a.agent.prompt.includes('autobuild/steps/A1.md'));
   build('A1');
   const g = gate();
@@ -144,7 +173,7 @@ test('a step without review: build, gate, done, committed', () => {
   assert.equal(g.done, true);
   assert.equal(readJ('autobuild/state.json').steps.A1.status, 'done');
   assert.ok(git('log', '--oneline').stdout.includes('A1: Step A1'));
-  assert.equal(git('status', '--porcelain').stdout.trim(), '');
+  assert.deepEqual(dirty(), []);
   assert.equal(next().action, 'finish');
 });
 
@@ -162,45 +191,130 @@ test('gate before next is refused, and next is idempotent', () => {
   assert.equal(ab('gate').status, 1, 'a second gate must not gate the next step unissued');
 });
 
+test('next and gate refuse to work on the wrong branch', () => {
+  project([step('A1')]);
+  ab('init'); next();
+  git('checkout', '-q', '-b', 'elsewhere');
+  assert.equal(next().action, 'wrong_branch');
+  assert.equal(ab('gate').status, 1);
+  git('checkout', '-q', 'main');
+  assert.equal(next().action, 'build');
+});
+
 test('a step with review goes build → review → done', () => {
-  project([step('A1', { review: { model: 'opus', effort: 'high' } })]);
+  project([step('A1', { review: OPUS })]);
   ab('init');
   next(); build('A1');
   const g1 = gate();
   assert.deepEqual([g1.result, g1.done], ['pass', false]);
   assert.equal(ab('gate').status, 1, 'the review gate needs the review to be issued first');
   const r = next();
-  assert.equal(r.action, 'review');
-  assert.deepEqual([r.agent.model, r.agent.effort], ['opus', 'high']);
+  assert.deepEqual([r.action, r.review_try, who(r)], ['review', 1, 'opus/high']);
   assert.ok(/git diff [0-9a-f]{40} [0-9a-f]{40}/.test(r.agent.prompt), r.agent.prompt);
-  const noReport = gate();
-  assert.equal(noReport.result, 'fail');
-  assert.ok(noReport.summary.includes('no report'));
-  const fix = next();
-  assert.equal(fix.phase, 'review_fix');
   review('A1'); write('extra.txt', 'review fix\n');
   const g2 = gate();
   assert.deepEqual([g2.result, g2.done, g2.review], ['pass', true, 'applied']);
   assert.ok(git('log', '--oneline').stdout.includes('A1: review'));
+  assert.ok(git('ls-files').stdout.includes('extra.txt'));
 });
 
-test('a review that breaks the checks gets one repair, then is dropped', () => {
-  project([step('A1', { review: { model: 'opus', effort: 'high' } }), step('A2', { depends_on: ['A1'] })]);
+// ----------------------------------- agents that do nothing ---------------------------------
+
+test('an agent that changed nothing costs no attempt, and the stop hook lets the session rest', () => {
+  project([step('A1', { review: OPUS })]);
+  ab('init');
+  const hook = () => sh('node', ['autobuild/ab.mjs', 'hook-stop'], { input: JSON.stringify({ session_id: 's1' }) }).stdout;
+  next();
+  assert.ok(hook().includes('"decision": "block"'));
+  const g = gate();
+  assert.deepEqual([g.result, g.count], ['no_work', 1], JSON.stringify(g));
+  assert.equal(hook(), '', 'after no_work the session may stop and wait for the check-in');
+  const again = next();
+  assert.equal(again.attempt, 1, 'no attempt was used');
+  assert.ok(hook().includes('"decision": "block"'), 'next ends the hold');
+  build('A1'); assert.equal(gate().result, 'pass');
+  next();
+  assert.equal(gate().result, 'no_work', 'the same holds for a reviewer');
+  assert.equal(next().review_try, 1);
+  review('A1');
+  assert.equal(gate().done, true);
+});
+
+test('three starts with no work at all do count as one failed attempt', () => {
+  project([step('A1')]);
+  ab('init');
+  next(); assert.equal(gate().result, 'no_work');
+  next(); assert.equal(gate().result, 'no_work');
+  next();
+  const g = gate();
+  assert.equal(g.result, 'fail');
+  assert.ok(g.summary.includes('three times'));
+  assert.equal(next().attempt, 2);
+});
+
+test('work without a report is a failed attempt, not "no work"', () => {
+  project([step('A1')]);
+  ab('init'); next();
+  write('A1.txt', 'ok\n');
+  const g = gate();
+  assert.equal(g.result, 'fail');
+  assert.ok(g.summary.includes('wrote no report'));
+});
+
+// ----------------------------------- reviews that go wrong ----------------------------------
+
+test('a review with no report is repeated with an honest prompt', () => {
+  project([step('A1', { review: OPUS })]);
+  ab('init');
+  next(); build('A1'); gate();
+  next(); write('half.txt', 'changed something\n');
+  const g = gate();
+  assert.equal(g.result, 'fail');
+  assert.ok(g.summary.includes('wrote no report'));
+  const r = next();
+  assert.equal(r.review_try, 2);
+  assert.ok(r.agent.prompt.includes('ended without writing its report'), r.agent.prompt);
+  assert.ok(!r.agent.prompt.includes('checks now fail'));
+  review('A1');
+  assert.equal(gate().review, 'applied');
+});
+
+test('a review that breaks the checks: repair, then a fresh review on the strongest model', () => {
+  project([step('A1', { review: OPUS }), step('A2', { depends_on: ['A1'] })]);
   ab('init');
   next(); build('A1'); gate();
   next(); review('A1'); write('broken.txt', 'oops\n');
-  const g1 = gate();
-  assert.equal(g1.result, 'fail');
-  assert.equal(next().phase, 'review_fix');
+  assert.equal(gate().result, 'fail');
+  const r2 = next();
+  assert.equal(r2.review_try, 2);
+  assert.ok(r2.agent.prompt.includes('checks now fail'));
   review('A1');
   const g2 = gate();
-  assert.deepEqual([g2.result, g2.done, g2.review], ['pass', true, 'reverted'], JSON.stringify(g2));
-  assert.ok(!has('broken.txt'), 'review changes must be out of the tree');
-  assert.ok(git('stash', 'list').stdout.includes('review changes dropped'));
-  assert.ok(fs.readFileSync(path.join(dir, 'autobuild/failed/A1.review.patch'), 'utf8').includes('broken.txt'));
-  assert.equal(readJ('autobuild/state.json').steps.A1.status, 'done');
+  assert.equal(g2.result, 'fail');
+  assert.ok(!has('broken.txt'), 'the review changes are out of the tree');
+  assert.ok(readT('autobuild/failed/A1.review2.patch').includes('broken.txt'));
+  const r3 = next();
+  assert.deepEqual([r3.review_try, who(r3)], [3, 'fable/high']);
+  assert.ok(r3.agent.prompt.includes('from scratch'));
+  review('A1');
+  const g3 = gate();
+  assert.deepEqual([g3.result, g3.done, g3.review], ['pass', true, 'applied'], JSON.stringify(g3));
   assert.equal(next().id, 'A2');
 });
+
+test('three failed reviews keep the build and say so in the final summary', () => {
+  project([step('A1', { review: OPUS })]);
+  ab('init');
+  next(); build('A1'); gate();
+  let g;
+  for (let i = 1; i <= 3; i++) { assert.equal(next().review_try, i); review('A1'); write('broken.txt', 'oops\n'); g = gate(); }
+  assert.deepEqual([g.result, g.done, g.review], ['pass', true, 'dropped'], JSON.stringify(g));
+  assert.ok(!has('broken.txt'));
+  assert.equal(next().action, 'finish');
+  assert.deepEqual(ab('finish').json.not_reviewed, ['A1']);
+});
+
+// ----------------------------------- failures, rescue, blocking -----------------------------
 
 test('failures climb the ladder, then rescue, then block skips dependents', () => {
   project([
@@ -212,28 +326,33 @@ test('failures climb the ladder, then rescue, then block skips dependents', () =
   for (let i = 1; i <= 4; i++) {
     const a = next();
     assert.equal(a.attempt, i);
-    seen.push(`${a.agent.model}/${a.agent.effort}`);
-    if (i > 1) assert.ok(a.agent.prompt.includes('What failed last time'), a.agent.prompt);
+    seen.push(who(a));
+    if (i > 1) assert.ok(a.agent.prompt.includes('What went wrong last time'), a.agent.prompt);
     build('A1', { produce: false });
+    write('partial.txt', `attempt ${i}\n`);
     const g = gate();
     assert.equal(g.result, 'fail');
     assert.ok(g.summary.includes('exited with code 1'));
     if (i === 4) assert.equal(g.rescue, true);
   }
   assert.deepEqual(seen, ['haiku/low', 'haiku/medium', 'sonnet/high', 'fable/high'], 'retries never raise effort above high');
-  assert.deepEqual(git('status', '--porcelain').stdout.trim().split('\n').map((l) => l.trim().split(/\s+/)[1]).sort(), ['autobuild/failed/', 'autobuild/state.json'], 'tree holds only the state and the saved patch');
-  assert.ok(git('stash', 'list').stdout.includes('A1 failed after 4 attempts'));
-  assert.ok(fs.readFileSync(path.join(dir, 'autobuild/failed/A1.patch'), 'utf8').includes('autobuild/reports/A1.md'), 'the partial work is kept as a patch');
   const r = next();
   assert.equal(r.action, 'rescue');
+  assert.equal(r.choose_one.length, 2, 'no retry after the strongest model already failed');
+  assert.ok(has('partial.txt'), 'partial work stays until the orchestrator decides');
   assert.equal(ab('gate').status, 1);
+  assert.equal(ab('retry').status, 1);
   assert.equal(ab('block').status, 1, 'block needs a reason');
   const b = ab('block', 'cannot be built').json;
   assert.equal(b.result, 'blocked');
   assert.deepEqual(b.also_skipped, ['A2', 'A3']);
-  const todo = fs.readFileSync(path.join(dir, 'docs/HUMAN_TODO.md'), 'utf8');
+  assert.ok(!has('partial.txt'));
+  assert.ok(readT('autobuild/failed/A1.patch').includes('partial.txt'), 'the partial work is kept as a patch');
+  assert.ok(git('ls-files').stdout.includes('autobuild/failed/A1.patch'), 'and committed');
+  assert.ok(has('autobuild/reports/A1.md'), 'the report stays readable');
+  const todo = readT('docs/HUMAN_TODO.md');
   assert.ok(todo.includes('step A1') && todo.includes('autobuild/failed/A1.patch'), todo);
-  assert.ok(git('ls-files').stdout.includes('autobuild/failed/A1.patch'), 'the patch is committed');
+  assert.deepEqual(dirty(), []);
   const after = next();
   assert.deepEqual([after.action, after.id], ['build', 'A4']);
   build('A4'); assert.equal(gate().result, 'pass');
@@ -248,7 +367,7 @@ test('failures climb the ladder, then rescue, then block skips dependents', () =
 test('rescue by replanning: replacements run, and are blocked without a second rescue', () => {
   const plan = project([step('A1'), step('A2', { depends_on: ['A1'] })], { max_attempts: 1 });
   ab('init');
-  next(); build('A1', { produce: false });
+  next(); build('A1', { produce: false }); write('partial.txt', 'x\n');
   assert.equal(gate().rescue, true);
   assert.equal(next().action, 'rescue');
   plan.steps = [step('A1a'), step('A1b', { depends_on: ['A1a'] }), step('A2', { depends_on: ['A1b'] })];
@@ -257,6 +376,9 @@ test('rescue by replanning: replacements run, and are blocked without a second r
   write('autobuild/steps/A1a.md', brief('A1a')); write('autobuild/steps/A1b.md', brief('A1b'));
   const rp = ab('replan').json;
   assert.deepEqual(rp.new_steps, ['A1a', 'A1b']);
+  assert.ok(!has('partial.txt') && has('autobuild/failed/A1.patch'), 'replan clears the failed work but keeps the new plan');
+  assert.equal(readJ('autobuild/plan.json').steps.length, 3);
+  assert.deepEqual(dirty(), []);
   assert.equal(next().id, 'A1a'); build('A1a'); assert.equal(gate().result, 'pass');
   assert.equal(next().id, 'A1b'); build('A1b', { produce: false });
   const g = gate();
@@ -265,23 +387,60 @@ test('rescue by replanning: replacements run, and are blocked without a second r
   assert.equal(next().action, 'finish');
 });
 
+test('a builder that reports BLOCKED goes straight to rescue; retry gives one top-model attempt', () => {
+  project([step('A1', { model: 'sonnet', effort: 'medium' }), step('A2', { depends_on: ['A1'] })]);
+  ab('init'); next();
+  build('A1', { produce: false, status: 'STATUS: BLOCKED' });
+  const g = gate();
+  assert.deepEqual([g.result, g.rescue], ['fail', true]);
+  assert.ok(g.summary.includes('STATUS: BLOCKED'));
+  const r = next();
+  assert.equal(r.action, 'rescue');
+  assert.equal(r.choose_one.length, 3);
+  assert.ok(r.choose_one[0].startsWith('Retry'));
+  assert.equal(ab('retry').json.on, 'fable/high');
+  const a = next();
+  assert.deepEqual([a.action, who(a), a.attempt], ['build', 'fable/high', 2]);
+  assert.ok(a.agent.prompt.includes('STATUS: BLOCKED'));
+  build('A1', { produce: false, status: 'STATUS: BLOCKED' });
+  const g2 = gate();
+  assert.equal(g2.blocked, true, JSON.stringify(g2));
+  assert.deepEqual(g2.also_skipped, ['A2']);
+  assert.equal(next().action, 'finish');
+});
+
+// ----------------------------------- safety nets --------------------------------------------
+
 test('a builder that edits the plan or the state is caught and undone', () => {
   project([step('A1'), step('A2', { depends_on: ['A1'] })]);
   ab('init');
   next();
-  const before = fs.readFileSync(path.join(dir, 'autobuild/plan.json'), 'utf8');
+  const before = readT('autobuild/plan.json');
   write('autobuild/plan.json', before.replace('"sonnet"', '"haiku"'));
   write('autobuild/steps/A2.md', 'tampered\n');
-  const st = readJ('autobuild/state.json'); st.steps.A2 = { status: 'done' };
-  write('autobuild/state.json', JSON.stringify(st));
+  const forged = readJ('autobuild/state.json'); forged.steps.A2 = { status: 'done' };
+  write('autobuild/state.json', JSON.stringify(forged));
   build('A1');
   const g = gate();
   assert.equal(g.result, 'fail');
   assert.ok(g.summary.includes('must not touch'));
-  assert.equal(fs.readFileSync(path.join(dir, 'autobuild/plan.json'), 'utf8'), before);
-  assert.ok(fs.readFileSync(path.join(dir, 'autobuild/steps/A2.md'), 'utf8').includes('Done when'));
+  assert.equal(readT('autobuild/plan.json'), before);
+  assert.ok(readT('autobuild/steps/A2.md').includes('Done when'));
   assert.notEqual((readJ('autobuild/state.json').steps.A2 || {}).status, 'done', 'the forged status must be undone');
   assert.equal(next().attempt, 2);
+});
+
+test('the orchestrator may edit the plan between steps without tripping the guard', () => {
+  const plan = project([step('A1', { kind: 'integrate' }), step('A2', { depends_on: ['A1'] })]);
+  ab('init'); next(); build('A1');
+  assert.ok(gate().milestone_closed.includes('Plan changes needed'));
+  plan.steps[1].title = 'Step A2, corrected';
+  savePlan(plan);
+  write('autobuild/steps/A2.md', brief('A2') + '- and one more thing\n');
+  assert.equal(ab('gate').status, 1, 'a stray gate changes nothing');
+  assert.equal(readJ('autobuild/plan.json').steps[1].title, 'Step A2, corrected');
+  assert.equal(ab('replan').json.result, 'replanned');
+  assert.equal(next().title, 'Step A2, corrected');
 });
 
 test('legitimate state writes during a step do not trip the guard', () => {
@@ -295,15 +454,6 @@ test('legitimate state writes during a step do not trip the guard', () => {
   assert.ok(ab('finish').json.still_to_do[0].includes('trig_123'));
 });
 
-test('a blocked report fails the gate without running checks', () => {
-  project([step('A1')]);
-  ab('init'); next();
-  build('A1', { status: 'STATUS: BLOCKED' });
-  const g = gate();
-  assert.equal(g.result, 'fail');
-  assert.ok(g.summary.includes('STATUS: BLOCKED'));
-});
-
 test('slow checks: gate returns "running" and a second call collects the result', () => {
   project([step('A1', { checks: [`node -e "setTimeout(()=>{},7000)"`, exists('A1.txt')] })]);
   ab('init'); next(); build('A1');
@@ -314,12 +464,22 @@ test('slow checks: gate returns "running" and a second call collects the result'
   assert.ok(g2.seconds >= 6);
 });
 
-test('a check that exceeds its timeout fails', () => {
+test('a check that exceeds its timeout fails, without a rerun', () => {
   project([step('A1', { checks: [{ cmd: `node -e "setTimeout(()=>{},20000)"`, timeout_s: 2 }] })]);
   ab('init'); next(); build('A1');
   const g = gate();
   assert.equal(g.result, 'fail');
   assert.ok(g.summary.includes('timed out after 2s'), g.summary);
+});
+
+test('a flaky check is rerun once and reported, not charged as a failed attempt', () => {
+  const flaky = `node -e "const fs=require('fs');if(fs.existsSync('.seen')){process.exit(0)}fs.writeFileSync('.seen','');process.exit(1)"`;
+  project([step('A1', { checks: [flaky] })]);
+  ab('init'); next(); build('A1');
+  const g = gate();
+  assert.equal(g.result, 'pass', JSON.stringify(g));
+  assert.equal(g.flaky_checks.length, 1);
+  assert.equal(ab('finish').json.flaky_checks[0].id, 'A1');
 });
 
 test('checks that need a missing variable are skipped and reported', () => {
@@ -332,7 +492,7 @@ test('checks that need a missing variable are skipped and reported', () => {
 });
 
 test('verify is not run before the step that creates it', () => {
-  project([step('A1'), step('A2', { depends_on: ['A1'] })], { verify: 'exit 1', verify_from: 'A2' });
+  project([step('A1'), step('A2', { depends_on: ['A1'], review: OPUS })], { verify: 'exit 1', verify_from: 'A2' });
   ab('init'); next(); build('A1');
   assert.equal(gate().result, 'pass');
   next(); build('A2');
@@ -351,6 +511,8 @@ test('a rejected commit counts as a failed check', () => {
   assert.equal(readJ('autobuild/state.json').current.attempt, 2);
 });
 
+// ----------------------------------- the rest -----------------------------------------------
+
 test('pause stops the run, resume continues it', () => {
   project([step('A1')]);
   ab('init');
@@ -358,12 +520,6 @@ test('pause stops the run, resume continues it', () => {
   assert.equal(next().action, 'paused');
   ab('resume');
   assert.equal(next().action, 'build');
-});
-
-test('integrate steps point the orchestrator at plan changes', () => {
-  project([step('A1', { kind: 'integrate' })]);
-  ab('init'); next(); build('A1');
-  assert.ok(gate().milestone_closed.includes('Plan changes needed'));
 });
 
 test('stop hook holds the owning session while steps remain, with a release valve', () => {
@@ -386,11 +542,14 @@ test('stop hook holds the owning session while steps remain, with a release valv
   assert.equal(hook('s1').stdout, '', 'finished: silent');
 });
 
-test('settings prints allow rules and the stop hook; status prints a table', () => {
+test('settings prints allow rules and a stop hook that is harmless without the script', () => {
   project([step('A1')], { verify: 'pnpm verify' });
   const s = ab('settings').json;
   assert.ok(s.permissions.allow.includes('Bash(pnpm *)'));
-  assert.ok(s.hooks.Stop[0].hooks[0].command.includes('hook-stop'));
+  const command = s.hooks.Stop[0].hooks[0].command;
+  assert.ok(command.includes('hook-stop'));
+  const gone = spawnSync('sh', ['-c', command], { cwd: dir, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: '/nonexistent' } });
+  assert.deepEqual([gone.status, gone.stdout], [0, '']);
   ab('init');
   assert.ok(ab('status').text.includes('[ ] A1'));
   assert.equal(ab('status', '--json').json.progress.total, 1);

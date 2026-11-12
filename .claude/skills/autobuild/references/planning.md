@@ -36,10 +36,13 @@ Write `docs/SPEC.md` from the user's answers.
 
 ## 3. Architecture
 
-`docs/ARCHITECTURE.md` is the one document every later step leans on, so it gets the strongest
-model at its highest sensible effort: write it with a single subagent on the strongest
-available tier at `xhigh`. This is one of the few places that setting earns its cost. Give that
-agent `docs/SPEC.md` and ask for:
+`docs/ARCHITECTURE.md` is the one document every later step leans on, so one subagent on the
+strongest available tier writes it. Run that agent at `high`. Use `xhigh` only when the system
+is large or unusual enough that a wrong structure would be copied into dozens of steps: more
+than about six components, several tenants or roles sharing data, money or regulated data, or
+a problem with no well-known shape. A landing page, a single automation or a standard CRUD app
+does not qualify. When you do use `xhigh`, write the reason in `autobuild/PLAN_REVIEW.md`. Give
+the agent `docs/SPEC.md` and ask for:
 
 - the components and what each is responsible for;
 - the main data flows, end to end;
@@ -148,7 +151,8 @@ that setting are what exhaust a usage allowance. Treat it as a budget of a few s
   small: it produces a document or a contract, not an implementation. If a step seems to need
   Fable at xhigh and is also long, it is two steps: split the design from the build.
 - Each such step carries `xhigh_reason` in `plan.json`: one sentence on why neither Fable at
-  `high` nor a design-plus-cheaper-build split would give the same result. The plan check
+  `high` nor a design-plus-cheaper-build split would give the same result. Many plans have no
+  such step at all, and the example plan has none. The plan check
   refuses the plan without it and warns when there are more than about three, or 8% of the
   steps, whichever is larger.
 - **Fable at `max` is not allowed**, and no review runs on Fable above `high`.
@@ -175,9 +179,16 @@ pass, fixes what it finds, and must leave the checks passing. Set `review` per s
   the next command exercises) or when it is a document that the next `integrate` step
   reconciles anyway.
 
-A step on `haiku` or `sonnet` needs a review or at least one check of its own; the plan check
-refuses it otherwise. A `design` step has no commands that prove it, so it always gets a
-review.
+The plan check refuses a step that nothing would catch: every step needs a review or a command
+that always runs for it, and a step on `haiku` or `sonnet` needs a review or an always-run
+check of its own. A check that only runs with a credential (`needs_env`) does not count. A
+`design` step has no commands that prove it, so it always gets a review. So does the step that
+creates the verify command, because every later step is judged by it: its reviewer confirms
+that verify really runs the typecheck, the linter and the tests and fails when they fail.
+
+If a review cannot be completed (the reviewer breaks the checks and cannot repair them), the
+run tries once more with a fresh reviewer on the strongest model and otherwise keeps the build
+as it passed. Such steps are listed as not reviewed in the final report.
 
 ## 8. Checks
 
@@ -185,8 +196,9 @@ After every step the orchestrator runs the global verify command and then the st
 A step is done only when all exit 0.
 
 - **The verify command** (`plan.verify`, for example `pnpm verify`) is typecheck, lint and the
-  fast tests. Keep it under about five minutes; it runs after every step. Name in
-  `plan.verify_from` the step that creates it (default: the first step).
+  fast tests. Keep it under about five minutes; it runs after every step. In a new repository,
+  name in `plan.verify_from` the step that creates it: verify runs from that step on. Leave
+  `verify_from` out when the command already exists; it then runs for every step.
 - **Slow suites** (end-to-end, load, model evaluations) are `checks` on the steps that need
   them, not part of verify.
 - **A check is a command that fails when the step is wrong.** `pnpm test --filter scoring`
@@ -197,7 +209,13 @@ A step is done only when all exit 0.
   are skipped and reported when it is not. Pair each with a check against mocks or recorded
   fixtures that always runs.
 - Give a check that can hang its own `timeout_s` (default 1800).
-- A step that touches no code may set `"skip_verify": true`.
+- A check that fails is run once more before it counts, so a flaky test costs seconds instead
+  of a whole new attempt. Flaky checks are listed in the final report.
+- A step that touches no code may set `"skip_verify": true`; it then needs a review or a check
+  of its own.
+- A builder can only wait about ten minutes on one command. Keep the commands a builder is
+  expected to run under "Done when" shorter than that, and leave the long suites to the gate,
+  which has no such limit.
 
 ## 9. Briefs
 
@@ -226,7 +244,7 @@ meant. If you cannot write a sharp "Done when", the step is not understood well 
 | --- | --- |
 | `project` | Short name |
 | `branch` | The branch the build is committed to and pushed on |
-| `verify`, `verify_from`, `verify_timeout_s` | The global check, the step that creates it, its time limit |
+| `verify`, `verify_from`, `verify_timeout_s` | The global check, the step that creates it (omit if it already exists), its time limit |
 | `models` | The tiers that answered the preflight ping; steps may use only these |
 | `max_attempts` | Attempts per step before rescue (default 4) |
 | `commit_trailer` | Lines to append to every commit message, if the session asks for attribution lines |
@@ -277,7 +295,9 @@ Before the plan goes to review, confirm:
   with instrumentation.
 - The first build milestone ends with a walking skeleton that runs end to end.
 - No step asks for an account, a production action or a human decision. Those go to
-  `docs/HUMAN_TODO.md`, and the step is built against mocks.
+  `docs/HUMAN_TODO.md`, and the step is built against mocks. A builder that reports BLOCKED
+  sends the step to a rescue decision, so a brief must never make "blocked" the expected
+  outcome.
 - Every step could be handed, alone with its brief, to an agent that knows nothing else.
 - For every Fable step you can say why Opus would not give the same result, and for every
   Fable step at xhigh why high would not.
