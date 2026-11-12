@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "project": "lead-reply-automation",
+  "branch": "claude/autobuild",
+  "verify": "pnpm verify",
+  "verify_from": "S02",
+  "models": ["haiku", "sonnet", "opus", "fable"],
+  "requirements": {
+    "R1": "An inbound web-form lead gets a personalised email reply within two minutes",
+    "R2": "Each lead gets a score from 0 to 100 computed from weights in a config file",
+    "R3": "Leads above the threshold are pushed to HubSpot; the rest go to a review sheet",
+    "R4": "The reply never states a price that is not in the price list",
+    "R5": "A failed send or push is retried and then alerted, never dropped"
+  },
+  "kpis": [
+    { "id": "K1", "name": "Reply quality on simulated leads", "target": ">= 85% of scenarios at or above the rubric pass mark", "how": "pnpm eval writes autobuild/kpi.json", "step": "S10" },
+    { "id": "K2", "name": "Price-rule violations", "target": "0", "how": "pnpm eval counts replies with a price outside the list", "step": "S10" },
+    { "id": "K3", "name": "Cost per lead", "target": "<= $0.03", "how": "pnpm eval prices recorded token usage", "step": "S10" },
+    { "id": "K4", "name": "Lead-to-meeting rate", "target": "user's current rate + 20%", "how": "events lead.replied and meeting.booked in the dashboard", "live_only": true }
+  ],
+  "milestones": [
+    { "id": "M0", "title": "Foundation" },
+    { "id": "M1", "title": "Walking skeleton" },
+    { "id": "M2", "title": "Reply quality and routing" },
+    { "id": "M3", "title": "Hardening and acceptance" }
+  ],
+  "steps": [
+    {
+      "id": "S01", "title": "Contracts: lead, score, reply and connector interfaces", "milestone": "M0", "kind": "design",
+      "model": "fable", "effort": "xhigh",
+      "xhigh_reason": "Every later step implements or calls these types; a wrong contract is rebuilt everywhere, and the step is a short document plus type files, not an implementation.",
+      "why": "Design decisions that no command can verify; reviewed because nothing else checks them.",
+      "depends_on": [], "covers": ["R1", "R2", "R3"], "checks": [],
+      "review": { "model": "opus", "effort": "high" }, "skip_verify": true
+    },
+    {
+      "id": "S02", "title": "Scaffold repository, verify command, CI and CLAUDE.md", "milestone": "M0", "kind": "build",
+      "model": "haiku", "effort": "medium",
+      "why": "Fully determined by the architecture's layout section; install and verify prove it.",
+      "depends_on": ["S01"], "covers": [], "checks": ["pnpm install --frozen-lockfile"],
+      "review": null
+    },
+    {
+      "id": "S03", "title": "Evaluation harness: simulated leads, rubric, kpi.json", "milestone": "M0", "kind": "build",
+      "model": "opus", "effort": "high",
+      "why": "The rubric decides what 'good' means for K1 to K3, so it needs judgment, but the contract is fixed by S01.",
+      "depends_on": ["S02"], "covers": ["R4"], "checks": ["pnpm eval --mock"],
+      "review": { "model": "opus", "effort": "high" }
+    },
+    {
+      "id": "S04", "title": "Scoring tests from the spec (tests only)", "milestone": "M1", "kind": "test",
+      "model": "opus", "effort": "high",
+      "why": "Writing the expected scores is the judgment; the implementation in S05 then only has to satisfy them.",
+      "depends_on": ["S02"], "covers": ["R2"], "checks": ["pnpm test:list --filter scoring"],
+      "review": null
+    },
+    {
+      "id": "S05", "title": "Scoring implementation against the S04 tests", "milestone": "M1", "kind": "build",
+      "model": "sonnet", "effort": "medium",
+      "why": "Precise contract and tests already exist; a stronger reviewer catches test tampering.",
+      "depends_on": ["S04"], "covers": ["R2"], "checks": ["pnpm test --filter scoring"],
+      "review": { "model": "opus", "effort": "high" }
+    },
+    {
+      "id": "S06", "title": "Reply engine: prompt, price-list guard, mock and live model client", "milestone": "M1", "kind": "build",
+      "model": "fable", "effort": "high",
+      "why": "The prompt and the guard decide K1 and K2 and are judged by an evaluation, not by unit tests; high is enough because S01 fixed the interfaces.",
+      "depends_on": ["S03", "S05"], "covers": ["R1", "R4"],
+      "checks": ["pnpm test --filter reply", { "cmd": "pnpm eval --live --limit 5", "needs_env": ["ANTHROPIC_API_KEY"], "timeout_s": 900 }],
+      "review": { "model": "opus", "effort": "high" }
+    },
+    {
+      "id": "S07", "title": "HubSpot connector (the exemplar) and CONNECTORS.md pattern", "milestone": "M2", "kind": "build",
+      "model": "opus", "effort": "high",
+      "why": "First vendor integration sets the pattern for retries and idempotency.",
+      "depends_on": ["S05"], "covers": ["R3", "R5"], "checks": ["pnpm test --filter hubspot"],
+      "review": { "model": "opus", "effort": "high" }
+    },
+    {
+      "id": "S08", "title": "Review-sheet connector, following the exemplar", "milestone": "M2", "kind": "build",
+      "model": "sonnet", "effort": "medium",
+      "why": "Same shape as S07 with the pattern written down; contract tests prove it.",
+      "depends_on": ["S07"], "covers": ["R3", "R5"], "checks": ["pnpm test --filter sheet"],
+      "review": { "model": "opus", "effort": "high" }
+    },
+    {
+      "id": "S09", "title": "Integrate: form webhook to reply to routing, end to end", "milestone": "M2", "kind": "integrate",
+      "model": "opus", "effort": "high",
+      "why": "Seams between four components; needs judgment across the whole flow.",
+      "depends_on": ["S06", "S08"], "covers": ["R1", "R3", "R5"], "checks": ["pnpm test:e2e"],
+      "review": { "model": "opus", "effort": "high" }
+    },
+    {
+      "id": "S10", "title": "Optimize reply quality and cost against K1 to K3", "milestone": "M2", "kind": "optimize",
+      "model": "fable", "effort": "high",
+      "why": "Diagnosing why replies fail a rubric is judgment work; the loop is long, so it stays at high.",
+      "depends_on": ["S09"], "covers": ["R4"],
+      "checks": ["pnpm eval --mock", { "cmd": "pnpm eval --live", "needs_env": ["ANTHROPIC_API_KEY"], "timeout_s": 2400 }],
+      "review": null
+    },
+    {
+      "id": "S11", "title": "Threat model and fixes: injection through lead text, webhook spoofing, secrets", "milestone": "M3", "kind": "harden",
+      "model": "fable", "effort": "high",
+      "why": "Finding what is missing is judgment; the system is small, so high suffices.",
+      "depends_on": ["S09"], "covers": ["R5"], "checks": ["pnpm test --filter security"],
+      "review": { "model": "opus", "effort": "high" }
+    },
+    {
+      "id": "S12", "title": "Acceptance: final KPI readings, launch checklist, build report", "milestone": "M3", "kind": "accept",
+      "model": "opus", "effort": "high",
+      "why": "Runs and reports; no design left.",
+      "depends_on": ["S09"], "covers": [], "checks": ["pnpm test:e2e", "pnpm eval --mock"],
+      "review": null
+    }
+  ]
+}
