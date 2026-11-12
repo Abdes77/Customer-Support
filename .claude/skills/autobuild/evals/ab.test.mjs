@@ -32,6 +32,8 @@ const readT = (f) => fs.readFileSync(path.join(dir, f), 'utf8');
 const readJ = (f) => JSON.parse(readT(f));
 const has = (f) => fs.existsSync(path.join(dir, f));
 const dirty = () => git('status', '--porcelain').stdout.trim().split('\n').filter(Boolean).map((l) => l.trim().split(/\s+/)[1]).sort();
+// The state file changes whenever an action is issued; everything else must be committed.
+const uncommitted = () => dirty().filter((f) => f !== 'autobuild/state.json');
 
 const OPUS = { model: 'opus', effort: 'high' };
 const step = (id, o = {}) => ({
@@ -186,9 +188,13 @@ test('gate before next is refused, and next is idempotent', () => {
   assert.equal(b.attempt, a.attempt);
   assert.ok(b.note.includes('has not reported'));
   build('A1');
-  assert.ok(next().note.includes('run gate'));
-  assert.equal(gate().result, 'pass');
-  assert.equal(ab('gate').status, 1, 'a second gate must not gate the next step unissued');
+  assert.ok(next().note.includes('run the gate'));
+  const g = gate();
+  assert.equal(g.result, 'pass');
+  assert.deepEqual([g.next.action, g.next.id, g.next.attempt], ['build', 'A2', 1], 'the gate hands over the next action');
+  assert.ok(g.next.then.if_it_was_launched_in_the_background.includes('End your turn'));
+  assert.equal(gate().result, 'no_work', 'a stray gate costs no attempt');
+  assert.equal(next().attempt, 1);
 });
 
 test('next and gate refuse to work on the wrong branch', () => {
@@ -206,8 +212,7 @@ test('a step with review goes build → review → done', () => {
   ab('init');
   next(); build('A1');
   const g1 = gate();
-  assert.deepEqual([g1.result, g1.done], ['pass', false]);
-  assert.equal(ab('gate').status, 1, 'the review gate needs the review to be issued first');
+  assert.deepEqual([g1.result, g1.done, g1.next.action, g1.next.review_try], ['pass', false, 'review', 1]);
   const r = next();
   assert.deepEqual([r.action, r.review_try, who(r)], ['review', 1, 'opus/high']);
   assert.ok(/git diff [0-9a-f]{40} [0-9a-f]{40}/.test(r.agent.prompt), r.agent.prompt);
@@ -223,15 +228,15 @@ test('a step with review goes build → review → done', () => {
 test('an agent that changed nothing costs no attempt, and the stop hook lets the session rest', () => {
   project([step('A1', { review: OPUS })]);
   ab('init');
-  const hook = () => sh('node', ['autobuild/ab.mjs', 'hook-stop'], { input: JSON.stringify({ session_id: 's1' }) }).stdout;
+  const hook = (tasks) => sh('node', ['autobuild/ab.mjs', 'hook-stop'], { input: JSON.stringify({ session_id: 's1', background_tasks: tasks }) }).stdout;
   next();
-  assert.ok(hook().includes('"decision": "block"'));
+  assert.ok(hook([]).includes('no agent is running'), 'issued, nothing running: a stall');
   const g = gate();
   assert.deepEqual([g.result, g.count], ['no_work', 1], JSON.stringify(g));
-  assert.equal(hook(), '', 'after no_work the session may stop and wait for the check-in');
+  assert.equal(hook([]), '', 'after no_work the session may stop and wait for the check-in');
   const again = next();
   assert.equal(again.attempt, 1, 'no attempt was used');
-  assert.ok(hook().includes('"decision": "block"'), 'next ends the hold');
+  assert.ok(hook([]).includes('"decision": "block"'), 'next ends the hold');
   build('A1'); assert.equal(gate().result, 'pass');
   next();
   assert.equal(gate().result, 'no_work', 'the same holds for a reviewer');
@@ -352,7 +357,8 @@ test('failures climb the ladder, then rescue, then block skips dependents', () =
   assert.ok(has('autobuild/reports/A1.md'), 'the report stays readable');
   const todo = readT('docs/HUMAN_TODO.md');
   assert.ok(todo.includes('step A1') && todo.includes('autobuild/failed/A1.patch'), todo);
-  assert.deepEqual(dirty(), []);
+  assert.deepEqual(uncommitted(), []);
+  assert.deepEqual([b.next.action, b.next.id], ['build', 'A4'], 'block hands over the next action');
   const after = next();
   assert.deepEqual([after.action, after.id], ['build', 'A4']);
   build('A4'); assert.equal(gate().result, 'pass');
@@ -378,7 +384,7 @@ test('rescue by replanning: replacements run, and are blocked without a second r
   assert.deepEqual(rp.new_steps, ['A1a', 'A1b']);
   assert.ok(!has('partial.txt') && has('autobuild/failed/A1.patch'), 'replan clears the failed work but keeps the new plan');
   assert.equal(readJ('autobuild/plan.json').steps.length, 3);
-  assert.deepEqual(dirty(), []);
+  assert.deepEqual(uncommitted(), []);
   assert.equal(next().id, 'A1a'); build('A1a'); assert.equal(gate().result, 'pass');
   assert.equal(next().id, 'A1b'); build('A1b', { produce: false });
   const g = gate();
@@ -433,13 +439,16 @@ test('a builder that edits the plan or the state is caught and undone', () => {
 test('the orchestrator may edit the plan between steps without tripping the guard', () => {
   const plan = project([step('A1', { kind: 'integrate' }), step('A2', { depends_on: ['A1'] })]);
   ab('init'); next(); build('A1');
-  assert.ok(gate().milestone_closed.includes('Plan changes needed'));
+  const closed = gate();
+  assert.ok(closed.milestone_closed.includes('Plan changes needed'));
+  assert.equal(closed.next, undefined, 'nothing is issued until the plan was refreshed');
   plan.steps[1].title = 'Step A2, corrected';
   savePlan(plan);
   write('autobuild/steps/A2.md', brief('A2') + '- and one more thing\n');
   assert.equal(ab('gate').status, 1, 'a stray gate changes nothing');
   assert.equal(readJ('autobuild/plan.json').steps[1].title, 'Step A2, corrected');
-  assert.equal(ab('replan').json.result, 'replanned');
+  const rp = ab('replan').json;
+  assert.deepEqual([rp.result, rp.next.title], ['replanned', 'Step A2, corrected']);
   assert.equal(next().title, 'Step A2, corrected');
 });
 
@@ -522,24 +531,47 @@ test('pause stops the run, resume continues it', () => {
   assert.equal(next().action, 'build');
 });
 
-test('stop hook holds the owning session while steps remain, with a release valve', () => {
+test('stop hook holds the owning session between steps, and lets it rest while an agent runs', () => {
   project([step('A1')]);
-  const hook = (session) => sh('node', ['autobuild/ab.mjs', 'hook-stop'], { input: JSON.stringify({ session_id: session, stop_hook_active: false }) });
-  assert.equal(hook('s1').stdout, '', 'no state yet: silent');
+  const hook = (session, extra = {}) => sh('node', ['autobuild/ab.mjs', 'hook-stop'], { input: JSON.stringify({ session_id: session, stop_hook_active: false, ...extra }) }).stdout;
+  assert.equal(hook('s1'), '', 'no state yet: silent');
   ab('init');
-  const first = JSON.parse(hook('s1').stdout);
+  const first = JSON.parse(hook('s1'));
   assert.equal(first.decision, 'block');
   assert.ok(first.reason.includes('next'));
-  assert.equal(hook('s2').stdout, '', 'another session is left alone');
+  assert.equal(hook('s2'), '', 'another session is left alone');
   hook('s1'); hook('s1');
-  assert.equal(hook('s1').stdout, '', 'released after three reminders without progress');
+  assert.equal(hook('s1'), '', 'released after three reminders without progress');
   next();
-  assert.equal(JSON.parse(hook('s1').stdout).decision, 'block', 'progress re-arms the hook');
+  assert.equal(hook('s1'), '', 'an agent was issued and has not reported: it is running, so stopping is right');
+  assert.equal(hook('s1', { background_tasks: [{ id: 'agent-1' }] }), '', 'a live background task: stopping is right');
+  assert.ok(hook('s1', { background_tasks: [] }).includes('no agent is running'), 'issued but nothing is alive: a stall');
+  build('A1');
+  assert.equal(hook('s1', { background_tasks: [{ id: 'agent-1' }] }), '', 'a report on disk does not prove the agent has finished');
+  assert.ok(hook('s1', { background_tasks: [] }).includes('gate --wait 540'), 'reported and nothing alive: the gate is due');
   ab('pause', 'x');
-  assert.equal(hook('s1').stdout, '');
+  assert.equal(hook('s1'), '');
   ab('resume');
-  build('A1'); gate(); ab('finish');
-  assert.equal(hook('s1').stdout, '', 'finished: silent');
+  gate(); ab('finish');
+  assert.equal(hook('s1'), '', 'finished: silent');
+});
+
+test('protected paths: a builder that edits the tests it must satisfy is caught and the tests restored', () => {
+  const plan = project([step('A1', { checks: [exists('tests/spec.txt')] }), step('A2', { depends_on: ['A1'], protect: ['tests'] })]);
+  ab('init');
+  next(); write('tests/spec.txt', 'expected: 42\n'); build('A1');
+  assert.equal(gate().result, 'pass');
+  write('tests/spec.txt', 'expected: anything\n'); write('tests/extra.txt', 'x\n'); build('A2');
+  const g = gate();
+  assert.equal(g.result, 'fail');
+  assert.ok(g.summary.includes('protected for this step'), g.summary);
+  assert.equal(readT('tests/spec.txt'), 'expected: 42\n');
+  assert.ok(!has('tests/extra.txt'));
+  build('A2');
+  assert.equal(gate().result, 'pass', 'an honest second attempt passes');
+  plan.steps[1].protect = ['/etc'];
+  savePlan(plan);
+  assert.ok(ab('validate').json.errors.join('\n').includes('protect must be an array of paths inside the repository'));
 });
 
 test('settings prints allow rules and a stop hook that is harmless without the script', () => {

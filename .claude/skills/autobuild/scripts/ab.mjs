@@ -19,6 +19,10 @@
 //   finish                close the run once no step is left
 //   hook-stop             Stop hook: keeps the session going while steps remain
 //
+// A gate result carries the following action under "next", so the loop is: start the agent,
+// run the gate, start the next agent. An agent that runs longer than a moment is moved to the
+// background by Claude Code; the orchestrator then ends its turn and is woken when it finishes.
+//
 // No dependencies. Node 18 or later. Works without git (commits and pushes are then skipped).
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -156,6 +160,29 @@ function treeHash() {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
+// Seconds since an agent last touched a file in the working tree (null when nothing changed).
+function lastChange() {
+  if (!isRepo()) return null;
+  const files = git('status', '--porcelain', '-uall').stdout.split('\n').filter(Boolean)
+    .map((l) => l.slice(3).split(' -> ').pop().replace(/^"|"$/g, '')).filter((f) => f !== P.state);
+  let newest = 0;
+  for (const f of files) { try { newest = Math.max(newest, fs.statSync(f).mtimeMs); } catch { /* deleted */ } }
+  return newest ? Math.max(0, Math.round((Date.now() - newest) / 1000)) : null;
+}
+
+// A hash of everything under the given paths, for steps that must leave those paths alone.
+function pathsHash(paths) {
+  if (!isRepo() || !paths || !paths.length) return null;
+  fs.mkdirSync(P.logs, { recursive: true });
+  const idx = path.resolve(P.logs, 'protect.index');
+  fs.rmSync(idx, { force: true });
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  spawnSync('git', ['add', '-A', '--', ...paths.map((x) => `:(top)${x}`)], { env });
+  const r = spawnSync('git', ['write-tree'], { env, encoding: 'utf8' });
+  fs.rmSync(idx, { force: true });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
 // ---------- plan ----------
 
 function loadPlan() {
@@ -228,6 +255,8 @@ function validate() {
       if (tier(s.review.model) < Math.min(tier(s.model), tier('opus'))) W(`${at}: the reviewer (${s.review.model}) is a weaker model than the builder (${s.model})`);
       if (s.review.model === 'fable' && ['xhigh', 'max'].includes(s.review.effort)) E(`${at}: a review on fable runs at high at most`);
     }
+
+    if (s.protect !== undefined && !(Array.isArray(s.protect) && s.protect.every((x) => str(x) && !x.startsWith('/') && !x.split('/').includes('..')))) E(`${at}: protect must be an array of paths inside the repository (the files this step may not change)`);
 
     // What would catch a wrong result? Only commands that always run count.
     const own = checks ? checks.filter((c) => c && alwaysRun(c)).length : 0;
@@ -360,7 +389,7 @@ function buildPrompt(plan, step, c, failure) {
     `The repository root is ${ROOT}. Work there; every path below is relative to it.`,
     `1. Read ${P.rules} and follow the section "Rules for every builder".`,
     `2. Read ${P.steps}/${step.id}.md and build exactly that step: ${step.id} "${step.title}".`,
-    `3. Finish by writing ${P.reports}/${step.id}.md the way the rules describe. Its first line must be "STATUS: DONE" or "STATUS: BLOCKED".`,
+    `3. Finish by writing ${P.reports}/${step.id}.md the way the rules describe. Its first line must be "STATUS: DONE" or "STATUS: BLOCKED". Writing it is your last action: after it, change nothing and run nothing.`,
   ];
   if (c.attempt > 1 && failure) {
     lines.push('', `This is attempt ${c.attempt}. The work from earlier attempts is still in the working tree: keep what is good and fix what failed.`, `What went wrong last time: ${failure.summary}`);
@@ -376,7 +405,7 @@ function reviewPrompt(plan, step, c, failure) {
     `1. Read ${P.rules} and follow the section "Rules for reviewers".`,
     `2. Read ${P.steps}/${step.id}.md, the brief for step ${step.id} "${step.title}".`,
     c.base && c.built ? `3. The step's changes are: git diff ${c.base} ${c.built}` : `3. The step's changes are the most recent commit: git show HEAD`,
-    `4. Fix what you find in the working tree, keep "${plan.verify}" passing, and write ${P.reports}/${step.id}.review.md.`,
+    `4. Fix what you find in the working tree, keep "${plan.verify}" passing, and write ${P.reports}/${step.id}.review.md. Writing it is your last action: after it, change nothing and run nothing.`,
   ];
   const f = failure && failure.phase === 'review' ? failure : null;
   if (c.review_try === 2 && f && f.no_report) {
@@ -396,10 +425,11 @@ function guardFiles() {
   const briefs = fs.existsSync(P.steps) ? fs.readdirSync(P.steps).filter((f) => f.endsWith('.md')).sort().map((f) => `${P.steps}/${f}`) : [];
   return [P.plan, P.rules, P.orch, P.self, P.state, ...briefs];
 }
-function setGuard() {
+function setGuard(protect) {
   const files = {};
   for (const f of guardFiles()) files[f] = sha(read(f));
-  writeJSON(GUARD, { files, state: read(P.state), tree: treeHash() });
+  const paths = Array.isArray(protect) && protect.length ? protect : null;
+  writeJSON(GUARD, { files, state: read(P.state), tree: treeHash(), protect: paths ? { paths, hash: pathsHash(paths) } : null });
 }
 // The guard is armed between "next issued an agent" and "gate judged it".
 function guardArmed() {
@@ -417,6 +447,13 @@ function checkGuard() {
   for (const f of changed) {
     if (f === P.state) writeFile(P.state, g.state);
     else if (isRepo()) git('checkout', 'HEAD', '--', f);
+  }
+  // Paths the step was told to leave alone, typically tests written by an earlier, stronger step.
+  if (g.protect && g.protect.hash && pathsHash(g.protect.paths) !== g.protect.hash) {
+    const specs = g.protect.paths.map((x) => `:(top)${x}`);
+    git('checkout', 'HEAD', '--', ...specs);
+    git('clean', '-fdq', '--', ...specs);
+    changed.push(...g.protect.paths.map((x) => `${x} (protected for this step: make the code satisfy these files instead of changing them)`));
   }
   return changed;
 }
@@ -476,20 +513,22 @@ function cmdReplan() {
   s.known = plan.steps.map((x) => x.id);
   saveState(s);
   commit('autobuild: replan', plan);
-  out({ result: 'replanned', new_steps: fresh, partial_work: parked, warnings, then: `${ME} next` });
+  emit({ result: 'replanned', new_steps: fresh, partial_work: parked, warnings, then: `${ME} next` });
 }
 
 // ---------- command: next ----------
 
-function cmdNext() {
+const cmdNext = () => out(nextAction());
+
+function nextAction() {
   const { errors, plan } = validate();
-  if (errors.length) { out({ action: 'fix_plan', errors, hint: `The plan is invalid. Fix it, run "${ME} replan", then next.` }); return; }
+  if (errors.length) return { action: 'fix_plan', errors, hint: `The plan is invalid. Fix it, then run "${ME} replan".` };
   const s = loadState();
-  if (!s) { out({ action: 'init', hint: `No state yet. Run "${ME} init".` }); return; }
-  if (s.status === 'paused') { out({ action: 'paused', reason: s.reason || '', hint: `Run "${ME} resume" to continue.` }); return; }
-  if (s.status === 'finished') { out({ action: 'finished', hint: 'The run is closed. Nothing to do.' }); return; }
+  if (!s) return { action: 'init', hint: `No state yet. Run "${ME} init".` };
+  if (s.status === 'paused') return { action: 'paused', reason: s.reason || '', hint: `Run "${ME} resume" to continue.` };
+  if (s.status === 'finished') return { action: 'finished', hint: 'The run is closed. Nothing to do.' };
   const wb = wrongBranch(plan);
-  if (wb) { out({ action: 'wrong_branch', hint: wb }); return; }
+  if (wb) return { action: 'wrong_branch', hint: wb };
   delete s.hold_at;
 
   let note;
@@ -497,8 +536,7 @@ function cmdNext() {
     const step = pick(plan, s);
     if (!step) {
       saveState(s);
-      out({ action: 'finish', progress: counts(plan, s), hint: `No step is left to run. Do the finish procedure in ${P.orch}, which starts with "${ME} finish".` });
-      return;
+      return { action: 'finish', progress: counts(plan, s), hint: `No step is left to run. Do the finish procedure in ${P.orch}, which starts with "${ME} finish".` };
     }
     const x = st(s, step.id);
     x.status = 'todo';
@@ -507,9 +545,10 @@ function cmdNext() {
   } else if (s.current.issued) {
     const c0 = s.current;
     const report = c0.phase === 'build' ? `${P.reports}/${c0.id}.md` : `${P.reports}/${c0.id}.review.md`;
+    const idle = lastChange();
     note = read(report) !== null
-      ? `This action was already issued and its agent has written ${report}. Do not start the agent again: run gate.`
-      : 'This action was already issued but its agent has not reported. Start the agent now.';
+      ? `This action was already issued and its agent has written ${report}. Do not start the agent again. If its result or its completion notification has reached you, run the gate; if it is still running in the background, end your turn and wait for the notification.`
+      : `This action was already issued and its agent has not reported${idle === null ? '' : ` (files in the working tree last changed ${idle}s ago)`}. If that agent is still running, because it was launched in the background and you have not been notified that it finished, start nothing and end your turn. Start the agent only if you are sure none is running for this step.`;
   }
 
   const c = s.current;
@@ -517,7 +556,7 @@ function cmdNext() {
   if (!step) {
     // The step vanished from the plan (edited outside replan). Drop it and move on.
     s.current = null; saveState(s);
-    return cmdNext();
+    return nextAction();
   }
   const prog = counts(plan, s);
   const progress = `${prog.done} of ${prog.total} steps done`;
@@ -528,16 +567,15 @@ function cmdNext() {
     const options = [];
     if (gaveUp && !st(s, step.id).retried) options.push(`Retry: when the report shows the builder gave up on something that can be done in this environment, run "${ME} retry". The step gets one attempt on the strongest model.`);
     options.push(`Replan: when the step was too big or its brief was wrong, replace it in ${P.plan} with smaller or corrected steps (new ids such as ${step.id}a, ${step.id}b; repoint depends_on in later steps), write their briefs in ${P.steps}/, then run "${ME} replan". Never weaken a check to get a pass unless the check itself was wrong, and record that in docs/DECISIONS.md.`);
-    options.push(`Block: when the step needs something this run cannot get, run "${ME} block \\"<one-line reason>\\"". The step and everything that depends on it are left out, recorded in docs/HUMAN_TODO.md, and the run continues.`);
-    out({
+    options.push(`Block: when the step needs something this run cannot get, run "${ME} block <one-line reason>". The step and everything that depends on it are left out, recorded in docs/HUMAN_TODO.md, and the run continues.`);
+    return {
       action: 'rescue', id: step.id, title: step.title, progress,
       why: gaveUp ? `The builder of step ${step.id} stopped and reported BLOCKED.` : `Step ${step.id} failed every attempt, the last on the strongest model.`,
       failure: s.last_failure || null,
       read: [`${P.steps}/${step.id}.md`, gaveUp ? `${P.reports}/${step.id}.md` : (s.last_failure && s.last_failure.log) || null].filter(Boolean),
       choose_one: options,
       note: `The step's partial work is still in the working tree. Replan and block take it out and save it under ${P.failed}/. A step can be rescued once: if it or its replacements fail again they are blocked automatically.`,
-    });
-    return;
+    };
   }
 
   const fresh = !c.issued;
@@ -548,25 +586,35 @@ function cmdNext() {
     c.issued_at = now();
   }
   saveState(s);
-  if (fresh) setGuard();
+  if (fresh) setGuard(c.phase === 'build' ? step.protect : null);
 
   const failure = s.last_failure && s.last_failure.id === step.id ? s.last_failure : null;
-  const then = { command: `${ME} gate --wait 540`, tool_timeout_ms: 600000 };
+  const then = {
+    when_the_agent_has_finished: `${ME} gate --wait 540`, tool_timeout_ms: 600000,
+    if_it_was_launched_in_the_background: 'End your turn and start nothing else. You are notified when the agent finishes; run the gate then.',
+  };
   if (c.phase === 'build') {
     const { model, effort } = ladder(plan, step, c.attempt, c.top);
-    out({
+    return {
       action: 'build', id: step.id, title: step.title, attempt: c.attempt, of: maxAttempts(plan), progress, note,
       agent: { subagent_type: 'general-purpose', model, effort, run_in_background: false, description: `${step.id} build`, prompt: buildPrompt(plan, step, c, failure) },
       then,
-    });
-  } else {
-    const { model, effort } = reviewer(plan, step, c.review_try);
-    out({
-      action: 'review', id: step.id, title: step.title, review_try: c.review_try, progress, note,
-      agent: { subagent_type: 'general-purpose', model, effort, run_in_background: false, description: `${step.id} review`, prompt: reviewPrompt(plan, step, c, failure) },
-      then,
-    });
+    };
   }
+  const { model, effort } = reviewer(plan, step, c.review_try);
+  return {
+    action: 'review', id: step.id, title: step.title, review_try: c.review_try, progress, note,
+    agent: { subagent_type: 'general-purpose', model, effort, run_in_background: false, description: `${step.id} review`, prompt: reviewPrompt(plan, step, c, failure) },
+    then,
+  };
+}
+
+// Print a result and, when the run simply continues, the action that follows it. That saves
+// the orchestrator one whole turn per step. After an integrate step the plan may need
+// changes first, so nothing is issued there.
+function emit(res) {
+  if (res.then && !res.milestone_closed) { delete res.then; res.next = nextAction(); }
+  out(res);
 }
 
 // ---------- gate: the checks ----------
@@ -703,12 +751,11 @@ function noWork(plan, s, step) {
     const msg = 'The agent was started three times and changed nothing each time.';
     return c.phase === 'build' ? fail(plan, s, step, msg, null) : failReview(plan, s, step, msg, null, true);
   }
-  c.issued = false;
   s.hold_at = now();
   saveState(s);
   return {
     result: 'no_work', id: step.id, count: c.idle,
-    hint: `The agent wrote nothing at all, so no attempt was counted. If the Agent call returned an error (usage limit, overloaded, API error), end your turn now without pausing: the scheduled check-in restarts the run. If the agent returned normally and simply did nothing, run "${ME} next" and start it again.`,
+    hint: `Nothing was changed and no report was written, so no attempt was counted. If the agent is still running, you ran the gate too early: wait for its completion notification. If the Agent call returned an error (usage limit, overloaded, API error), end your turn now without pausing: the scheduled check-in restarts the run. If the agent returned normally and simply did nothing, run "${ME} next" and start it again.`,
   };
 }
 
@@ -768,7 +815,10 @@ function finalize(plan, s, step, review, strict = true) {
   }
   const prog = counts(plan, s);
   const res = { result: 'pass', id: step.id, done: true, review, progress: `${prog.done} of ${prog.total} steps done`, push: push(s), then: `${ME} next` };
-  if (step.kind === 'integrate') res.milestone_closed = `Before the next step, read the section "Plan changes needed" in ${P.reports}/${step.id}.md. If it lists any, amend the upcoming steps and run "${ME} replan".`;
+  if (step.kind === 'integrate') {
+    res.milestone_closed = `Read the section "Plan changes needed" in ${P.reports}/${step.id}.md. If it lists any, amend the upcoming steps and run "${ME} replan"; otherwise run "${ME} next".`;
+    delete res.then;
+  }
   return res;
 }
 
@@ -811,7 +861,7 @@ async function cmdGate(args) {
   const step = plan.steps[stepIndex(plan, c.id)];
   const key = gateKey(c);
   const failNow = (summary, log) => (c.phase === 'build' ? fail(plan, s, step, summary, log) : failReview(plan, s, step, summary, log));
-  if (tampered.length) { out(failNow(`The agent changed files it must not touch (${tampered.join(', ')}). They were restored. Do the work without editing them.`, null)); return; }
+  if (tampered.length) { emit(failNow(`The agent changed files it must not touch: ${tampered.join('; ')}. They were restored. Do the work without editing them.`, null)); return; }
 
   let res = readJSON(RESULT);
   if (!res || res.key !== key) {
@@ -821,7 +871,8 @@ async function cmdGate(args) {
     let exited = false;
     if (!runner) {
       const q = quickChecks(plan, s, step);
-      if (q) { out(q); return; }
+      if (q) { emit(q); return; }
+      if (s.hold_at) { delete s.hold_at; saveState(s); }
       const t = readJSON(TRIES) || {};
       const n = t.key === key ? (t.n || 0) + 1 : 1;
       writeJSON(TRIES, { key, n });
@@ -858,7 +909,7 @@ async function cmdGate(args) {
   c.idle = 0;
   if (res.skipped && res.skipped.length) x.skipped_checks = res.skipped;
   if (res.flaky && res.flaky.length) x.flaky_checks = [...new Set([...(x.flaky_checks || []), ...res.flaky])];
-  if (!res.ok) { out(failNow(res.failed.summary, res.log)); return; }
+  if (!res.ok) { emit(failNow(res.failed.summary, res.log)); return; }
 
   if (c.phase === 'build' && step.review) {
     const prev = JSON.stringify(s);
@@ -869,15 +920,15 @@ async function cmdGate(args) {
       const back = JSON.parse(prev);
       for (const k of Object.keys(s)) delete s[k];
       Object.assign(s, back);
-      out(fail(plan, s, step, `git commit was rejected:\n${r.error}`, null));
+      emit(fail(plan, s, step, `git commit was rejected:\n${r.error}`, null));
       return;
     }
     s.current.built = r.sha;
     saveState(s);
-    out({ result: 'pass', id: step.id, done: false, seconds: res.seconds, skipped_checks: res.skipped, flaky_checks: res.flaky, note: 'Built and committed. The review comes next.', push: push(s), then: `${ME} next` });
+    emit({ result: 'pass', id: step.id, done: false, seconds: res.seconds, skipped_checks: res.skipped, flaky_checks: res.flaky, note: 'Built and committed. The review comes next.', push: push(s), then: `${ME} next` });
     return;
   }
-  out({ ...finalize(plan, s, step, c.phase === 'build' ? 'none' : 'applied'), seconds: res.seconds, skipped_checks: res.skipped, flaky_checks: res.flaky });
+  emit({ ...finalize(plan, s, step, c.phase === 'build' ? 'none' : 'applied'), seconds: res.seconds, skipped_checks: res.skipped, flaky_checks: res.flaky });
 }
 
 // ---------- commands: retry, block, pause, resume, status, settings, watchdog, finish, hook-stop ----------
@@ -901,13 +952,13 @@ function cmdRetry() {
   delete c.rescue_reason;
   saveState(s);
   const up = ladder(plan, step, c.attempt, true);
-  out({ result: 'retrying', id: step.id, on: `${up.model}/${up.effort}`, then: `${ME} next` });
+  emit({ result: 'retrying', id: step.id, on: `${up.model}/${up.effort}`, then: `${ME} next` });
 }
 
 function cmdBlock(reason) {
   const { plan, s, step } = rescueContext('block');
-  if (!str(reason)) die('Give a one-line reason: block "<reason>"');
-  out({ result: 'blocked', ...block(plan, s, step, reason.trim()) });
+  if (!str(reason)) die('Give a one-line reason: block <reason>');
+  emit({ result: 'blocked', ...block(plan, s, step, reason.trim()) });
 }
 
 function cmdPause(reason, paused) {
@@ -990,6 +1041,21 @@ function cmdHookStop() {
   const { plan } = loadPlan();
   if (!plan || !Array.isArray(plan.steps)) process.exit(0);
   const prog = counts(plan, s);
+  // Once an agent has been issued it is normally running in the background, and its
+  // completion wakes the session, so stopping is right. A report on disk does not prove the
+  // agent has finished: agents sometimes write it and keep working. Only Claude Code knows, so
+  // the session is held only when it says that no background task is alive.
+  const c = s.current;
+  let reason = `The autobuild run is not finished: ${prog.done} of ${prog.total} steps done${prog.todo ? `, ${prog.todo} left` : ''}. Run "${ME} next" and continue as ${P.orch} describes. Do not wait for the user. To stop on purpose, run "${ME} pause <reason>" first.`;
+  if (c && c.issued && c.phase !== 'rescue') {
+    const bt = input ? input.background_tasks : undefined;
+    const live = Array.isArray(bt) ? bt.length : bt && typeof bt === 'object' ? Object.keys(bt).length : bt ? 1 : 0;
+    if (bt === undefined || live > 0) process.exit(0);
+    const reported = read(c.phase === 'build' ? `${P.reports}/${c.id}.md` : `${P.reports}/${c.id}.review.md`) !== null;
+    reason = reported
+      ? `The agent for step ${c.id} has finished and reported, and the run is not finished. Run "${ME} gate --wait 540" and continue as ${P.orch} describes.`
+      : `The autobuild run is waiting on step ${c.id}, but no agent is running for it. Run "${ME} next" and start the agent it describes.`;
+  }
   const mark = `${prog.done}|${prog.blocked}|${prog.skipped}|${s.current ? gateKey(s.current) + (s.current.issued ? '+' : '-') : 'idle'}`;
   const file = `${P.logs}/hook.json`;
   const h = readJSON(file) || {};
@@ -999,7 +1065,7 @@ function cmdHookStop() {
   const n = h.mark === mark ? (h.n || 0) + 1 : 1;
   try { writeJSON(file, { owner, mark, n, at: now() }); } catch { /* read-only tree */ }
   if (n > 3) process.exit(0); // no progress after three reminders: let the session stop
-  out({ decision: 'block', reason: `The autobuild run is not finished: ${prog.done} of ${prog.total} steps done${prog.todo ? `, ${prog.todo} left` : ''}. Run "${ME} next" and continue as ${P.orch} describes. Do not wait for the user. To stop on purpose, run "${ME} pause \\"<reason>\\"" first.` });
+  out({ decision: 'block', reason });
 }
 
 // ---------- main ----------

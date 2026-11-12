@@ -51,14 +51,15 @@
       "model": "opus", "effort": "high",
       "why": "Writing the expected scores is the judgment; the implementation in S05 then only has to satisfy them.",
       "depends_on": ["S02"], "covers": ["R2"], "checks": ["pnpm test:list --filter scoring"],
-      "review": null
+      "review": null, "skip_verify": true
     },
     {
       "id": "S05", "title": "Scoring implementation against the S04 tests", "milestone": "M1", "kind": "build",
       "model": "sonnet", "effort": "medium",
-      "why": "Precise contract and tests already exist; a stronger reviewer catches test tampering.",
+      "why": "Precise contract, and the S04 tests are frozen for this step, so a cheap model is safe and no review is needed.",
       "depends_on": ["S04"], "covers": ["R2"], "checks": ["pnpm test --filter scoring"],
-      "review": { "model": "opus", "effort": "high" }
+      "protect": ["packages/scoring/test"],
+      "review": null
     },
     {
       "id": "S06", "title": "Reply engine: prompt, price-list guard, mock and live model client", "milestone": "M1", "kind": "build",

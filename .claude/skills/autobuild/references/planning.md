@@ -1,11 +1,11 @@
 # Planning guide
 
-Read this whole file before writing a plan. The plan decides the quality and the cost of
-everything after it, and once the run starts nobody is there to correct it.
+Read this whole file before writing or judging a plan. The plan decides the quality and the
+cost of everything after it, and once the run starts nobody is there to correct it.
 
 Contents: 1 What you produce · 2 Spec · 3 Architecture · 4 Milestones · 5 Splitting into
-steps · 6 Model and effort · 7 Reviews · 8 Checks · 9 Briefs · 10 plan.json · 11 KPIs in the
-plan · 12 Self-check
+steps · 6 Model and effort · 7 Reviews and frozen tests · 8 Checks · 9 Briefs · 10 plan.json ·
+11 KPIs in the plan · 12 Self-check
 
 ## 1. What you produce
 
@@ -36,13 +36,14 @@ Write `docs/SPEC.md` from the user's answers.
 
 ## 3. Architecture
 
-`docs/ARCHITECTURE.md` is the one document every later step leans on, so one subagent on the
-strongest available tier writes it. Run that agent at `high`. Use `xhigh` only when the system
-is large or unusual enough that a wrong structure would be copied into dozens of steps: more
-than about six components, several tenants or roles sharing data, money or regulated data, or
-a problem with no well-known shape. A landing page, a single automation or a standard CRUD app
-does not qualify. When you do use `xhigh`, write the reason in `autobuild/PLAN_REVIEW.md`. Give
-the agent `docs/SPEC.md` and ask for:
+`docs/ARCHITECTURE.md` is the one document every later step leans on, so it is written on the
+strongest available tier, normally by the same agent that then writes the plan, at `high`
+effort. `xhigh` is justified only when the system is large or unusual enough that a wrong
+structure would be copied into dozens of steps: more than about six components, several
+tenants or roles sharing data, money or regulated data, or a problem with no well-known shape.
+A landing page, a single automation or a standard CRUD app does not qualify. In that case the
+architecture is written first by a separate short agent at `xhigh`, and the reason goes into
+`autobuild/PLAN_REVIEW.md`. The architecture contains:
 
 - the components and what each is responsible for;
 - the main data flows, end to end;
@@ -104,11 +105,10 @@ Do not split when:
 - the parts share invariants that have to be decided together (a state machine and its
   persistence, a transaction boundary). Splitting there makes both sides guess;
 - a part could not fail any check on its own. Merge it with the part that gives it meaning;
-- the overhead outweighs the gain. Every agent starts with a fixed cost of very roughly 80
-  thousand tokens of context before it does any work, paid once for the builder and again for
-  the reviewer, plus a gate run. On `haiku` or `sonnet` that is small; on `fable` it is not. So
-  a twenty-line change is its own step only when it belongs to a different risk class than its
-  neighbours, and tiny steps are a reason to choose a cheap model, never an expensive one.
+- the overhead outweighs the gain. Every step starts a new agent, which has a price of its own
+  ("What a step costs" in section 6), and often a second one for the review. So a twenty-line
+  change is its own step only when it belongs to a different risk class than its neighbours,
+  and tiny steps are a reason to choose a cheap model, never an expensive one.
 
 Steps run one after another, in the order of `plan.steps`, and a step may depend only on steps
 listed before it. Declare every real dependency in `depends_on`: when a step cannot be built,
@@ -118,6 +118,36 @@ A product the size of a multi-channel support bot with an admin panel is typical
 steps. A landing page or a single automation is 8 to 20.
 
 ## 6. Model and effort
+
+### What a step costs
+
+How Claude Code bills an agent explains most of the rules in this guide.
+
+- **Every turn re-reads the agent's whole context.** A turn is one model call: read a file, run
+  a command, edit something. The context starts with the system prompt and the tool
+  definitions, which measured about 65,000 tokens in a cloud session with a few connectors,
+  and grows with every file read and every command output. An agent that needs 40 turns pays
+  for its context 40 times.
+- **Repeated context is cached at roughly a tenth of the price** while the agent keeps
+  working. The first turn of every agent pays in full, and so does the first turn after a
+  long pause, such as a test run of many minutes.
+- **The price per token roughly doubles from one tier to the next** between sonnet, opus and
+  fable; haiku costs a small fraction of sonnet. Effort adds thinking, which is billed as
+  output, the most expensive kind of token.
+
+So the cost of a step is close to turns × context size × model price, and these are the
+levers, in order of how much they save without touching quality:
+
+1. **The model tier.** Moving a step down one tier halves it. This is what splitting is for.
+2. **Turns.** A brief that names the exact files to read and the exact commands that prove
+   the step removes the exploring, which is where turns go. A vague brief is paid for in
+   turns on every attempt.
+3. **Context.** A short reading list, and checks whose output is short when they pass.
+4. **Effort.** One level lower on a step that needs no deliberation.
+5. **Agents.** Each agent pays its base context once at full price. On haiku that is nothing;
+   on fable it is real money. A review is a whole second agent.
+
+### Choosing
 
 Quality comes first, cost second. A cheaper setting counts as "the same result" only when
 something independent would catch a wrong result: the step's checks, its review, or both. So
@@ -166,10 +196,28 @@ the same effort on Fable. `max` on any model is rarely worth it.
 Write the reason for each choice in the step's `why`, in one sentence. A reviewer of the plan
 reads those sentences to challenge the choice.
 
-## 7. Reviews
+## 7. Reviews and frozen tests
 
 A review is a second agent with a fresh context that reads the step's diff after the checks
-pass, fixes what it finds, and must leave the checks passing. Set `review` per step:
+pass, fixes what it finds, and must leave the checks passing. It is the right safeguard where
+judgment is needed, and an expensive one where a command could do the job.
+
+**Frozen tests come first.** When a step's behaviour can be pinned down by tests, have a
+stronger model write those tests as a step of their own, and list their paths under `protect`
+in the step that implements against them. The gate fails the implementing step if it touched
+a protected path, and puts the files back. A `sonnet` or `haiku` builder that has to pass
+tests it cannot edit needs no review. This is usually the cheapest safe setup for
+implementation work: it replaces a second agent with a command.
+
+The new tests fail until the implementation exists, and the verify command runs them. So the
+step that only writes tests sets `"skip_verify": true` and carries a check that the test files
+parse and are collected, and the implementing step is the very next step in the plan.
+
+**One review for several small steps.** A row of small, low-risk steps with checks of their
+own can run with `review: null` when the milestone's `integrate` step, which reads the same
+code anyway, is told in its brief to review their combined diff.
+
+Where a review is still the right tool, set `review` per step:
 
 - `{ "model": "opus", "effort": "high" }` is the standard, and what makes a `sonnet` or
   `haiku` builder safe: the reviewer is stronger than the builder.
@@ -227,6 +275,8 @@ has never seen this conversation. Use `assets/step-brief.md` as the shape:
 - **Read:** the exact files and document sections needed, as a short list. This keeps cheap
   models focused and every model's context small.
 - **Owns:** the paths this step may create or change.
+- **Do not change:** the paths listed under `protect` for this step, with one line on why
+  (for example "the tests from S04 are the specification for this step").
 - **Interfaces:** what it consumes from earlier steps and what it must provide to later ones,
   by name, pointing at the section of `docs/ARCHITECTURE.md` that defines them.
 - **Done when:** checkable items, each backed by a command where possible. The first is always
@@ -255,8 +305,8 @@ meant. If you cannot write a sharp "Done when", the step is not understood well 
 
 Per step: `id` (short, such as `S07`), `title`, `milestone`, `kind` (`design`, `build`, `test`,
 `integrate`, `optimize`, `harden`, `accept`, `docs`), `model`, `effort`, `why`, `depends_on`,
-`covers` (requirement ids), `checks`, `review`, and where needed `xhigh_reason` and
-`skip_verify`.
+`covers` (requirement ids), `checks`, `review`, and where needed `protect` (paths the step may
+not change), `xhigh_reason` and `skip_verify`.
 
 Run `node autobuild/ab.mjs validate` as often as you like while writing. It lists every error
 and warning and shows the model mix and the steps that run Fable at xhigh.
@@ -302,6 +352,9 @@ Before the plan goes to review, confirm:
 - For every Fable step you can say why Opus would not give the same result, and for every
   Fable step at xhigh why high would not.
 - For every expensive step you asked "would a split let a cheaper model do most of this?",
-  and for every cheap step "what catches it if this is wrong?".
+  for every cheap step "what catches it if this is wrong?", and for every review "could
+  frozen tests do this job?".
+- Every brief names the exact files to read and the exact commands that prove it, so its
+  builder does not spend turns exploring.
 - `node autobuild/ab.mjs validate` reports no errors, and each warning is either fixed or
   answered in one line in `autobuild/PLAN_REVIEW.md`.

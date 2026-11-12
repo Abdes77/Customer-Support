@@ -10,9 +10,14 @@ The build is unattended: nobody is watching and nobody can answer a question.
 2. **Read your brief, then only what it lists under "Read".** `CLAUDE.md` is already in your
    context. The brief names the files and document sections this step needs; reading the whole
    repository or the whole spec wastes the budget and blurs the task. Look further only when
-   the listed material leaves a real gap.
+   the listed material leaves a real gap. Every tool call you make re-reads everything you
+   have read so far, so work in few, purposeful steps: read the files you need together, make
+   your edits, then run the checks.
 3. **Build exactly this step.** The paths under "Owns" are yours. Outside them, change only
-   what is needed to wire your work in. Leave later steps' work to later steps. When the brief
+   what is needed to wire your work in. Paths under "Do not change" are frozen: they usually
+   hold the tests that define this step, so make the code satisfy them. An edit there is
+   undone and the attempt counts as failed. If such a file is itself wrong, report
+   `STATUS: BLOCKED` and say exactly what is wrong with it. Leave later steps' work to later steps. When the brief
    conflicts with `docs/ARCHITECTURE.md` or with the code that exists, do the closest correct
    thing and describe it under "Deviations" in your report.
 4. **Tests are part of the step.** Add or update the tests that prove each "Done when" item.
@@ -54,7 +59,9 @@ The build is unattended: nobody is watching and nobody can answer a question.
     - `Skipped:` live checks you could not run, each with its `docs/HUMAN_TODO.md` entry.
     - Steps of kind `integrate` add `Plan changes needed:` listing the upcoming steps whose
       briefs no longer match the code, with the correction for each, or "none".
-    Your final message is the first line of the report plus at most five lines of summary.
+    Writing the report is your last action. The orchestrator starts the checks as soon as you
+    are done, so after the report change nothing and run nothing. Your final message is the
+    first line of the report plus at most two lines of summary.
 
 ## Rules for reviewers
 
@@ -79,8 +86,9 @@ cannot: wrong behaviour that happens to pass, and work that will hurt later step
 5. Rules 1 and 7 to 12 for builders apply to you too, including the ban on weakening the
    verify command or a test.
 6. Finish by writing `autobuild/reports/<step id>.review.md`: each problem found, how serious,
-   and what you changed; or `No changes needed.` followed by what you checked. Your final
-   message is a three-line summary.
+   and what you changed; or `No changes needed.` followed by what you checked. Writing it is
+   your last action: after it, change nothing and run nothing. Your final message is at most
+   two lines.
 
 ## Environment
 

@@ -15,7 +15,11 @@ must always give the same score.
 
 ## Owns
 
-- packages/scoring/**
+- packages/scoring/src/**
+
+## Do not change
+
+- packages/scoring/test/** — the tests written in S06 are the specification for this step
 
 ## Interfaces
 
@@ -26,10 +30,8 @@ must always give the same score.
 ## Done when
 
 - `pnpm verify` exits 0
-- `pnpm test --filter scoring` passes, with at least twelve varied leads across three settings
-  profiles, each asserting the exact score
-- changing a weight in the settings changes the score in a test, with no code change
-- a criterion with no evidence scores as unknown, never as a guess, and a test proves it
+- `pnpm test --filter scoring` passes: every S06 test, unchanged (twelve varied leads across
+  three settings profiles, each asserting the exact score)
 
 ## Out of scope
 
