@@ -41,4 +41,12 @@ export const knowledgeSettings = defineCategory("knowledge", {
     field: f.nullable(f.integer({ min: 30, max: 1095, unit: "days" }), "Never flag"),
     default: 365,
   }),
+  "knowledge.playbook_research_searches": setting({
+    label: "Web searches per research step",
+    help: "A segment's playbook is researched on the web in three steps before it is written. This is the most searches the model may run in each step. More searches take longer and cost more.",
+    field: f.integer({ min: 1, max: 15, unit: "searches" }),
+    default: 5,
+    // A playbook belongs to a segment of the agency, never to one business.
+    scopes: ["global", "segment"],
+  }),
 });

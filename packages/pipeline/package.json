@@ -17,6 +17,7 @@
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/jobs": "workspace:*",
+    "@repo/knowledge": "workspace:*",
     "@repo/settings": "workspace:*",
     "zod": "catalog:"
   },

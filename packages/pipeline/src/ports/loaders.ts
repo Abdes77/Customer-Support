@@ -3,27 +3,23 @@ import {
   type ConversationId,
   type LeadFieldValue,
   type LeadSnapshot,
-  PlaybookDocument,
-  type PlaybookSnapshot,
   RoutingDecision,
 } from "@repo/core";
 import {
-  and,
   type BusinessContext,
   businesses,
   desc,
   eq,
   leadFields,
   leads,
-  playbookVersions,
   routingDecisions,
   segments,
 } from "@repo/db";
 
 /**
- * Default loaders for the parts of the engine input other chunks own. They read the tables
- * C1 created; C5 (lead) and C6 (playbook with per-business overrides) replace them at the
- * composition root when they need more.
+ * Loaders for the parts of the engine input: the business profile, and the lead until C5
+ * replaces its loader at the composition root. The playbook loader (the segment's active
+ * version with the business's own sections) comes from `@repo/knowledge` (C6).
  */
 
 /** The business as the engine sees it, or null when it has no segment yet. */
@@ -63,29 +59,6 @@ export async function loadBusinessProfile(ctx: BusinessContext): Promise<Busines
       state: row.state,
       postalCode: row.postalCode,
     },
-  };
-}
-
-/** The segment's active playbook version, or null when there is none or it is not valid. */
-export async function defaultPlaybookLoader(
-  ctx: BusinessContext,
-  business: BusinessProfile,
-): Promise<PlaybookSnapshot | null> {
-  const [row] = await ctx.tx
-    .select({ version: playbookVersions.version, document: playbookVersions.document })
-    .from(playbookVersions)
-    .where(
-      and(eq(playbookVersions.segmentId, business.segment.id), eq(playbookVersions.isActive, true)),
-    )
-    .limit(1);
-  if (row === undefined) return null;
-  const document = PlaybookDocument.safeParse(row.document);
-  if (!document.success) return null;
-  return {
-    segmentId: business.segment.id,
-    segmentSlug: business.segment.slug,
-    version: row.version,
-    document: document.data,
   };
 }
 

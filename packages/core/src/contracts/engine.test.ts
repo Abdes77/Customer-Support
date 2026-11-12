@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { EngineAction, type EngineActionType } from "./engine";
 import { LeadSnapshot, RoutingDecision } from "./lead";
-import { PlaybookDocument } from "./knowledge";
+import {
+  formatPriceNorm,
+  PLAYBOOK_SECTIONS,
+  PlaybookDocument,
+  PlaybookJob,
+  PlaybookPriceNorm,
+  PlaybookSource,
+} from "./knowledge";
 import { isAgencyRole, ROLES } from "./tenancy";
 
 describe("EngineAction", () => {
@@ -101,7 +108,16 @@ describe("PlaybookDocument", () => {
       qualificationQuestions: [{ question: "How old is the roof?", why: "repair vs replace" }],
       objections: [{ objection: "Too expensive", response: "Explain financing" }],
       seasonalPatterns: ["Storm season drives emergency calls"],
-      priceNorms: [{ job: "Roof replacement", range: "$8,000-$20,000", notes: null }],
+      priceNorms: [
+        {
+          job: "Roof replacement",
+          lowUsd: 8000,
+          highUsd: 20_000,
+          unit: "per roof",
+          region: "US national",
+          notes: null,
+        },
+      ],
       permitsAndRegulations: ["Most cities require a re-roof permit"],
       vocabulary: [{ term: "square", definition: "100 square feet of roofing" }],
       sources: [{ title: "NRCA", url: "https://www.nrca.net/" }],
@@ -109,6 +125,46 @@ describe("PlaybookDocument", () => {
     expect(PlaybookDocument.parse(complete)).toEqual(complete);
     const { sources: _sources, ...withoutSources } = complete;
     expect(PlaybookDocument.safeParse(withoutSources).success).toBe(false);
+  });
+
+  it("stores a price norm as numbers, low end first", () => {
+    const norm = {
+      job: "Leak repair",
+      lowUsd: 400,
+      highUsd: 1500,
+      unit: "per job",
+      region: "US national",
+      notes: null,
+    };
+    expect(PlaybookPriceNorm.safeParse(norm).success).toBe(true);
+    expect(PlaybookPriceNorm.safeParse({ ...norm, lowUsd: 2000 }).success).toBe(false);
+    expect(PlaybookPriceNorm.safeParse({ ...norm, lowUsd: -1 }).success).toBe(false);
+    // The legacy free-text range is no longer a price norm.
+    expect(
+      PlaybookPriceNorm.safeParse({ job: "Leak repair", range: "$400 to $1,500", notes: null })
+        .success,
+    ).toBe(false);
+    expect(formatPriceNorm(norm)).toBe("$400 to $1,500 per job (US national)");
+    expect(formatPriceNorm({ ...norm, lowUsd: 89.5, highUsd: 89.5, unit: "per visit" })).toBe(
+      "about $89.50 per visit (US national)",
+    );
+    expect(formatPriceNorm({ ...norm, lowUsd: 9000, highUsd: 1_250_000 })).toBe(
+      "$9,000 to $1,250,000 per job (US national)",
+    );
+  });
+
+  it("refuses sources that are not web pages and texts that are too long", () => {
+    expect(PlaybookSource.safeParse({ title: "x", url: "javascript:alert(1)" }).success).toBe(
+      false,
+    );
+    expect(PlaybookSource.safeParse({ title: "x", url: "ftp://example.com/a" }).success).toBe(
+      false,
+    );
+    expect(PlaybookSource.safeParse({ title: "x", url: "https://example.com/a" }).success).toBe(
+      true,
+    );
+    expect(PlaybookJob.safeParse({ name: "Repair", scope: "x".repeat(1201) }).success).toBe(false);
+    expect(PLAYBOOK_SECTIONS).toEqual(Object.keys(PlaybookDocument.shape));
   });
 });
 

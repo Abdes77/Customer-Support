@@ -17,6 +17,7 @@
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/jobs": "workspace:*",
+    "@repo/knowledge": "workspace:*",
     "@repo/pipeline": "workspace:*",
     "@repo/settings": "workspace:*",
     "@supabase/ssr": "catalog:",

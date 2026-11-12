@@ -210,14 +210,80 @@ pipeline entry point, `ingest(parsed)`, which performs steps 4 to 6.
   in later turns' history), `end_conversation` (a mark in `conversations.metadata.ended`).
   The guard `conversation_ended` keeps the bot silent after `stop_replying` and lets the
   customer's next message reopen a conversation that had simply ended.
-- **Knowledge until C6:** `createKnowledgeRetriever()` in the pipeline reads
-  `knowledge_items` (all active facts in a stable order; full-text search for look-ups).
-  The engine keeps the categories of `knowledge.core_categories` in the cached business
+- **Knowledge and playbooks** come from `@repo/knowledge` since C6 (below). The engine keeps
+  the categories of `knowledge.core_categories` and the pinned facts in the cached business
   section. A segment without a playbook gets a built-in placeholder (no prices in it).
 - **Without a key.** On a developer machine without `ANTHROPIC_API_KEY` (or with
   `AI_MODEL_MODE=offline`) the same engine runs on a rule-based offline model, so the dev
   chat and browser tests have a bot to talk to. A hosted deployment without a key never
   uses it: turns fail with a configuration error and are dead-lettered.
+
+### As built (C6)
+
+`packages/knowledge` holds industry playbooks and business knowledge. Three entry points
+(`src/compose.ts`): `createKnowledgePorts` (what a reply turn reads; registered in the
+pipeline's domain composition), `createKnowledgeJobs` (registered in
+`apps/web/src/server/pipeline`) and `createKnowledgeServices` (what the admin panel calls:
+`getKnowledge()` in `apps/web/src/server/knowledge`).
+
+- **Playbook document.** `PlaybookDocument` in `@repo/core`: ten sections, every text with a
+  length limit. A price norm is numbers (`lowUsd`, `highUsd`, `unit`, `region`, `notes`).
+  Three levels of checking in `src/playbooks/document.ts`: the schema; the rules every
+  stored document follows (dollar figures only in the price norms, no duplicates); and
+  completeness (a minimum per section, at least three sources), required of a generated
+  document and reported as warnings for a hand edit.
+- **Generation** (`src/playbooks/generate.ts`, job `knowledge-playbook-generate`). One
+  append-only conversation with the model of `model.playbook.*`: three research steps with
+  the web search tool (called directly, `max_uses` from `knowledge.playbook_research_searches`,
+  a paused turn sent back as it is), then one call that ends in the strict client tool
+  `submit_playbook`. The document is checked in code and the problems go back as the tool
+  result (two corrections at most). A source must be a page the search returned in this
+  conversation: every result and citation is collected into a ledger, and a cited URL that
+  is not in it is refused (dropped on the last attempt, if the rest stands). Each model call
+  is its own job step and a `model_calls` row under the business being onboarded. The run is
+  a `playbook_generations` row (progress, outcome, one open run per segment). Without a key
+  on a developer machine the built-in document is stored with origin `starter`; a hosted
+  deployment without a key fails the run.
+- **Reuse.** `assignSegment()` puts a business into a segment (found by slug or created),
+  applies the settings preset of C2 the first time the segment is served, and then either
+  reuses the active playbook (no model call) or opens a generation run.
+- **Versions.** A stored version never changes: migration 0006 refuses every update of
+  `playbook_versions` except the `is_active` flag, on every connection, and records the
+  signed-in user as the author of what they insert. An edit, a generation and a rollback
+  each insert a new version and activate it under a per-segment advisory lock
+  (`savePlaybookVersion`, with an optional `baseVersion` against lost updates). `diffPlaybooks`
+  compares two documents entry by entry.
+- **Overrides.** A business replaces whole sections (`business_playbook_overrides`, not the
+  sources). `loadPlaybookForBusiness` merges them into the snapshot the engine gets; a
+  stored override that fails validation is skipped and logged, never obeyed.
+- **Price norms and the pricing settings.** The engine shows a playbook's price norms to the
+  model only when `pricing.disclosure` is not `never` and `pricing.use_playbook_ranges` is on
+  (`visiblePriceNorms` in `packages/ai/src/prompt/playbook-block.ts`), rendered from the
+  numbers; the output guard allows exactly the figures of those rendered lines under the
+  same condition (`playbookPriceAmounts`). No other section of a playbook may hold a dollar
+  figure, so hiding the price norms hides every price of the playbook.
+- **Facts.** `knowledge_items`: category, title, text, source (`manual`, `csv_import`, `api`
+  or the address of a web page), last-updated time, pinned, archived. `MAX_ACTIVE_FACTS`
+  (300) per business.
+- **Import** (`src/import`). A hand-written RFC 4180 reader, a column mapping (wide: one
+  column per kind of fact; long: category, title and text columns; a suggestion from the
+  headers), row-level validation whose problems name row and column and never repeat a
+  cell. Facts are upserted by a stable key (`import:<category>:<title>`), so importing again
+  updates in place; a fact a person edited or archived stays as it is; `replace` mode
+  archives imported facts the new data no longer has. One `import_runs` row per import. The
+  same code serves the admin panel's upload and the API: `POST /api/v1/knowledge/import`
+  (JSON), `POST /api/v1/knowledge/import/csv`, `GET /api/v1/knowledge/imports/{id}`, with a
+  bearer API key whose tenant decides what it may write (`src/import/http.ts`).
+- **Website** (`src/crawl`, job `knowledge-import`, behind `knowledge.website_crawl`). The
+  guarded fetcher of §3, robots.txt, the business's own host only, most promising pages
+  first, `knowledge.crawl_max_pages`. Hidden text is not read. Facts are extracted by the
+  model of `model.knowledge_extraction.*` from the page placed as data; a fact is kept only
+  when its quote is on the page, it does not read like an instruction and every dollar
+  figure in it is on the page. Website facts never replace an imported or hand-written fact
+  of the same category and title and are listed after them.
+- **Retrieval** (`src/knowledge/retriever.ts`). `coreFacts`: every active fact in a stable
+  order. `retrieve`: PostgreSQL full-text search over title and text, plus the kinds of fact
+  a message asks about ("can I pay monthly" brings the financing facts).
 
 ### Invariants (each needs a test in the chunk that owns it)
 
@@ -261,7 +327,8 @@ What signed-in users may do:
 - **Agency staff** read everything in their agency. They write configuration (businesses,
   knowledge, playbooks, message templates, notes, business-scope settings); `agency_admin`
   additionally manages memberships, API keys, agency-wide and segment settings, deletes, and
-  reads the audit log.
+  reads the audit log. A playbook version can be added and switched on or off, never changed
+  or deleted (migration 0006); playbook generation runs are written by the system scope only.
 - **Client users** only read, only their own business, only while `businesses.client_portal_enabled`
   is true (the per-business switch for client logins, a column because RLS reads it), and only
   the customer-facing tables: contacts, conversations, messages, attachments, takeover locks,
@@ -327,7 +394,7 @@ on a private channel bound to their signed session and can read no table.
 | Webhook spoofing and replay | Signature over raw bytes, constant-time compare, provider timestamp tolerance where one exists, idempotent storage keyed by provider message id. |
 | Secret leakage | Application-layer encryption, redacting logger, no secrets or message text in job payloads, secrets never serialized to the browser. |
 | Personal data in logs | The logger redacts message bodies, contact details and credentials by field name; full model inputs and outputs go to a tenant-scoped table with a retention setting, not to logs. |
-| SSRF from the website crawler and media downloads | One shared fetcher: http(s) only, DNS resolved and private, loopback and link-local ranges refused (also after redirects), size and time limits. |
+| SSRF from the website crawler and media downloads | One guarded fetcher (`createSafeFetcher` in `@repo/knowledge`, C6): http(s) only, no credentials, default ports, DNS resolved once and the connection pinned to the checked address, private, loopback, link-local and reserved ranges refused (IPv6 forms that wrap an IPv4 address included), every redirect checked again, size, time and content-type limits. Media downloads go through the channel adapters to the providers' own hosts. |
 | Widget abuse | Per-business allowed origins, signed visitor sessions, rate limits per IP, session and business, upload type and size limits. |
 | Runaway model spend | Debounce, one turn at a time per conversation, per-contact and per-business rate limits and daily spend caps checked before every model call. |
 
@@ -369,7 +436,8 @@ Rules for every function:
 | `email-imap-poll` | cron, every minute | one step per inbox, limit per inbox | C11 |
 | `email-watch-renew` | cron | renews Gmail watches and Graph subscriptions before expiry | C11 |
 | `integrations-sync` | `lead.*` | per connection, idempotency key, backoff | C14 |
-| `knowledge-playbook-generate`, `knowledge-import` | admin action | long-running, progress stored | C6 |
+| `knowledge-playbook-generate` | `playbook.generation_requested` | limit 1 per segment; one step per model call; progress on `playbook_generations` | C6 |
+| `knowledge-import` | `knowledge.import_requested` | website crawl; limit 1 per business; one step per page; progress on `import_runs` | C6 |
 | `scheduling-reminders` | booking created | `sleepUntil`, cancelled on reschedule or cancel | C12 |
 | `retention-purge` | cron, daily | deletes per the data-retention settings | C17 |
 
@@ -387,7 +455,8 @@ Inngest's `NonRetriableError`, `ExternalServiceError.retryAfterSeconds` a `Retry
 Event names reserved so far are the keys of `EVENT_CATALOG`: `message.received`,
 `message.send_requested`, `message.send_failed`, `conversation.takeover_started`,
 `conversation.takeover_released`, `lead.qualified`, `lead.meeting_requested`, `lead.handoff`,
-`lead.disqualified`, `lead.emergency`. A chunk that needs a new cross-package event adds its
+`lead.disqualified`, `lead.emergency`, `playbook.generation_requested`,
+`knowledge.import_requested`. A chunk that needs a new cross-package event adds its
 schema under `packages/core/src/events` and registers it in the catalogue.
 
 Vercel limits one function invocation, so one Inngest step must finish within the route's
@@ -423,7 +492,7 @@ after it; at most four breakpoints)
 | Block | Content | Changes when | Breakpoint |
 | --- | --- | --- | --- |
 | Tools + core system prompt | The versioned prompt file and the tool list, sorted by name | A prompt release | 1 |
-| Segment playbook | The playbook version in force | The playbook is edited | 2 |
+| Segment playbook | The playbook version in force, with the business's own sections, and its price norms only when the pricing settings allow them | The playbook, an override or those two pricing settings are edited | 2 |
 | Business block | Profile, core knowledge facts, settings rendered as instructions | Knowledge or settings are edited | 3 |
 | Conversation | History as plain text turns | Every turn | 4 (last history block) |
 | Newest messages and turn context | The pending customer messages (`user`), then the turn context as a `role: "system"` message: current time, channel limits, hours state, lead state, routing decision, retrieved facts, what the turn is for | Every request | none: always last |
@@ -467,6 +536,20 @@ reads from the cache.
   replaced by a fixed message and the conversation is handed to a person.
 - `src/dry-run`: `dryRunTurn()` and `createDryRunConversation()` for the evaluation
   harness; `placeholderRouting()` stands in for lead routing until C5.
+
+**As built (C6), in `packages/knowledge`:** two more kinds of request go through `callModel`.
+
+- Playbook generation (`purpose: "playbook"`, prompt `playbook-v1`). Tools: the web search
+  server tool, called directly (`web_search_20260209` with `allowed_callers: ["direct"]`;
+  `web_search_20250305` for models from before it), and the strict client tool
+  `submit_playbook`. The same tools and system prompt in every request; messages are only
+  ever appended; a `pause_turn` response is sent back as it is; a tool result travels alone
+  in its user message (the API may be holding a search it deferred); `refusal` fails the run,
+  `max_tokens` is asked again once with twice the room. Breakpoints: the system prompt and
+  the prompts of the later steps, one-hour lifetime (a step can take minutes). Structured
+  outputs are not used: they cannot be combined with citations, which web search always adds.
+- Fact extraction from a web page (`purpose: "knowledge_extraction"`, prompt `extract-v1`):
+  one strict tool, the page as data in the user turn, a fixed cached system prompt.
 
 **History** is rebuilt from the database each turn as plain text: consecutive messages by the
 same author merge into one turn, photos appear as their stored analysis text, and thinking
@@ -622,6 +705,17 @@ decryption, idempotency keys, retries and the integration event log.
 Calendars and alert channels get their own small interfaces, defined by their owners (C12,
 C13) inside their packages, since no other chunk implements them.
 
+### Knowledge and playbooks (`contracts/knowledge.ts`, owner C6)
+
+- `KnowledgeRetriever` = `coreFacts(businessId)` (stable order until the knowledge is
+  edited) and `retrieve({ businessId, text, categories?, limit? })`. A `KnowledgeFact` may
+  be `pinned`: the engine then keeps it in every prompt whatever its category.
+- `PlaybookDocument` and its section schemas (`PLAYBOOK_SECTIONS`, `PLAYBOOK_SECTION_SCHEMAS`),
+  `PlaybookPriceNorm` (numbers; `formatPriceNorm` is the one way it is put into words) and
+  `PlaybookSnapshot` (`overriddenSections` says which sections are the business's own).
+- Events (`events/knowledge-events.ts`): `playbook.generation_requested` and
+  `knowledge.import_requested`, ids only.
+
 ### Lead events (`events/lead-events.ts`, owner C5)
 
 `lead.qualified`, `lead.meeting_requested`, `lead.handoff`, `lead.disqualified`,
@@ -639,7 +733,7 @@ never edited). Expected tables, by area:
 | Area | Tables |
 | --- | --- |
 | Tenancy and auth | agencies, users, agency memberships, businesses, business memberships, API keys (hashed) |
-| Playbooks and knowledge | segments, playbook versions, business playbook overrides, knowledge items, import runs |
+| Playbooks and knowledge | segments, playbook versions (immutable), playbook generations (C6), business playbook overrides, knowledge items (`import_key` for facts from imports and crawls), import runs |
 | Settings | setting values per scope, setting versions |
 | Channels | channel connections, channel connection secrets (encrypted credentials), message templates, widget sessions |
 | Conversations | contacts, contact identities, conversations (turn lease, last inbound time, `handled_through_seq` watermark), messages (unique provider id, sequence, status, trace id), attachments, takeover locks, internal notes, conversation turns (one row per reply turn, C3) |

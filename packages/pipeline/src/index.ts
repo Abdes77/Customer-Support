@@ -36,7 +36,7 @@ export {
   defaultActionOutcome,
 } from "./actions";
 export { createEchoEngine, ECHO_PROMPT_VERSION } from "./echo-engine";
-export { createKnowledgeRetriever, emptyKnowledgeRetriever } from "./ports/knowledge";
+export { emptyKnowledgeRetriever } from "./ports/knowledge";
 export { endedConversationGuard } from "./composition/guards";
 export {
   analyzePhotosHandler,
@@ -45,7 +45,7 @@ export {
   type EngineHandlerDeps,
   requestPhotoHandler,
 } from "./composition/handlers";
-export { defaultLeadLoader, defaultPlaybookLoader, loadBusinessProfile } from "./ports/loaders";
+export { defaultLeadLoader, loadBusinessProfile } from "./ports/loaders";
 export { createModelCallSink } from "./ports/model-calls";
 export { type IngestResult, isReplyableKind } from "./ingest/ingest";
 export { type WebhookResponse } from "./ingest/webhook";

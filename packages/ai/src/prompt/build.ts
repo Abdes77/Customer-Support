@@ -21,7 +21,8 @@ import { renderTurnContext } from "./turn-context";
  *
  *   tools (sorted)                       \
  *   system[0] core prompt        cache 1  } the same for every business
- *   system[1] playbook           cache 2    the same for every business of the segment
+ *   system[1] playbook           cache 2    the same for the businesses of the segment
+ *                                           that share its pricing rules (price norms)
  *   system[2] business section   cache 3    the same until the business is edited
  *   messages  history            cache 4    grows by one turn at a time
  *   messages  newest customer messages      never cached
@@ -70,7 +71,7 @@ export function buildSystemBlocks(
     { type: "text", text: CURRENT_REPLY_PROMPT.text, cache_control: cache },
     {
       type: "text",
-      text: renderPlaybookBlock(prompt.input.playbook, prompt.input.business),
+      text: renderPlaybookBlock(prompt.input.playbook, prompt.input.business, prompt.values),
       cache_control: cache,
     },
     {

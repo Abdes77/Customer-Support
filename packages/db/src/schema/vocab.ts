@@ -7,8 +7,21 @@
 export const BUSINESS_STATUSES = ["onboarding", "active", "paused", "archived"] as const;
 export type BusinessStatus = (typeof BUSINESS_STATUSES)[number];
 
-export const PLAYBOOK_ORIGINS = ["generated", "manual", "rollback", "import"] as const;
+/**
+ * How a playbook version came to be: written by the model from web research ("generated"),
+ * edited by a person ("manual"), a copy of an earlier version ("rollback"), loaded from a
+ * file ("import"), or the built-in document used where no model is configured ("starter").
+ */
+export const PLAYBOOK_ORIGINS = ["generated", "manual", "rollback", "import", "starter"] as const;
 export type PlaybookOrigin = (typeof PLAYBOOK_ORIGINS)[number];
+
+/** The life of one playbook generation run (C6). "pending" and "running" are open. */
+export const PLAYBOOK_GENERATION_STATUSES = ["pending", "running", "succeeded", "failed"] as const;
+export type PlaybookGenerationStatus = (typeof PLAYBOOK_GENERATION_STATUSES)[number];
+
+/** Why a playbook generation was asked for. */
+export const PLAYBOOK_GENERATION_REASONS = ["onboarding", "manual"] as const;
+export type PlaybookGenerationReason = (typeof PLAYBOOK_GENERATION_REASONS)[number];
 
 export const KNOWLEDGE_ITEM_STATUSES = ["active", "archived"] as const;
 export type KnowledgeItemStatus = (typeof KNOWLEDGE_ITEM_STATUSES)[number];

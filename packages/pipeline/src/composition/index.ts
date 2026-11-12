@@ -2,11 +2,11 @@ import { createEngine, createModelClientFromEnv, type ModelClient } from "@repo/
 import type { ConversationEngine, KnowledgeRetriever, Logger } from "@repo/core";
 import type { BusinessTenant, Database } from "@repo/db";
 import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
+import { createKnowledgePorts } from "@repo/knowledge";
 
 import { type ActionHandlerRegistry, createActionHandlerRegistry } from "../actions";
 import type { TurnGuard, TurnLoaders } from "../deps";
-import { createKnowledgeRetriever } from "../ports/knowledge";
-import { defaultLeadLoader, defaultPlaybookLoader } from "../ports/loaders";
+import { defaultLeadLoader } from "../ports/loaders";
 import { endedConversationGuard } from "./guards";
 import { engineActionHandlers } from "./handlers";
 
@@ -18,13 +18,14 @@ import { engineActionHandlers } from "./handlers";
  *
  * Registered so far:
  * - C4: the conversation engine from @repo/ai; handlers for `request_photo`,
- *   `analyze_photos` and `end_conversation`; the guard for conversations the bot ended; a
- *   knowledge retriever over `knowledge_items` until C6.
+ *   `analyze_photos` and `end_conversation`; the guard for conversations the bot ended.
+ * - C6: the knowledge retriever (full-text search plus the kinds of fact a message asks
+ *   about) and the playbook loader (the segment's active version with the business's own
+ *   sections), both from @repo/knowledge.
  *
  * Later chunks register here, and only here:
  * - C5: handlers for `update_lead_fields` and `mark_not_a_fit`; the lead loader if it needs
  *   more than the tables.
- * - C6: the real `KnowledgeRetriever`; the playbook loader with per-business overrides.
  * - C12: handlers for `offer_times` and `book_meeting`.
  * - C13: handlers for `schedule_follow_up`, `escalate_emergency` and `handoff_to_human`;
  *   takeover guards. C17: rate-limit and spend-cap guards.
@@ -60,6 +61,7 @@ export function createDomainComposition(options: DomainCompositionOptions): Doma
   // A turn renews its lease right before it calls the engine (generate step), so the engine
   // may use the lease minus a margin; one model call gets at most half of that.
   const turnBudgetMs = Math.max(20_000, leaseMs - LEASE_MARGIN_MS);
+  const knowledge = createKnowledgePorts({ db, logger });
   const engine = createEngine({
     model,
     turnBudgetMs,
@@ -76,8 +78,8 @@ export function createDomainComposition(options: DomainCompositionOptions): Doma
         logger: logger.child({ component: "engine-handlers" }),
       }),
     ),
-    knowledge: createKnowledgeRetriever({ db }),
-    loaders: { playbook: defaultPlaybookLoader, lead: defaultLeadLoader },
+    knowledge: knowledge.retriever,
+    loaders: { playbook: knowledge.playbookLoader, lead: defaultLeadLoader },
     guards: [endedConversationGuard],
   };
 }

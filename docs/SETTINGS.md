@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-341 settings in 22 categories.
+342 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -151,7 +151,7 @@ placeholder a setting does not list is a validation error.
 | [Scheduling](#scheduling) | 27 | Calendars, meeting slots, booking rules and reminders. |
 | [Channels](#channels) | 36 | Options of the website widget, WhatsApp, Instagram, Messenger and email. |
 | [CRM and webhooks](#integrations) | 16 | When leads are pushed to a CRM, field mapping and outgoing webhooks. |
-| [Knowledge](#knowledge) | 6 | How business knowledge is gathered and used in replies. |
+| [Knowledge](#knowledge) | 7 | How business knowledge is gathered and used in replies. |
 | [Client portal](#client_portal) | 9 | What the business's own users may see and do when they have a login. |
 | [Model and effort](#model) | 16 | Which Claude model does each task, and how hard it thinks. |
 | [Limits and spend caps](#limits) | 11 | Rate limits and model-spend caps that stop floods and runaway cost. |
@@ -1458,6 +1458,7 @@ How business knowledge is gathered and used in replies.
 | `knowledge.website_crawl` | **Read the business website.** Facts are also collected from the business's own website. Imported and hand-edited facts always win over what the website says. | yes / no | `false` | all |  |
 | `knowledge.crawl_max_pages` | **Website pages to read.** The most pages read from the website in one pass. | whole number, 1 to 200 pages | `25` | all |  |
 | `knowledge.stale_after_days` | **Flag facts older than.** Facts that have not been confirmed for this long are flagged for review in the knowledge editor. The bot keeps using them. | whole number, 30 to 1095 days, or empty (never flag) | `365` | all |  |
+| `knowledge.playbook_research_searches` | **Web searches per research step.** A segment's playbook is researched on the web in three steps before it is written. This is the most searches the model may run in each step. More searches take longer and cost more. | whole number, 1 to 15 searches | `5` | global, segment |  |
 
 <details><summary><code>knowledge.core_categories</code></summary>
 

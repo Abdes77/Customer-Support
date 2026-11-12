@@ -55,6 +55,20 @@ const samples: { [TName in keyof typeof EVENT_CATALOG]: unknown } = {
   "lead.handoff": { ...leadBase, routing: "contact_later", trigger: "routing", urgency: "normal" },
   "lead.disqualified": { ...leadBase, reasonCode: "out_of_area" },
   "lead.emergency": { ...leadBase, emergencyClass: "gas_leak" },
+  "playbook.generation_requested": {
+    traceId: ids.traceId,
+    agencyId: ids.agencyId,
+    segmentId: "4b6d8f0a-2c4e-4a6c-8e0a-9d1f3b5c7e09",
+    generationId: "6c8e0a2c-4e6a-4c8e-a0c2-0e2a4c6e8a10",
+    // Null when an admin asked for the playbook outside an onboarding.
+    businessId: null,
+  },
+  "knowledge.import_requested": {
+    traceId: ids.traceId,
+    agencyId: ids.agencyId,
+    businessId: ids.businessId,
+    importRunId: "0a2c4e6a-8c0e-4e2a-a4e6-2a4c6e8a0c11",
+  },
 };
 
 describe("event catalogue", () => {

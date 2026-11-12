@@ -25,6 +25,11 @@ import { renderFingerprint } from "./fingerprint";
  */
 const RENDER_FINGERPRINTS: Readonly<Record<number, string>> = {
   1: "846fd63b96ef65accf22276b91bb6f563512670ff7caf10ff1df849a5bfcc822",
+  // r2 (C6): a playbook's price norms are rendered from numbers and shown only when the
+  // pricing settings allow playbook ranges; pinned facts join the business section. The
+  // sample request has neither (default settings, no pinned fact), so its hash is r1's;
+  // `playbook-block.test.ts` pins the new rendering.
+  2: "846fd63b96ef65accf22276b91bb6f563512670ff7caf10ff1df849a5bfcc822",
 };
 
 function build(

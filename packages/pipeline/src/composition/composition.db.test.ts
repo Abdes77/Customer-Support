@@ -23,9 +23,14 @@ import {
   knowledgeItems,
   modelCalls,
 } from "@repo/db";
+import {
+  createKnowledgeRetriever,
+  savePlaybookVersion,
+  setPlaybookOverride,
+} from "@repo/knowledge";
+import { ROOFING_PLAYBOOK } from "@repo/knowledge/testing";
 import { loadSettings } from "@repo/settings/server";
 
-import { createKnowledgeRetriever, searchQuery } from "../ports/knowledge";
 import { loadBusinessProfile } from "../ports/loaders";
 import { createHarness, type Harness, message, type TestTenant } from "../testing/harness";
 import { createDomainComposition } from "./index";
@@ -234,23 +239,26 @@ describe("a conversation through the pipeline and the real engine", () => {
     ]);
     const retriever = createKnowledgeRetriever({ db: h.t.db });
     const core = await retriever.coreFacts(tenant.tenant.businessId);
-    expect(core.map((fact) => fact.title)).toEqual(["Metal roofs", "Services", "Warranty"]);
+    // The product's category order (services, warranties, FAQ), not the alphabet's.
+    expect(core.map((fact) => fact.title)).toEqual(["Services", "Warranty", "Metal roofs"]);
     const found = await retriever.retrieve({
       businessId: tenant.tenant.businessId,
       text: "Do you do metal roofs? What's the warranty?",
       limit: 5,
     });
-    // Best match first; "roofs" also finds the services fact, which is fine.
-    expect(found[0]?.title).toBe("Metal roofs");
-    expect(found.map((fact) => fact.title)).toEqual(
-      expect.arrayContaining(["Metal roofs", "Warranty"]),
-    );
+    // The two facts the message is about lead: one matches its words best, the other is the
+    // kind of fact it asks for. "roofs" also finds the services fact, which is fine.
+    expect(
+      found
+        .slice(0, 2)
+        .map((fact) => fact.title)
+        .sort(),
+    ).toEqual(["Metal roofs", "Warranty"]);
     expect(JSON.stringify([core, found])).not.toContain("SECRET");
     expect(JSON.stringify([core, found])).not.toContain("Chimney");
     expect(
       await retriever.retrieve({ businessId: tenant.tenant.businessId, text: "?!", limit: 5 }),
     ).toEqual([]);
-    expect(searchQuery("Do you do METAL roofs?!")).toBe("you | metal | roofs");
 
     // Through the pipeline: core categories in the business section, the rest per turn.
     const before = model.requests.length;
@@ -263,6 +271,66 @@ describe("a conversation through the pipeline and the real engine", () => {
     expect(lastText(request?.messages.at(-1))).toContain(
       "- [faq] Metal roofs: We install standing-seam metal roofs.",
     );
+  });
+
+  it("gives the engine the segment's playbook with the business's own sections, and price norms only as the pricing settings allow", async () => {
+    const tenant = await h.newTenant();
+    const sibling = await h.newTenant();
+    const playbookOf = async (target: TestTenant, customer: string) => {
+      const before = model.requests.length;
+      model.push(scriptedResponse([text("Thanks, noted.")]));
+      await h.deliver(target, [message(customer)]);
+      await h.idle();
+      return model.requests[before]?.system[1]?.text ?? "";
+    };
+
+    // No playbook stored yet: the engine's built-in document for the trade.
+    expect(await playbookOf(tenant, "hello")).toContain("roofing (built-in placeholder)");
+
+    const { agencyId, businessId } = tenant.tenant;
+    const profile = await h.t.db.forBusiness(businessId).run((ctx) => loadBusinessProfile(ctx));
+    await h.t.db.forAgency(agencyId).run((ctx) =>
+      savePlaybookVersion(ctx, {
+        segmentId: profile!.segment.id,
+        document: ROOFING_PLAYBOOK,
+        origin: "generated",
+        requireComplete: true,
+      }),
+    );
+    const stored = await playbookOf(tenant, "my roof leaks");
+    expect(stored).toContain('source="roofing v1"');
+    expect(stored).toContain("- Storm damage inspection and repair:");
+    expect(stored).toContain('"Can\'t you just patch it?"');
+    // Default settings never disclose prices: the price norms are not in the prompt at all.
+    expect(stored).not.toContain("Price norms");
+    expect(stored).not.toContain("$9,500");
+    expect(stored).not.toContain("24,000");
+
+    // The business allows industry ranges: now, and only now, the figures are shown.
+    await h.setSettings(tenant.tenant, {
+      "pricing.disclosure": "ranges",
+      "pricing.use_playbook_ranges": true,
+    });
+    const priced = await playbookOf(tenant, "what does a new roof cost");
+    expect(priced).toContain(
+      "- Asphalt shingle roof replacement: $9,500 to $24,000 per roof (Mountain West)",
+    );
+    // Another agency's business of the same trade has its own segment and no playbook.
+    expect(await playbookOf(sibling, "hi")).toContain("built-in placeholder");
+
+    // The business replaces one section; the rest still follows the segment.
+    await h.t.db.forBusiness(businessId).run((ctx) =>
+      setPlaybookOverride(ctx, {
+        tenant: tenant.tenant,
+        section: "objections",
+        content: [{ objection: "Are you local?", response: "Yes, the crew is based in Lakewood." }],
+      }),
+    );
+    const own = await playbookOf(tenant, "are you local");
+    expect(own).toContain("roofing v1, with this business's own sections");
+    expect(own).toContain('"Are you local?": Yes, the crew is based in Lakewood.');
+    expect(own).not.toContain("Can't you just patch it?");
+    expect(own).toContain("- Storm damage inspection and repair:");
   });
 });
 

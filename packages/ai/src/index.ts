@@ -83,7 +83,13 @@ export {
 } from "./prompt/core";
 export { type BuiltPrompt, buildPrompt, buildSystemBlocks, withOperatorNote } from "./prompt/build";
 export { allowedLinkDomains, renderBusinessBlock } from "./prompt/business-block";
-export { effectivePlaybook, renderPlaybookBlock } from "./prompt/playbook-block";
+export {
+  effectivePlaybook,
+  playbookPriceAmounts,
+  playbookPricesAllowed,
+  renderPlaybookBlock,
+  visiblePriceNorms,
+} from "./prompt/playbook-block";
 export { PLACEHOLDER_PLAYBOOK_SLUGS, placeholderPlaybook } from "./prompt/placeholder-playbooks";
 export { renderTurnContext } from "./prompt/turn-context";
 export { ENGINE_TOOLS, type EngineTool, findEngineTool, modelTools } from "./tools/definitions";

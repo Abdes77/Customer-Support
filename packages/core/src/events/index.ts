@@ -1,8 +1,10 @@
 import type { z } from "zod";
 
+import { KNOWLEDGE_EVENTS } from "./knowledge-events";
 import { LEAD_EVENTS } from "./lead-events";
 import { PIPELINE_EVENTS } from "./pipeline-events";
 
+export * from "./knowledge-events";
 export * from "./lead-events";
 export * from "./pipeline-events";
 
@@ -14,6 +16,7 @@ export * from "./pipeline-events";
 export const EVENT_CATALOG = {
   ...PIPELINE_EVENTS,
   ...LEAD_EVENTS,
+  ...KNOWLEDGE_EVENTS,
 } as const satisfies Record<string, z.ZodType>;
 
 export type EventName = keyof typeof EVENT_CATALOG;

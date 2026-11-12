@@ -116,7 +116,16 @@ const SAMPLE_PLAYBOOK = {
   qualificationQuestions: [{ question: "What is going on?", why: "Scope" }],
   objections: [{ objection: "Too expensive", response: "We can talk through options." }],
   seasonalPatterns: ["Busy after storms"],
-  priceNorms: [{ job: "Repair", range: "$300 to $1,500", notes: null }],
+  priceNorms: [
+    {
+      job: "Repair",
+      lowUsd: 300,
+      highUsd: 1500,
+      unit: "per job",
+      region: "US national",
+      notes: null,
+    },
+  ],
   permitsAndRegulations: ["Permits vary by city"],
   vocabulary: [{ term: "flashing", definition: "Metal that seals roof joints" }],
   sources: [{ title: "Example source", url: "https://example.com/source" }],
@@ -158,8 +167,27 @@ export const ISOLATION_MATRIX: readonly MatrixEntry[] = [
       document: SAMPLE_PLAYBOOK,
       createdBy: r.staffUserId,
     }),
-    change: { column: "change_note", value: "Edited" },
-    user: STAFF_MANAGED_ADMIN_DELETE,
+    // Versions are immutable (migration 0006): the activation flag is the one thing an
+    // update may change, and nobody deletes a version as a signed-in user.
+    change: { column: "is_active", value: false },
+    user: { read: "staff", insert: "staff", update: "staff" },
+    system: "read_write",
+  },
+  {
+    name: "playbook_generations",
+    table: tables.playbookGenerations,
+    kind: "agency",
+    row: (r) => ({
+      agencyId: r.tenant.agencyId,
+      segmentId: r.segmentId,
+      // Never an open run: a segment has at most one of those.
+      status: "succeeded",
+      reason: "manual",
+      requestedBy: r.staffUserId,
+      traceId: randomUUID(),
+    }),
+    change: { column: "error_message", value: "Stopped" },
+    user: READ_ONLY_FOR_USERS,
     system: "read_write",
   },
 

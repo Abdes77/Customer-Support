@@ -174,11 +174,11 @@ export function createEngine(options: EngineOptions): ConversationEngine {
       return finish("no_reply", []);
     }
 
-    // Only the categories the business keeps "in every reply" go into the cached section;
-    // everything else is looked up per turn.
+    // Only the categories the business keeps "in every reply", and the facts the agency
+    // pinned, go into the cached section; everything else is looked up per turn.
     const coreCategories = new Set<string>(values["knowledge.core_categories"]);
-    const coreFacts = (await ports.knowledge.coreFacts(input.business.id)).filter((fact) =>
-      coreCategories.has(fact.category),
+    const coreFacts = (await ports.knowledge.coreFacts(input.business.id)).filter(
+      (fact) => fact.pinned === true || coreCategories.has(fact.category),
     );
     let retrieved: readonly KnowledgeFact[] = [];
     if (situation.customerText.trim().length > 0) {

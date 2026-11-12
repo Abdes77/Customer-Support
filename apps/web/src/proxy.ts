@@ -13,8 +13,9 @@ export function proxy(request: NextRequest): Promise<NextResponse> {
 
 export const config = {
   // Everything except static files and the machine-to-machine endpoints, which carry no
-  // user session: webhooks, the Inngest endpoint, health checks and the public widget API.
+  // user session: webhooks, the Inngest endpoint, health checks, the public widget API and
+  // the import API (authenticated by an API key).
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/inngest|api/health|api/widget|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|map|txt)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/inngest|api/health|api/widget|api/v1|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|map|txt)$).*)",
   ],
 };

@@ -93,6 +93,7 @@ describe("migrations on an empty database", () => {
       "message_templates",
       "messages",
       "model_calls",
+      "playbook_generations",
       "playbook_versions",
       "routing_decisions",
       "scheduled_jobs",

@@ -10,7 +10,7 @@ import { createTestDatabase, type TestDatabase } from "@repo/db/testing";
 import { createLocalJobRunner, jobsModeFromEnv, type LocalJobRunner } from "@repo/jobs";
 import { applySettingChanges } from "@repo/settings/server";
 
-import { buildServerPipeline, type ServerPipeline } from "./index";
+import { buildServerPipeline, inngestFunctions, type ServerPipeline } from "./index";
 import { createWebhookHandler } from "./webhook-route";
 
 const local: DeploymentInfo = { environment: "local", commitSha: null, region: null };
@@ -215,6 +215,11 @@ describe("composition", () => {
       "pipeline-reply",
       "pipeline-send",
       "pipeline-sweeper",
+      // C6: playbook generation and the website crawl.
+      "knowledge-playbook-generate",
+      "knowledge-import",
     ]);
+    // Every definition converts to an Inngest function that /api/inngest can serve.
+    expect(inngestFunctions(withInngest)).toHaveLength(withInngest.jobs.length);
   });
 });

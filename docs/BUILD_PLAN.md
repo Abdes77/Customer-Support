@@ -124,6 +124,12 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 - **Must deliver:** the real `KnowledgeRetriever` registered in the pipeline composition;
   playbook generate, reuse, version, diff, roll back and per-business override functions;
   CSV and API import with mapping and validation; the crawler behind the safe fetcher.
+- **Delivered, for C15, C16 and C7:** `getKnowledge()` in `apps/web/src/server/knowledge`
+  gives `playbooks` (segments, versions, `diffVersions`, `saveEdit`, `rollback`, `regenerate`,
+  overrides, `assignSegment` for the onboarding wizard), `knowledge` (facts, `importCsv`,
+  `crawlWebsite`, import runs) and `apiKeys`; `previewCsv` and `suggestMapping` draw the
+  import's mapping screen; `@repo/knowledge/testing` has complete playbooks and the scripted
+  model responses that generate them. ARCHITECTURE §2 "As built (C6)" has the rest.
 
 ### C5 · Lead scoring, reports and routing
 

@@ -18,6 +18,11 @@ import {
   type LocalJobRunner,
   toInngestFunctions,
 } from "@repo/jobs";
+import {
+  createKnowledgeJobs,
+  createKnowledgeServices,
+  type KnowledgeServices,
+} from "@repo/knowledge";
 import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipeline";
 
 /**
@@ -29,6 +34,9 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
  * Later chunks register here: their channel adapters (C8 to C11) in `adapters` and their job
  * definitions (C11 to C14, C17) next to the pipeline's in `jobs`. Domain parts (engine, action
  * handlers, knowledge) are registered in `packages/pipeline/src/composition` instead.
+ *
+ * Registered so far besides the pipeline's own jobs: `knowledge-playbook-generate` and
+ * `knowledge-import` (C6), and the knowledge services the admin panel and the import API use.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -37,6 +45,10 @@ export interface ServerPipeline {
   readonly modelMode: ModelMode;
   /** Every durable function of the app. */
   readonly jobs: readonly JobDefinition[];
+  /** Where events go: Inngest, the in-process runner, or an error when neither is configured. */
+  readonly events: EventSender;
+  /** Playbooks, business knowledge and API keys, for the admin panel and the import API (C6). */
+  readonly knowledge: KnowledgeServices;
   /** Set when jobs run on Inngest (Cloud or the dev server); /api/inngest serves them. */
   readonly inngest: InngestClient | null;
   /** Set when jobs run in this process (local development without Inngest). */
@@ -107,7 +119,12 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   const modelMode = modelModeFromEnv(env, deployment);
   const model = createModelClientFromEnv({ env, deployment, logger });
   const pipeline = createPipeline({ db, adapters, events, logger, model });
-  const jobs = [...pipeline.jobs()];
+  // Without a key on a developer machine a playbook is the built-in starter document and
+  // website facts come from structured data only; a hosted deployment without a key fails
+  // those jobs instead (the model client throws a configuration error).
+  const knowledgeJobs = createKnowledgeJobs({ db, model, modelMode, logger });
+  const knowledge = createKnowledgeServices({ db, events, logger });
+  const jobs = [...pipeline.jobs(), ...knowledgeJobs];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
     jobs: mode,
@@ -115,7 +132,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     channels: adapters.channels(),
     testChannel: testChannel !== null,
   });
-  return { pipeline, mode, modelMode, jobs, inngest, runner, testChannel };
+  return { pipeline, mode, modelMode, jobs, events, knowledge, inngest, runner, testChannel };
 }
 
 // One per process, kept on globalThis so a hot reload of the dev server does not start a

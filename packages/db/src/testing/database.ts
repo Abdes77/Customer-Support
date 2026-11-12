@@ -151,8 +151,32 @@ async function ensureReachable(url: string): Promise<void> {
   );
 }
 
+const sqlState = (error: unknown) => (error as { code?: unknown } | null)?.code;
+
+/**
+ * Drops a test database. WITH (FORCE) ends connections that a test left open, but it refuses
+ * ("permission denied to terminate process", 42501) when an autovacuum worker happens to be
+ * in the database: the worker is not this role's process. A plain DROP asks autovacuum
+ * workers to stop and waits for them, so that is the fallback; a few rounds cover a session
+ * that appears in between.
+ */
 async function dropDatabase(sql: ReturnType<typeof postgres>, name: string): Promise<void> {
-  await sql.unsafe(`drop database if exists "${name}" with (force)`);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await sql.unsafe(`drop database if exists "${name}" with (force)`);
+      return;
+    } catch (error) {
+      if (sqlState(error) !== "42501" || attempt >= 4) throw error;
+    }
+    try {
+      await sql.unsafe(`drop database if exists "${name}"`);
+      return;
+    } catch (error) {
+      // 55006: still in use by another session; try again with FORCE.
+      if (sqlState(error) !== "55006") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+  }
 }
 
 async function ensureTemplate(baseUrl: string, templateName: string): Promise<void> {

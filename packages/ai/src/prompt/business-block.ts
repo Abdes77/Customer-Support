@@ -156,7 +156,7 @@ function voice(input: BusinessBlockInput): string {
 function facts(input: BusinessBlockInput): string {
   const { values, coreFacts } = input;
   const categories = new Set<string>(values["knowledge.core_categories"]);
-  const shown = coreFacts.filter((fact) => categories.has(fact.category));
+  const shown = coreFacts.filter((fact) => fact.pinned === true || categories.has(fact.category));
   const body =
     shown.length === 0
       ? "(No facts have been entered for this business yet.)"

@@ -4,7 +4,11 @@ import type { AppSettings } from "@repo/settings";
 import type { EmergencyClass, TurnSituation } from "../engine/situation";
 import { allowedLinkDomains, fillTemplate } from "../prompt/business-block";
 import type { CorePrompt } from "../prompt/core";
-import { effectivePlaybook } from "../prompt/playbook-block";
+import {
+  effectivePlaybook,
+  playbookPriceAmounts,
+  visiblePriceNorms,
+} from "../prompt/playbook-block";
 import { moneyAmounts, sentences, unknownAmounts } from "./money";
 import { stripTags } from "./parse";
 
@@ -209,12 +213,12 @@ export function allowedAmounts(context: GuardContext): Set<number> {
     for (const fact of [...context.coreFacts, ...context.turnFacts]) {
       for (const amount of moneyAmounts(`${fact.title} ${fact.content}`)) allowed.add(amount);
     }
-    if (values["pricing.use_playbook_ranges"]) {
-      const { document } = effectivePlaybook(input.playbook, input.business);
-      for (const norm of document.priceNorms) {
-        for (const amount of moneyAmounts(`${norm.range} ${norm.notes ?? ""}`)) allowed.add(amount);
-      }
-    }
+  }
+  // The playbook's price norms: exactly the figures the prompt shows, and only when it shows
+  // them (`visiblePriceNorms` is empty unless the pricing settings allow playbook ranges).
+  const { document } = effectivePlaybook(input.playbook, input.business);
+  for (const amount of playbookPriceAmounts(visiblePriceNorms(document, values))) {
+    allowed.add(amount);
   }
   return allowed;
 }

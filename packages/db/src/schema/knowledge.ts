@@ -77,6 +77,12 @@ export const knowledgeItems = pgTable(
     /** "csv_import", "api", "website", "manual" or a URL. */
     source: text("source"),
     importRunId: uuid("import_run_id"),
+    /**
+     * Stable key of a fact that came from an import or a crawl ("csv_import:services:roof-repair"),
+     * unique per business, so importing the same data again updates the fact instead of
+     * adding a second one. Null for facts written by hand.
+     */
+    importKey: text("import_key"),
     /** Core facts go into every prompt (the cached part); the rest is retrieved per turn. */
     isCore: boolean("is_core").notNull().default(false),
     status: text("status", { enum: KNOWLEDGE_ITEM_STATUSES }).notNull().default("active"),
@@ -101,6 +107,9 @@ export const knowledgeItems = pgTable(
     }),
     index("knowledge_items_business_category_idx").on(t.businessId, t.category, t.position),
     index("knowledge_items_search_idx").using("gin", t.search),
+    uniqueIndex("knowledge_items_import_key")
+      .on(t.businessId, t.importKey)
+      .where(sql`${t.importKey} is not null`),
     check("knowledge_items_category_check", oneOf(t.category, KNOWLEDGE_CATEGORIES)),
     check("knowledge_items_status_check", oneOf(t.status, KNOWLEDGE_ITEM_STATUSES)),
     ...businessPolicies("knowledge_items", {
