@@ -24,7 +24,6 @@ export const MODEL_TASKS = [
   "reply",
   "follow_up",
   "photo_analysis",
-  "lead_report",
   "playbook",
   "knowledge_extraction",
 ] as const;
@@ -40,7 +39,6 @@ const TASKS: Readonly<
     what: "looks at the photos customers send",
     effort: "medium",
   },
-  lead_report: { label: "Lead reports", what: "writes the lead report", effort: "high" },
   playbook: {
     label: "Playbook generation",
     what: "researches and writes the industry playbook of a new segment",

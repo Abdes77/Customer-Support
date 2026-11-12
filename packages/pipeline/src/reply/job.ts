@@ -37,6 +37,7 @@ export async function runReplyTurn(
     conversationId: data.conversationId,
   });
   const scope = () => p.db.forBusiness(data.businessId, { agencyId: data.agencyId });
+  const scopeTenant = { agencyId: data.agencyId, businessId: data.businessId };
 
   const plan = await step.run("plan", () => scope().run((ctx) => planTurn(ctx, p, data)));
   if (plan.kind === "done") return { outcome: plan.reason, turnId: null, messageIds: [] };
@@ -83,6 +84,10 @@ export async function runReplyTurn(
   if (commit.events.length > 0) {
     await step.run("emit", async () => {
       await p.events.send(commit.events);
+      // Observers mark what they handed over as sent (C5's outbox); best effort.
+      for (const observer of p.observers) {
+        await observer.emitted?.(scopeTenant, commit.events, p.clock());
+      }
       return null;
     });
   }

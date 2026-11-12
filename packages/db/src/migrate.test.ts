@@ -87,6 +87,7 @@ describe("migrations on an empty database", () => {
       "integration_events",
       "internal_notes",
       "knowledge_items",
+      "lead_events",
       "lead_fields",
       "lead_reports",
       "leads",

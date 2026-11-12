@@ -125,12 +125,12 @@ describe("POST /api/webhooks/[channel]", () => {
     expect(turns.map((turn) => [turn.status, turn.promptVersion])).toEqual([
       ["replied", PROMPT_VERSION],
     ]);
-    // What the customer said was saved to the lead; until C5 the action is recorded only.
+    // What the customer said was saved to the lead by lead scoring (C5).
     expect(
       (turns[0]?.actions as { action: { type: string }; outcome: { status: string } }[]).map(
         (entry) => [entry.action.type, entry.outcome.status],
       ),
-    ).toEqual([["update_lead_fields", "deferred"]]);
+    ).toEqual([["update_lead_fields", "applied"]]);
   });
 
   it("refuses a bad signature with 401 and an unknown channel with 404", async () => {
@@ -218,6 +218,8 @@ describe("composition", () => {
       // C6: playbook generation and the website crawl.
       "knowledge-playbook-generate",
       "knowledge-import",
+      // C5: lead events a failed turn left behind.
+      "leads-outbox",
     ]);
     // Every definition converts to an Inngest function that /api/inngest can serve.
     expect(inngestFunctions(withInngest)).toHaveLength(withInngest.jobs.length);

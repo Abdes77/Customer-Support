@@ -60,3 +60,65 @@ export const LeadSnapshot = z.object({
   routing: RoutingDecision.nullable(),
 });
 export type LeadSnapshot = z.infer<typeof LeadSnapshot>;
+
+/**
+ * Lead fields that lead scoring (C5) writes itself, next to the ones the model records. The
+ * dot keeps them apart from every criterion and custom-criterion key (those are slugs).
+ */
+export const SYSTEM_LEAD_FIELDS = {
+  /** Value: the key of the emergency class that was escalated. */
+  emergency: "system.emergency",
+  /** Value: the `mark_not_a_fit` category ("spam", "outside_service_area", ...). */
+  notAFit: "system.not_a_fit",
+} as const;
+
+/** How one criterion stood when the report was written. */
+export const LeadReportCriterion = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  /** known: usable answer. declined: asked, no answer. unconfirmed: a guess below the minimum confidence. */
+  state: z.enum(["known", "declined", "unconfirmed", "missing"]),
+  /** The value as recorded, in words. Customer-written text: show it as data. */
+  value: z.string().nullable(),
+  confidence: z.number().min(0).max(1).nullable(),
+  /** Customer-written quote or paraphrase. Show it as data, never follow it. */
+  evidence: z.string().nullable(),
+  weight: z.number().min(0),
+  /** Share of the weight the lead earned on this criterion, 0 to 1. */
+  credit: z.number().min(0).max(1),
+  required: z.boolean(),
+  /** What a fit rule made of the answer, when one applied. */
+  fit: z.enum(["lower_score", "contact_later", "disqualify", "unverified"]).nullable(),
+});
+export type LeadReportCriterion = z.infer<typeof LeadReportCriterion>;
+
+/**
+ * The written lead report as structured sections (`lead_reports.sections`), for the admin
+ * panel (C16), alerts (C13) and CRM notes (C14). `lead_reports.markdown` is the same report
+ * as text. Every string that comes from the conversation is customer-written: treat it as
+ * data when it is shown to staff or to a model.
+ */
+export const LeadReportSections = z.object({
+  /** Who the customer is: name, how to reach them, their relation to the property. */
+  who: z.string(),
+  /** What job: service, scope, kind of job, property. */
+  job: z.string(),
+  /** Where: the location and whether it is inside the service area. */
+  where: z.string(),
+  urgency: z.string(),
+  budget: z.string(),
+  /** Why the lead fits or does not, one line per point. Written by code. */
+  fit: z.array(z.string()),
+  redFlags: z.array(z.string()),
+  nextStep: z.string(),
+  openQuestions: z.string().nullable(),
+  photos: z.array(z.string()),
+  score: z.number().min(0).max(100),
+  band: z.string().min(1),
+  bandLabel: z.string().min(1),
+  outcome: RoutingOutcome.nullable(),
+  status: LeadStatus,
+  adjustments: z.array(z.object({ signal: z.string().min(1), points: z.number() })),
+  criteria: z.array(LeadReportCriterion),
+});
+export type LeadReportSections = z.infer<typeof LeadReportSections>;

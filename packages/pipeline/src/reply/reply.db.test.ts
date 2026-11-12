@@ -401,7 +401,9 @@ describe("engine outcomes", () => {
     expect(second.channel.id).toBe("test");
     expect(second.business.segment.slug).toBe("roofing");
     expect(second.mode).toBe("live");
-    expect(second.lead).toEqual({ id: null, status: "new", fields: {}, routing: null });
+    // The first turn left a scored lead behind (C5), with nothing recorded yet.
+    expect(second.lead).toMatchObject({ status: "new", fields: {}, routing: null });
+    expect(second.lead.id).not.toBeNull();
     expect(second.settings.values["limits.max_inbound_characters"]).toBe(500);
   });
 });

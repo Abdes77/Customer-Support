@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-342 settings in 22 categories.
+340 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -153,7 +153,7 @@ placeholder a setting does not list is a validation error.
 | [CRM and webhooks](#integrations) | 16 | When leads are pushed to a CRM, field mapping and outgoing webhooks. |
 | [Knowledge](#knowledge) | 7 | How business knowledge is gathered and used in replies. |
 | [Client portal](#client_portal) | 9 | What the business's own users may see and do when they have a login. |
-| [Model and effort](#model) | 16 | Which Claude model does each task, and how hard it thinks. |
+| [Model and effort](#model) | 14 | Which Claude model does each task, and how hard it thinks. |
 | [Limits and spend caps](#limits) | 11 | Rate limits and model-spend caps that stop floods and runaway cost. |
 | [Data retention](#data) | 6 | How long conversations, files and model records are kept. |
 
@@ -1506,8 +1506,6 @@ Which Claude model does each task, and how hard it thinks.
 | `model.follow_up.effort` | **Follow-ups: effort.** How hard the model thinks. Higher effort is slower and costs more; for customer replies it also means a longer wait. | one of: `low`, `medium`, `high`, `xhigh`, `max` | `"medium"` | all |  |
 | `model.photo_analysis.model` | **Photo analysis: model.** The Claude model that looks at the photos customers send. | Claude model id | `"claude-fable-5-2"` | all |  |
 | `model.photo_analysis.effort` | **Photo analysis: effort.** How hard the model thinks. Higher effort is slower and costs more; for customer replies it also means a longer wait. | one of: `low`, `medium`, `high`, `xhigh`, `max` | `"medium"` | all |  |
-| `model.lead_report.model` | **Lead reports: model.** The Claude model that writes the lead report. | Claude model id | `"claude-fable-5-2"` | all |  |
-| `model.lead_report.effort` | **Lead reports: effort.** How hard the model thinks. Higher effort is slower and costs more; for customer replies it also means a longer wait. | one of: `low`, `medium`, `high`, `xhigh`, `max` | `"high"` | all |  |
 | `model.playbook.model` | **Playbook generation: model.** The Claude model that researches and writes the industry playbook of a new segment. | Claude model id | `"claude-fable-5-2"` | all |  |
 | `model.playbook.effort` | **Playbook generation: effort.** How hard the model thinks. Higher effort is slower and costs more; for customer replies it also means a longer wait. | one of: `low`, `medium`, `high`, `xhigh`, `max` | `"high"` | all |  |
 | `model.knowledge_extraction.model` | **Knowledge extraction: model.** The Claude model that turns imported data and website pages into knowledge facts. | Claude model id | `"claude-fable-5-2"` | all |  |

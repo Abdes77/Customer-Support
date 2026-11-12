@@ -180,8 +180,8 @@ pipeline entry point, `ingest(parsed)`, which performs steps 4 to 6.
   opt-out check for bot messages, window, split) → `send-<part>` → `finish` →
   `emit-failure`.
 - **Extension points for later chunks:** the engine (C4), `ActionHandler`s, the knowledge
-  retriever (C6), the `TurnLoaders` for lead and playbook (C5, C6) and `TurnGuard`s (C13,
-  C17) are registered in `createDomainComposition()` (`packages/pipeline/src/composition`),
+  retriever (C6), the `TurnLoaders` for lead and playbook (C5, C6), `TurnObserver`s (C5)
+  and `TurnGuard`s (C13, C17) are registered in `createDomainComposition()` (`packages/pipeline/src/composition`),
   which production and the evaluation harness share; channel adapters and job definitions
   in `apps/web/src/server/pipeline`.
 
@@ -284,6 +284,51 @@ pipeline's domain composition), `createKnowledgeJobs` (registered in
 - **Retrieval** (`src/knowledge/retriever.ts`). `coreFacts`: every active fact in a stable
   order. `retrieve`: PostgreSQL full-text search over title and text, plus the kinds of fact
   a message asks about ("can I pay monthly" brings the financing facts).
+
+### As built (C5)
+
+`packages/leads` keeps one lead per conversation. Entry points (`src/index.ts`):
+`leadActionHandlers` and `createLeadTurnObserver` and `loadLeadSnapshot` (registered in
+`createDomainComposition()`), `createLeadJobs` (`leads-outbox`, registered in
+`apps/web/src/server/pipeline`), `assessLead` and `buildLeadReport` (pure), and
+`leadRouting` / `withLeadScoring` for dry runs.
+
+- **Assessment** (`src/assess`, pure). Each enabled criterion and custom criterion is
+  `known`, `declined` (recorded as null), `unconfirmed` (below
+  `scoring.minimum_confidence`) or `missing`, and earns a share of its weight: by its rule
+  when known (ideal and acceptable timelines, decision-maker roles, budget bands and the
+  stated amount, property types, insurance and financing preferences, ideal answers of a
+  custom criterion), `scoring.unknown_credit_percent` otherwise. Fit rules
+  (`*_action` settings) add findings: disqualify, contact later, lower score, or
+  `unverified` (a location or service that code cannot check). Score =
+  `100 × earned / total weight` + adjustments for the signals seen, 0 to 100. Routing:
+  auto-disqualify category or disqualifying fit rule → disqualify at once; a required
+  criterion missing or unconfirmed → no decision yet; otherwise the band's outcome from
+  `routing.*` (an existing customer gets `routing.existing_customer_outcome` instead
+  unless it is "by score"), held to "contact later" by a contact-later finding, an
+  unverified finding or a declined required criterion (DECISIONS 119–121, 126, 128).
+- **Report** (`src/report`): sections who, job, where, urgency, budget signals, fit, red
+  flags, next step (plus open questions, photos, adjustments, a criteria table), as
+  `LeadReportSections` in `@repo/core` and as Markdown. Written by code after every
+  change; customer text appears only as quoted, one-line data.
+- **In the turn.** `update_lead_fields` and `mark_not_a_fit` run in the generate step: one
+  transaction locks (or creates) the lead, merges the fields (a guess never replaces a
+  stated answer, "would not say" never erases one), assesses, stores a routing decision
+  (`sequence` + 1) and a report version when they changed, updates the lead row and writes
+  the outbox rows; the decision is the tool result (`ActionOutcome.routing`), so the reply
+  follows it. In dry-run mode nothing is written. At commit the `TurnObserver` (below)
+  makes sure the lead exists with a score and a report, records `escalate_emergency`
+  (`system.emergency`, `lead.emergency`), `handoff_to_human` and refusals (status
+  `handed_off`, `lead.handoff`), and returns the lead's unsent events.
+- **Events.** Outbox table `lead_events` (ids and classifications only, checked against the
+  catalogue before they are stored). The reply's emit step sends them with the turn's own
+  events and marks them sent; `leads-outbox` (cron, every minute) sends what is older than
+  two minutes and unsent. Event id `lead-<row id>`; payload `eventId` = row id
+  (DECISIONS 123).
+- **Pipeline extension point `TurnObserver`** (`packages/pipeline/src/deps.ts`): runs
+  inside the commit transaction under a savepoint, so a failing observer is rolled back and
+  logged and the turn still commits (DECISIONS 124). Later chunks may add observers in
+  `createDomainComposition()`.
 
 ### Invariants (each needs a test in the chunk that owns it)
 
@@ -429,6 +474,7 @@ Rules for every function:
 | `pipeline-reply` | `message.received` | debounce and limit 1 per conversation, turn lease | C3 |
 | `pipeline-send` | `message.send_requested` | limit 1 per conversation, in sequence, retries then dead letter | C3 |
 | `pipeline-sweeper` | cron, every minute | re-emits un-enqueued messages, flags stuck turns | C3, C17 |
+| `leads-outbox` | cron, every minute | sends lead events a failed turn left in the outbox | C5 |
 | `leads-*` subscribers | `lead.*` | idempotent per `eventId` | C12–C14, C16 |
 | `handoff-followup` | scheduled by action or cadence | `sleepUntil`, cancelled by `message.received`, respects quiet hours and windows | C13 |
 | `handoff-emergency-chain` | `lead.emergency` | alert, wait for acknowledgement, call, next contact | C13 |
@@ -470,7 +516,8 @@ preferences, because breaking them returns a 400 or silently loses the prompt ca
 
 **Request shape**
 
-- Model and effort are settings per task (reply, photo analysis, playbook, report, eval).
+- Model and effort are settings per task (reply, follow-up, photo analysis, playbook,
+  knowledge extraction; the lead report is written by code, DECISIONS 122).
   Send effort as `output_config.effort`, always explicitly.
 - Thinking is always on: do not send a `thinking` parameter. Do not send `temperature`,
   `top_p` or `top_k`. Do not prefill an assistant message.
@@ -724,6 +771,15 @@ tenant and entity ids, `channel`, `score` and `band`, plus one or two classifica
 Subscribers load the lead, report and conversation from the database; payloads never contain
 customer text. Delivery is at least once and unordered across event types.
 
+Finalized by C5: `lead.qualified` = a routing decision other than disqualify was made (any
+band; `routing` says which); `lead.meeting_requested` = the decision is book a meeting
+(`bookingMode` from `scheduling.provider`); `lead.handoff` = "we'll contact you" (trigger
+`routing`), a handoff action (`customer_request` or `bot_decision`) or a refusal (`rule`);
+`lead.disqualified` with `reasonCode` (`spam`, `out_of_area`, `service_not_offered`,
+`low_score`, ...); `lead.emergency` once per class and turn. The first four fire once per
+lead. The report subscribers read is the newest `lead_reports` row (`sections` follows
+`LeadReportSections`); `LEAD_EVENT_NAMES` lists the names.
+
 ## 8. Data model
 
 C1 owns the schema in `packages/db`. Later chunks add tables for their own features there, as
@@ -737,7 +793,7 @@ never edited). Expected tables, by area:
 | Settings | setting values per scope, setting versions |
 | Channels | channel connections, channel connection secrets (encrypted credentials), message templates, widget sessions |
 | Conversations | contacts, contact identities, conversations (turn lease, last inbound time, `handled_through_seq` watermark), messages (unique provider id, sequence, status, trace id), attachments, takeover locks, internal notes, conversation turns (one row per reply turn, C3) |
-| Leads | leads, lead fields (value, confidence, evidence), lead reports, routing decisions |
+| Leads | leads, lead fields (value, confidence, evidence), lead reports, routing decisions (`sequence`), lead events (outbox, C5) |
 | Model | model calls (inputs, outputs, tokens, latency, cache reads) |
 | Integrations | integration connections, integration connection secrets, integration event log, bookings |
 | Operations | scheduled jobs, alerts, escalations, dead letters, rate-limit and spend counters, audit log |

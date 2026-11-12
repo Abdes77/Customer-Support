@@ -23,6 +23,7 @@ import {
   createKnowledgeServices,
   type KnowledgeServices,
 } from "@repo/knowledge";
+import { createLeadJobs } from "@repo/leads";
 import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipeline";
 
 /**
@@ -36,7 +37,8 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
  * handlers, knowledge) are registered in `packages/pipeline/src/composition` instead.
  *
  * Registered so far besides the pipeline's own jobs: `knowledge-playbook-generate` and
- * `knowledge-import` (C6), and the knowledge services the admin panel and the import API use.
+ * `knowledge-import` (C6), and the knowledge services the admin panel and the import API use;
+ * `leads-outbox` (C5).
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -124,7 +126,9 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   // those jobs instead (the model client throws a configuration error).
   const knowledgeJobs = createKnowledgeJobs({ db, model, modelMode, logger });
   const knowledge = createKnowledgeServices({ db, events, logger });
-  const jobs = [...pipeline.jobs(), ...knowledgeJobs];
+  // `leads-outbox` sends lead events a failed turn left behind (C5).
+  const leadJobs = createLeadJobs({ db, events, logger });
+  const jobs = [...pipeline.jobs(), ...knowledgeJobs, ...leadJobs];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
     jobs: mode,

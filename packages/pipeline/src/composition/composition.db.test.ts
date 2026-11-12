@@ -161,10 +161,13 @@ describe("a conversation through the pipeline and the real engine", () => {
       cacheReadInputTokens: 7000,
       cacheCreationInputTokens: 7000,
     });
-    // No lead handler is registered before C5: the action is recorded as deferred.
+    // Lead scoring (C5) handled the fields: stored, and still qualifying.
     expect(actionsOf(turn).map((entry) => [entry.action.type, entry.outcome.status])).toEqual([
-      ["update_lead_fields", "deferred"],
+      ["update_lead_fields", "applied"],
     ]);
+    expect(lastText(model.requests[before + 1]?.messages.at(-1))).toContain(
+      "Routing decision: none yet",
+    );
 
     // Every model call is stored with its input, output, tokens, cache reads and latency.
     const calls = await h.t.admin

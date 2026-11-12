@@ -235,6 +235,27 @@ Format of an entry:
   Both answered as designed against the app running on the build VM. Give the agency's
   lead-generation tool the first URL; the answer lists every record that was refused and why.
 
+### 9. Review the lead scoring defaults, and know what the service radius cannot do (C5)
+
+- **What:** lead scoring needs no account; it is decided by the qualification, scoring and
+  routing settings. Before the first real customer, someone at the agency should read how
+  the defaults sort leads (`docs/SETTINGS.md`, categories Qualification, Scoring and
+  Routing): weights, the hot/warm thresholds (70/40), what each band leads to, and the fit
+  rules (out-of-area and unoffered services are turned away politely by default).
+  Worked examples are in `packages/leads/src/assess/leads.test.ts` (15 leads, three
+  configurations, every score explained).
+- **Known limit:** a **service radius** (`qualification.service_area.radius_miles`) cannot
+  be checked: the product has no ZIP-code geography. A lead whose location is not settled
+  by the ZIP codes, places or states listed is marked "location unverified" and is never
+  booked straight into a meeting; the report asks the team to confirm. Agencies that rely
+  on a radius should list the ZIP codes instead, or a developer adds a ZIP centroid table
+  (for example the US Census ZCTA gazetteer file) and a distance check in
+  `packages/leads/src/assess/service-area.ts`.
+- **Variable:** none.
+- **Live check:** none. With a key (entry 2), the lead side of a real conversation shows in
+  the dev chat (`/dev/chat`): the turn's `update_lead_fields` result carries the routing
+  decision, and `lead_reports` holds the report after every turn.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and

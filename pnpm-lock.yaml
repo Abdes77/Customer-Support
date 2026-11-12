@@ -158,6 +158,9 @@ importers:
       '@repo/knowledge':
         specifier: workspace:*
         version: link:../../packages/knowledge
+      '@repo/leads':
+        specifier: workspace:*
+        version: link:../../packages/leads
       '@repo/pipeline':
         specifier: workspace:*
         version: link:../../packages/pipeline
@@ -545,9 +548,24 @@ importers:
 
   packages/leads:
     dependencies:
+      '@repo/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@repo/core':
         specifier: workspace:*
         version: link:../core
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/jobs':
+        specifier: workspace:*
+        version: link:../jobs
+      '@repo/settings':
+        specifier: workspace:*
+        version: link:../settings
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -598,6 +616,9 @@ importers:
       '@repo/knowledge':
         specifier: workspace:*
         version: link:../knowledge
+      '@repo/leads':
+        specifier: workspace:*
+        version: link:../leads
       '@repo/settings':
         specifier: workspace:*
         version: link:../settings

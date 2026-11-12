@@ -69,10 +69,20 @@ export const LeadEmergencyEvent = LeadEventBase.extend({
 });
 export type LeadEmergencyEvent = z.infer<typeof LeadEmergencyEvent>;
 
+/** The names of the lead events, for the outbox table's CHECK constraint and for filters. */
+export const LEAD_EVENT_NAMES = [
+  "lead.qualified",
+  "lead.meeting_requested",
+  "lead.handoff",
+  "lead.disqualified",
+  "lead.emergency",
+] as const;
+export type LeadEventName = (typeof LEAD_EVENT_NAMES)[number];
+
 export const LEAD_EVENTS = {
   "lead.qualified": LeadQualifiedEvent,
   "lead.meeting_requested": LeadMeetingRequestedEvent,
   "lead.handoff": LeadHandoffEvent,
   "lead.disqualified": LeadDisqualifiedEvent,
   "lead.emergency": LeadEmergencyEvent,
-} as const;
+} as const satisfies Record<LeadEventName, z.ZodType>;

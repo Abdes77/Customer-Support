@@ -546,6 +546,22 @@ export const ISOLATION_MATRIX: readonly MatrixEntry[] = [
     user: CLIENT_READABLE,
     system: "read_write",
   },
+  {
+    name: "lead_events",
+    table: tables.leadEvents,
+    kind: "business",
+    row: (r) => ({
+      ...r.tenant,
+      leadId: r.ref("leads"),
+      name: "lead.qualified",
+      dedupeKey: r.unique("qualified"),
+      payload: { routing: "contact_later" },
+      occurredAt: now(),
+    }),
+    change: { column: "attempts", value: 1 },
+    user: READ_ONLY_FOR_USERS,
+    system: "read_write",
+  },
 
   // --- model -------------------------------------------------------------------------------
   {

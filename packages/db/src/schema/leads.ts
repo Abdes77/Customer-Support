@@ -17,6 +17,7 @@ import {
 import {
   type ContactId,
   type ConversationId,
+  LEAD_EVENT_NAMES,
   LEAD_STATUSES,
   type LeadId,
   ROUTING_OUTCOMES,
@@ -150,6 +151,11 @@ export const routingDecisions = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     ...tenantColumns(),
     leadId: uuid("lead_id").$type<LeadId>().notNull(),
+    /**
+     * Order of the decisions of one lead (1, 2, ...): the newest counts. Two decisions made
+     * in one transaction share `created_at` and may share `decided_at` (C5, migration 0007).
+     */
+    sequence: integer("sequence").notNull().default(1),
     outcome: text("outcome", { enum: ROUTING_OUTCOMES }).notNull(),
     score: real("score").notNull(),
     band: text("band").notNull(),
@@ -163,8 +169,44 @@ export const routingDecisions = pgTable(
     tenantFk("routing_decisions", t),
     leadFk("routing_decisions", t),
     index("routing_decisions_lead_idx").on(t.leadId, t.decidedAt),
+    index("routing_decisions_lead_sequence_idx").on(t.leadId, t.sequence),
     index("routing_decisions_business_idx").on(t.businessId),
     check("routing_decisions_outcome_check", oneOf(t.outcome, ROUTING_OUTCOMES)),
     ...businessPolicies("routing_decisions", { clientRead: true }),
+  ],
+);
+
+/**
+ * The outbox of `lead.*` events (C5). A row is written in the transaction that records the
+ * fact (a routing decision, an emergency, a handoff), with a `dedupe_key` that makes the
+ * same fact one event per lead; it is sent after the turn commits, or by the `leads-outbox`
+ * cron when the turn did not get that far. The row id is the event's `eventId`. `payload`
+ * is the event payload: ids and classifications only, never customer text.
+ */
+export const leadEvents = pgTable(
+  "lead_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ...tenantColumns(),
+    leadId: uuid("lead_id").$type<LeadId>().notNull(),
+    name: text("name", { enum: LEAD_EVENT_NAMES }).notNull(),
+    /** One event per lead and key, for example "qualified" or "emergency:gas_leak:<turn>". */
+    dedupeKey: text("dedupe_key").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    occurredAt: timestamptz("occurred_at").notNull(),
+    /** Set once the event was handed to the job platform. */
+    emittedAt: timestamptz("emitted_at"),
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    tenantFk("lead_events", t),
+    leadFk("lead_events", t),
+    uniqueIndex("lead_events_lead_dedupe_key").on(t.leadId, t.dedupeKey),
+    index("lead_events_business_pending_idx")
+      .on(t.businessId, t.createdAt)
+      .where(sql`${t.emittedAt} is null`),
+    check("lead_events_name_check", oneOf(t.name, LEAD_EVENT_NAMES)),
+    ...businessPolicies("lead_events"),
   ],
 );

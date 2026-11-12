@@ -1,6 +1,7 @@
 import type { ModelClient } from "@repo/ai";
 import {
   type BusinessProfile,
+  type ExecutedAction,
   type ChannelId,
   type ContactId,
   type ConversationEngine,
@@ -15,7 +16,7 @@ import {
 } from "@repo/core";
 import type { BusinessContext, BusinessTenant, Database } from "@repo/db";
 import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
-import type { Duration, EventSender, RetryCount } from "@repo/jobs";
+import type { AnyJobEvent, Duration, EventSender, RetryCount } from "@repo/jobs";
 import type { AppResolvedSettings } from "@repo/settings";
 
 import type { ActionHandlerRegistry } from "./actions";
@@ -42,6 +43,31 @@ export interface TurnFacts {
 export interface TurnGuard {
   readonly name: string;
   check(ctx: BusinessContext, facts: TurnFacts): Promise<string | null>;
+}
+
+/** A turn as it was committed, for `TurnObserver`s. */
+export interface CommittedTurn {
+  readonly conversationId: ConversationId;
+  readonly turnId: string;
+  readonly traceId: string;
+  /** The turn's status after the commit: replied, no_reply, refused, failed, superseded. */
+  readonly status: string;
+  /** Every action the engine carried out in the turn, with its outcome. */
+  readonly actions: readonly ExecutedAction[];
+  readonly now: Date;
+}
+
+/**
+ * Something that happens when a reply turn commits (ARCHITECTURE §2, step 14): C5 records
+ * the lead side of the turn and hands back its `lead.*` events. `committed` runs inside the
+ * commit transaction, under a savepoint: if it throws, its writes are undone, the error is
+ * logged and the turn commits without them. The events it returns are sent by the emit step
+ * with the turn's own; `emitted` is called (best effort) once they were sent.
+ */
+export interface TurnObserver {
+  readonly name: string;
+  committed(ctx: BusinessContext, turn: CommittedTurn): Promise<readonly AnyJobEvent[]>;
+  emitted?(tenant: BusinessTenant, events: readonly AnyJobEvent[], now: Date): Promise<void>;
 }
 
 /** Loads the parts of the engine input that other chunks own (C5 lead, C6 playbook). */
@@ -106,6 +132,7 @@ export interface PipelineDeps {
   readonly knowledge?: KnowledgeRetriever;
   readonly modelCalls?: ModelCallSink;
   readonly guards?: readonly TurnGuard[];
+  readonly observers?: readonly TurnObserver[];
   readonly loaders?: Partial<TurnLoaders>;
   readonly storage?: (tenant: BusinessTenant) => TenantStorage;
   readonly logger?: Logger;
@@ -125,6 +152,7 @@ export interface PipelineContext {
   /** Null: each turn stores its model calls in `model_calls` with its settings version. */
   readonly modelCalls: ModelCallSink | null;
   readonly guards: readonly TurnGuard[];
+  readonly observers: readonly TurnObserver[];
   readonly loaders: TurnLoaders;
   readonly storage: (tenant: BusinessTenant) => TenantStorage;
   readonly logger: Logger;
@@ -152,6 +180,7 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
     knowledge: deps.knowledge ?? domain.knowledge,
     modelCalls: deps.modelCalls ?? null,
     guards: deps.guards ?? domain.guards,
+    observers: deps.observers ?? domain.observers,
     loaders: {
       playbook: deps.loaders?.playbook ?? domain.loaders.playbook,
       lead: deps.loaders?.lead ?? domain.loaders.lead,

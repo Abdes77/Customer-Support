@@ -1,4 +1,11 @@
-import type { EngineTurnResult, EventPayload, MessageId, ReplyDraft, TraceId } from "@repo/core";
+import type {
+  EngineTurnResult,
+  EventPayload,
+  ExecutedAction,
+  MessageId,
+  ReplyDraft,
+  TraceId,
+} from "@repo/core";
 import {
   and,
   type BusinessContext,
@@ -16,7 +23,7 @@ import {
 } from "@repo/db";
 import { type AnyJobEvent, jobEvent } from "@repo/jobs";
 
-import type { PipelineContext } from "../deps";
+import type { CommittedTurn, PipelineContext } from "../deps";
 import { sendEventId, takeoverStartedEventId } from "../event-ids";
 import { raiseInAppAlert, recordDeadLetter } from "../failures";
 import type { ClaimedTurn } from "./claim";
@@ -119,15 +126,26 @@ export async function commitTurn(
                 eq(messages.status, "queued"),
               ),
             );
+    const observed = await observeTurn(ctx, p, {
+      conversationId: data.conversationId,
+      turnId: turn.id,
+      traceId: turn.traceId,
+      status: turn.status,
+      actions: turn.actions.filter(isExecutedAction),
+      now,
+    });
     return {
       status: turn.status,
       messageIds: turn.replyMessageIds,
-      events: sendEvents(
-        ctx,
-        data,
-        turn.traceId,
-        queued.map((row) => row.id),
-      ),
+      events: [
+        ...sendEvents(
+          ctx,
+          data,
+          turn.traceId,
+          queued.map((row) => row.id),
+        ),
+        ...observed,
+      ],
     };
   }
 
@@ -274,6 +292,16 @@ export async function commitTurn(
     })
     .where(eq(conversationTurns.id, turn.id));
   await releaseLease(ctx, turn.id, advance ? turn.throughSeq : null);
+  events.push(
+    ...(await observeTurn(ctx, p, {
+      conversationId: data.conversationId,
+      turnId: turn.id,
+      traceId: turn.traceId,
+      status,
+      actions: result.actions,
+      now,
+    })),
+  );
 
   p.logger.info("turn.committed", {
     traceId: turn.traceId,
@@ -285,6 +313,56 @@ export async function commitTurn(
     actions: result.actions.length,
   });
   return { status, messageIds, events };
+}
+
+function isExecutedAction(value: unknown): value is ExecutedAction {
+  if (value === null || typeof value !== "object") return false;
+  const entry = value as { action?: { type?: unknown }; outcome?: { status?: unknown } };
+  return typeof entry.action?.type === "string" && typeof entry.outcome?.status === "string";
+}
+
+/**
+ * Runs the turn observers (C5: the lead side of the turn) inside the commit transaction,
+ * each under its own savepoint: an observer that fails is rolled back and logged, and the
+ * turn still commits. Returns the events they want sent with the turn's.
+ */
+async function observeTurn(
+  ctx: BusinessContext,
+  p: PipelineContext,
+  turn: CommittedTurn,
+): Promise<AnyJobEvent[]> {
+  const events: AnyJobEvent[] = [];
+  for (const observer of p.observers) {
+    try {
+      const produced = await ctx.tx.transaction((tx) => observer.committed({ ...ctx, tx }, turn));
+      events.push(...produced);
+    } catch (error) {
+      p.logger.error("turn.observer_failed", {
+        observer: observer.name,
+        traceId: turn.traceId,
+        businessId: ctx.tenant.businessId,
+        conversationId: turn.conversationId,
+        error: observerError(error),
+      });
+    }
+  }
+  return events;
+}
+
+/**
+ * What is safe to log of an observer's error. A failed query's message carries the query's
+ * parameters (lead field values, evidence, report text: customer data), and the database's
+ * own message can quote a value, so of those only the names and the SQLSTATE code are kept.
+ */
+function observerError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { name: "Error" };
+  const cause = error.cause;
+  const code =
+    cause !== null && typeof cause === "object" && "code" in cause ? String(cause.code) : null;
+  if (error.message.startsWith("Failed query") || cause !== undefined) {
+    return { name: error.name, cause: cause instanceof Error ? cause.name : null, code };
+  }
+  return { name: error.name, message: error.message, stack: error.stack };
 }
 
 /** Frees the turn lease (if this turn holds it) and, when given, moves the watermark. */

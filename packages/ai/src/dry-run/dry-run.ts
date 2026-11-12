@@ -103,7 +103,9 @@ export function dryRunTurn(
 }
 
 /**
- * A stand-in for lead routing until `packages/leads` (C5) provides the real rules: a lead
+ * A simplified stand-in for lead routing, kept for this package's own tests (which cannot
+ * depend on `@repo/leads`). The real rules are `leadRouting` and `withLeadScoring` in
+ * `@repo/leads` (C5); dry runs that should route like production pass those. A lead
  * gets a decision once every required criterion is known, with a score from the criterion
  * weights and the band and outcome from the scoring and routing settings. It ignores fit
  * rules (service area, budget minimums, adjustments). Use it only where the real handler is
