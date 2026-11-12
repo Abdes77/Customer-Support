@@ -15,7 +15,6 @@ import {
   eq,
   isNull,
   messages,
-  type MessageStatus,
   sql,
   takeoverLocks,
 } from "@repo/db";
@@ -23,6 +22,7 @@ import { type AnyJobEvent, jobEvent } from "@repo/jobs";
 import { loadSettings } from "@repo/settings/server";
 
 import type { PipelineContext } from "../deps";
+import { applyDeliveryStatus } from "../send/deliveries";
 import { takeoverStartedEventId } from "../event-ids";
 
 type Lookup = (
@@ -30,27 +30,13 @@ type Lookup = (
   externalAccountId: string,
 ) => Promise<ChannelConnectionRef | null>;
 
-/** Outbound statuses only move forward; "failed" never overrides delivered or read. */
-const STATUS_RANK: Partial<Record<MessageStatus, number>> = {
-  queued: 0,
-  sending: 1,
-  sent: 2,
-  delivered: 3,
-  read: 4,
-};
+export { nextOutboundStatus } from "../send/deliveries";
 
-export function nextOutboundStatus(
-  current: MessageStatus,
-  update: DeliveryStatusUpdate["status"],
-): MessageStatus | null {
-  const currentRank = STATUS_RANK[current];
-  if (currentRank === undefined) return null; // failed, superseded or inbound: final
-  if (update === "failed") return currentRank < 3 ? "failed" : null;
-  const nextRank = STATUS_RANK[update];
-  return nextRank !== undefined && nextRank > currentRank ? update : null;
-}
-
-/** Applies provider delivery statuses to our outbound messages. Returns how many changed. */
+/**
+ * Applies provider delivery statuses to our outbound messages (see `send/deliveries.ts` for
+ * statuses that arrive early, during a send, or for one part of a split message). Returns how
+ * many changed something now; held statuses are applied by the send step later.
+ */
 export async function applyStatuses(
   p: PipelineContext,
   statuses: readonly DeliveryStatusUpdate[],
@@ -60,42 +46,14 @@ export async function applyStatuses(
   for (const update of statuses) {
     const ref = await lookup(update.channel, update.externalAccountId);
     if (ref === null) continue;
-    changed += await p.db
-      .forBusiness(ref.businessId, { agencyId: ref.agencyId })
-      .run(async (ctx) => {
-        const [row] = await ctx.tx
-          .select({ id: messages.id, status: messages.status })
-          .from(messages)
-          .where(
-            and(
-              eq(messages.channelConnectionId, ref.connectionId),
-              eq(messages.externalMessageId, update.externalMessageId),
-              eq(messages.direction, "outbound"),
-            ),
-          )
-          .for("update")
-          .limit(1);
-        if (row === undefined) return 0;
-        const next = nextOutboundStatus(row.status, update.status);
-        if (next === null) return 0;
-        const at = new Date(update.occurredAt);
-        await ctx.tx
-          .update(messages)
-          .set({
-            status: next,
-            ...(next === "delivered" ? { deliveredAt: at } : {}),
-            ...(next === "read" ? { readAt: at } : {}),
-            ...(next === "failed"
-              ? {
-                  failedAt: at,
-                  errorCode: update.error?.code ?? "provider_failed",
-                  errorMessage: update.error?.message ?? null,
-                }
-              : {}),
-          })
-          .where(eq(messages.id, row.id));
-        return 1;
-      });
+    const outcome = await p.db.forBusiness(ref.businessId, { agencyId: ref.agencyId }).run((ctx) =>
+      applyDeliveryStatus(ctx, ref.connectionId, update.externalMessageId, {
+        status: update.status,
+        occurredAt: new Date(update.occurredAt),
+        error: update.error,
+      }),
+    );
+    if (outcome === "applied") changed += 1;
   }
   return changed;
 }
@@ -109,6 +67,20 @@ export async function applySignals(
   let handled = 0;
   const events: AnyJobEvent[] = [];
   for (const signal of signals) {
+    if (signal.type === "provider_event") {
+      // The event may name a group account (a WhatsApp Business Account): the channel's
+      // handler finds the connections it concerns.
+      const handler = p.providerEvents.find((item) => item.channel === signal.channel);
+      if (handler === undefined) {
+        p.logger.info("ingest.provider_event_unhandled", {
+          channel: signal.channel,
+          event: signal.event,
+        });
+        continue;
+      }
+      if (await handler.handle(signal)) handled += 1;
+      continue;
+    }
     const ref = await lookup(signal.channel, signal.externalAccountId);
     if (ref === null) {
       p.logger.warn("ingest.signal_ignored", { channel: signal.channel, type: signal.type });

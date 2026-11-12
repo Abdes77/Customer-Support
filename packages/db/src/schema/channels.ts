@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   check,
@@ -63,6 +64,12 @@ export const channelConnections = pgTable(
     unique("channel_connections_id_business_key").on(t.id, t.businessId),
     uniqueIndex("channel_connections_account_key").on(t.channel, t.externalAccountId),
     index("channel_connections_business_idx").on(t.businessId, t.channel),
+    // Meta reports template and account events per WhatsApp Business Account, which can hold
+    // several connected numbers (C9): `directory.findChannelConnectionsByBusinessAccount`.
+    index("channel_connections_business_account_idx").on(
+      t.channel,
+      sql`(${t.config} ->> 'businessAccountId')`,
+    ),
     check("channel_connections_channel_check", oneOf(t.channel, CHANNEL_IDS)),
     check("channel_connections_status_check", oneOf(t.status, CONNECTION_STATUSES)),
     ...businessPolicies("channel_connections"),

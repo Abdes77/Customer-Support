@@ -36,6 +36,7 @@ export const ENV_GROUPS = [
   { id: "anthropic", title: "Claude API (C4, C6, C7)" },
   { id: "inngest", title: "Inngest (C3)" },
   { id: "meta", title: "Meta: WhatsApp, Instagram, Messenger (C9, C10)" },
+  { id: "transcription", title: "Voice message transcription (C9)" },
   { id: "google", title: "Google: Gmail and Calendar (C11, C12)" },
   { id: "microsoft", title: "Microsoft: Outlook mail and calendar (C11, C12)" },
   { id: "twilio", title: "Twilio: SMS and voice alerts (C13)" },
@@ -342,10 +343,11 @@ export const ENV_SPEC = {
     schema: z.string().regex(/^v\d+\.\d+$/),
     group: "meta",
     description:
-      "Graph API version used for every Meta call. Check Meta's changelog before raising it.",
-    example: "v24.0",
+      "Graph API version used for every Meta call (v27.0 when unset, the version Meta's docs used in November 2026). Check Meta's changelog before raising it.",
+    example: "v27.0",
     secret: false,
-    required: "feature",
+    required: "optional",
+    default: "v27.0",
   },
   META_WHATSAPP_SIGNUP_CONFIG_ID: {
     schema: nonEmpty,
@@ -381,6 +383,15 @@ export const ENV_SPEC = {
     secret: true,
     required: "optional",
   },
+  META_TEST_WHATSAPP_BUSINESS_ACCOUNT_ID: {
+    schema: nonEmpty,
+    group: "meta",
+    description:
+      "Live check only: WhatsApp Business Account id of the test number (WhatsApp Manager, or the app's API Setup page).",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
   META_TEST_WHATSAPP_RECIPIENT: {
     schema: nonEmpty,
     group: "meta",
@@ -412,6 +423,17 @@ export const ENV_SPEC = {
     example: "",
     secret: false,
     required: "optional",
+  },
+
+  // --- transcription -------------------------------------------------------------------
+  DEEPGRAM_API_KEY: {
+    schema: nonEmpty,
+    group: "transcription",
+    description:
+      'Deepgram API key (console.deepgram.com). Transcribes WhatsApp voice messages for businesses whose setting `channels.whatsapp.voice_messages` is "transcribe"; without it the bot asks the customer to type.',
+    example: "",
+    secret: true,
+    required: "feature",
   },
 
   // --- google ----------------------------------------------------------------------------

@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-342 settings in 22 categories.
+343 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -149,7 +149,7 @@ placeholder a setting does not list is a validation error.
 | [Handoff and human takeover](#handoff) | 10 | When a person takes over a conversation and when the bot resumes. |
 | [Alerts](#alerts) | 9 | Who is told about leads, and how. |
 | [Scheduling](#scheduling) | 27 | Calendars, meeting slots, booking rules and reminders. |
-| [Channels](#channels) | 36 | Options of the website widget, WhatsApp, Instagram, Messenger and email. |
+| [Channels](#channels) | 37 | Options of the website widget, WhatsApp, Instagram, Messenger and email. |
 | [CRM and webhooks](#integrations) | 16 | When leads are pushed to a CRM, field mapping and outgoing webhooks. |
 | [Knowledge](#knowledge) | 7 | How business knowledge is gathered and used in replies. |
 | [Client portal](#client_portal) | 9 | What the business's own users may see and do when they have a login. |
@@ -1274,6 +1274,7 @@ Options of the website widget, WhatsApp, Instagram, Messenger and email.
 | `channels.whatsapp.voice_messages` | **Voice messages.** What happens when a customer sends a voice message. | one of: `ask_to_type`, `transcribe` | `"ask_to_type"` | all |  |
 | `channels.whatsapp.buttons` | **Buttons and lists.** The bot may offer tap-to-answer buttons and lists where they make a question easier, such as picking a time. | yes / no | `true` | all |  |
 | `channels.whatsapp.follow_up_template` | **Follow-up template.** Name of the approved message template used for nudges outside the 24-hour window. Empty: no nudge is sent once the window has closed. | text, up to 120 characters, or empty (no template) | `null` | all |  |
+| `channels.whatsapp.staff_reply_template` | **Template for the team's late replies.** Name of the approved message template sent instead when someone at the business replies from the inbox more than 24 hours after the customer's last message. Empty: such replies cannot be sent on WhatsApp. | text, up to 120 characters, or empty (no template) | `null` | all |  |
 | `channels.whatsapp.reminder_template` | **Reminder template.** Name of the approved message template used for meeting reminders outside the 24-hour window. Empty: such reminders are skipped on WhatsApp. | text, up to 120 characters, or empty (no template) | `null` | all |  |
 | `channels.whatsapp.template_language` | **Template language.** The language code the templates above were approved in. | text, up to 10 characters | `"en_US"` | all |  |
 | `channels.meta.quick_replies` | **Quick replies.** The bot may offer tap-to-answer quick replies on Instagram and Messenger. | yes / no | `true` | all |  |

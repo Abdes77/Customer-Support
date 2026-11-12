@@ -20,6 +20,9 @@ import {
   takeoverLocks,
 } from "@repo/db";
 
+import { type AppSettings } from "@repo/settings";
+import { loadSettings } from "@repo/settings/server";
+
 import type { PipelineContext } from "../deps";
 import { splitText } from "./split";
 import { messagingWindow } from "./window";
@@ -44,7 +47,34 @@ export type SendPlan =
       readonly kind: "send";
       readonly parts: readonly OutboundMessage[];
       readonly target: SendTargetInfo;
+      readonly author: "bot" | "human_agent";
+      /** The message is free-form text or media (a template can replace it). */
+      readonly freeForm: boolean;
+    }
+  | {
+      /**
+       * The window is closed and the channel has a window fallback: the send step asks it
+       * for an approved template that may go out instead (invariant I6).
+       */
+      readonly kind: "window_closed";
+      readonly target: SendTargetInfo;
+      readonly author: "bot" | "human_agent";
     };
+
+/**
+ * The setting that switches tap-to-answer options on per channel. When it is off, the options
+ * are written under the message instead (the contract's fallback for channels without them).
+ */
+const INTERACTIVE_SETTING: Partial<Record<ChannelId, keyof AppSettings>> = {
+  whatsapp: "channels.whatsapp.buttons",
+  messenger: "channels.meta.quick_replies",
+  instagram: "channels.meta.quick_replies",
+};
+
+/** Options as plain lines under the text. */
+export function optionsAsText(text: string, options: readonly string[]): string {
+  return `${text}\n\n${options.map((option) => `• ${option}`).join("\n")}`;
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -154,13 +184,16 @@ export async function prepareSend(
     return { kind: "fail", code: "no_adapter", message: "The channel is not available." };
   }
   const sentByHuman = message.author === "human_agent";
+  const author = sentByHuman ? "human_agent" : "bot";
   const window = messagingWindow(
     adapter.capabilities,
     conversation.lastInboundAt,
     now,
     sentByHuman,
   );
-  if (!window.open && message.kind !== "template") {
+  const windowClosed = !window.open && message.kind !== "template";
+  const hasFallback = p.windowFallbacks.some((item) => item.channel === conversation.channel);
+  if (windowClosed && !hasFallback) {
     return {
       kind: "fail",
       code: "window_closed",
@@ -198,7 +231,7 @@ export async function prepareSend(
 
   const payload = asRecord(message.payload);
   const text = message.text ?? "";
-  let parts: OutboundMessage[];
+  let parts: OutboundMessage[] = [];
   switch (message.kind) {
     case "email": {
       const subject =
@@ -232,6 +265,12 @@ export async function prepareSend(
           message: "The template message has no template.",
         };
       }
+      const named = asRecord(template["namedVariables"]);
+      const namedVariables = Object.fromEntries(
+        Object.entries(named).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      );
       parts = [
         {
           kind: "template",
@@ -239,14 +278,25 @@ export async function prepareSend(
           languageCode:
             typeof template["languageCode"] === "string" ? template["languageCode"] : "en_US",
           variables: stringArray(template["variables"]),
+          ...(Object.keys(namedVariables).length > 0 ? { namedVariables } : {}),
         },
       ];
       break;
     }
     default: {
-      const chunks = splitText(text, adapter.capabilities.maxTextLength);
+      if (windowClosed) break;
+      let quickReplies = stringArray(payload["quickReplies"]);
+      let body = text;
+      const setting = INTERACTIVE_SETTING[conversation.channel];
+      if (quickReplies.length > 0 && setting !== undefined) {
+        const settings = await loadSettings(ctx, ctx.tenant, { logger: p.logger });
+        if (settings.values[setting] === false) {
+          body = optionsAsText(text, quickReplies);
+          quickReplies = [];
+        }
+      }
+      const chunks = splitText(body, adapter.capabilities.maxTextLength);
       if (chunks.length === 0) return withhold("empty");
-      const quickReplies = stringArray(payload["quickReplies"]);
       parts = chunks.map((chunk, index) =>
         index === chunks.length - 1 && quickReplies.length > 0
           ? { kind: "text", text: chunk, quickReplies }
@@ -272,21 +322,19 @@ export async function prepareSend(
     };
   }
 
-  return {
-    kind: "send",
-    parts,
-    target: {
-      channel: conversation.channel,
-      connectionId: message.connectionId,
-      conversationId: message.conversationId,
-      recipientExternalId: identity.externalId,
-      externalThreadId: conversation.externalThreadId,
-      // Chat replies do not quote the customer's message; email threads by its id.
-      replyToExternalMessageId:
-        conversation.channel === "email" ? (lastInbound?.externalMessageId ?? null) : null,
-      window,
-      email,
-      sentByHuman,
-    },
+  const target: SendTargetInfo = {
+    channel: conversation.channel,
+    connectionId: message.connectionId,
+    conversationId: message.conversationId,
+    recipientExternalId: identity.externalId,
+    externalThreadId: conversation.externalThreadId,
+    // Chat replies do not quote the customer's message; email threads by its id.
+    replyToExternalMessageId:
+      conversation.channel === "email" ? (lastInbound?.externalMessageId ?? null) : null,
+    window,
+    email,
+    sentByHuman,
   };
+  if (windowClosed) return { kind: "window_closed", target, author };
+  return { kind: "send", parts, target, author, freeForm: message.kind !== "template" };
 }

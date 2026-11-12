@@ -9,6 +9,7 @@ import {
   isNull,
   lt,
   messages,
+  pendingDeliveryStatuses,
 } from "@repo/db";
 import {
   type AnyJobEvent,
@@ -25,6 +26,8 @@ import { raiseInAppAlert, recordDeadLetter } from "./failures";
 export const SWEEPER_FUNCTION_ID = "pipeline-sweeper";
 
 const BATCH = 200;
+/** Held delivery statuses older than this are dropped (C9). */
+const HELD_STATUS_MS = 2 * 24 * 3600 * 1000;
 
 export interface SweepResult {
   readonly reEnqueued: number;
@@ -39,7 +42,8 @@ export interface SweepResult {
  * - outbound messages still `queued` long after they were stored (their send event was lost)
  *   get a new send event;
  * - turn leases that expired (the run crashed) are released and their turns marked failed,
- *   so the next message is answered without delay.
+ *   so the next message is answered without delay;
+ * - delivery statuses held for a provider id that never turned up are dropped after two days.
  */
 export async function sweepBusiness(
   p: PipelineContext,
@@ -150,6 +154,10 @@ export async function sweepBusiness(
         });
       }
     }
+    // Delivery statuses nobody claimed (messages other tools sent on the same account).
+    await ctx.tx
+      .delete(pendingDeliveryStatuses)
+      .where(lt(pendingDeliveryStatuses.createdAt, new Date(now.getTime() - HELD_STATUS_MS)));
     return { unenqueued, stuck, expired: expired.length };
   });
 

@@ -186,6 +186,14 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 - **Must deliver:** adapter registered in `apps/web/src/server`; fixtures for every inbound
   type; tests for invariant I6; the choice of audio transcription provider recorded in
   DECISIONS and HUMAN_TODO.
+- **Delivered, for C10, C13, C16 and C17:** `@repo/channel-meta` (signature, Graph client,
+  error classes, media, code exchange); the `provider_event` signal and the pipeline's
+  `windowFallbacks`, `providerEvents` and `attachmentEnrichers`; WhatsApp's template fallback
+  outside the 24-hour window (C13's follow-ups need no channel code); `getWhatsApp()` in
+  `apps/web/src/server/whatsapp` (connections, Embedded Signup, templates) and
+  `POST /api/oauth/meta/whatsapp` for C16's connection page; `message_parts` and
+  `pending_delivery_statuses` for delivery tracking. Fixtures and a fake Graph API:
+  `@repo/channel-whatsapp/testing`. ARCHITECTURE §2 "As built (C9)" has the rest.
 
 ### C10 · Instagram and Messenger
 

@@ -1,6 +1,8 @@
 import type { ModelClient } from "@repo/ai";
 import {
+  type AttachmentKind,
   type BusinessProfile,
+  type ChannelSignal,
   type ExecutedAction,
   type ChannelId,
   type ContactId,
@@ -13,6 +15,7 @@ import {
   type ModelCallSink,
   type PlaybookSnapshot,
   type TurnTrigger,
+  type WindowFallbackResolver,
 } from "@repo/core";
 import type { BusinessContext, BusinessTenant, Database } from "@repo/db";
 import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
@@ -79,6 +82,38 @@ export interface TurnLoaders {
   readonly lead: (ctx: BusinessContext, conversationId: ConversationId) => Promise<LeadSnapshot>;
 }
 
+/**
+ * Handles the `provider_event` signals of one channel (C9: WhatsApp template status, account
+ * and quality updates). It resolves the account itself (the event may name a group account)
+ * and returns whether it did something. Registered by the infrastructure root (apps/web).
+ */
+export interface ProviderEventHandler {
+  readonly channel: ChannelId;
+  handle(signal: Extract<ChannelSignal, { type: "provider_event" }>): Promise<boolean>;
+}
+
+/**
+ * Turns an inbound attachment into text the engine reads in its place (C9: a voice message
+ * becomes its transcript, or a note asking the customer to type). Runs in its own step after
+ * the download (`bytes` is null when the file could not be downloaded) and stores what it
+ * returns as the attachment's `analysis`; null leaves the attachment as it is. Throw a
+ * retryable error to try again later.
+ */
+export interface AttachmentEnricher {
+  readonly name: string;
+  readonly channel: ChannelId;
+  readonly kinds: readonly AttachmentKind[];
+  enrich(input: {
+    readonly tenant: BusinessTenant;
+    readonly attachmentId: string;
+    readonly kind: AttachmentKind;
+    readonly mimeType: string | null;
+    readonly bytes: Uint8Array | null;
+    readonly settings: AppResolvedSettings;
+    readonly logger: Logger;
+  }): Promise<string | null>;
+}
+
 export interface PipelineOptions {
   /** How long a turn may hold the conversation before another run may take over. */
   readonly leaseSeconds: number;
@@ -108,7 +143,8 @@ export const DEFAULT_PIPELINE_OPTIONS: PipelineOptions = {
   debounce: { period: "2s", timeout: "1m" },
   replyRetries: 4,
   sendRetries: 5,
-  maxWebhookBytes: 1024 * 1024,
+  // Meta's webhooks carry up to 3 MB; Vercel refuses request bodies over 4.5 MB.
+  maxWebhookBytes: 4 * 1024 * 1024,
   sweepUnenqueuedAfterSeconds: 60,
   sweepQueuedAfterSeconds: 300,
 };
@@ -134,6 +170,14 @@ export interface PipelineDeps {
   readonly guards?: readonly TurnGuard[];
   readonly observers?: readonly TurnObserver[];
   readonly loaders?: Partial<TurnLoaders>;
+  /*
+   * Channel-specific parts, registered by the infrastructure root (apps/web) next to the
+   * adapters: what replaces a free-form message once the messaging window has closed, who
+   * handles provider events, and what turns attachments into text.
+   */
+  readonly windowFallbacks?: readonly WindowFallbackResolver[];
+  readonly providerEvents?: readonly ProviderEventHandler[];
+  readonly attachmentEnrichers?: readonly AttachmentEnricher[];
   readonly storage?: (tenant: BusinessTenant) => TenantStorage;
   readonly logger?: Logger;
   /** Injected clock. Default: the system clock. */
@@ -154,6 +198,9 @@ export interface PipelineContext {
   readonly guards: readonly TurnGuard[];
   readonly observers: readonly TurnObserver[];
   readonly loaders: TurnLoaders;
+  readonly windowFallbacks: readonly WindowFallbackResolver[];
+  readonly providerEvents: readonly ProviderEventHandler[];
+  readonly attachmentEnrichers: readonly AttachmentEnricher[];
   readonly storage: (tenant: BusinessTenant) => TenantStorage;
   readonly logger: Logger;
   readonly clock: () => Date;
@@ -185,6 +232,9 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
       playbook: deps.loaders?.playbook ?? domain.loaders.playbook,
       lead: deps.loaders?.lead ?? domain.loaders.lead,
     },
+    windowFallbacks: deps.windowFallbacks ?? [],
+    providerEvents: deps.providerEvents ?? [],
+    attachmentEnrichers: deps.attachmentEnrichers ?? [],
     storage,
     logger,
     clock: deps.clock ?? (() => new Date()),

@@ -23,6 +23,8 @@ export {
   type PipelineContext,
   type PipelineDeps,
   type PipelineOptions,
+  type AttachmentEnricher,
+  type ProviderEventHandler,
   type TurnFacts,
   type TurnGuard,
   type TurnLoaders,
@@ -49,12 +51,12 @@ export { defaultLeadLoader, loadBusinessProfile } from "./ports/loaders";
 export { createModelCallSink } from "./ports/model-calls";
 export { type IngestResult, isReplyableKind } from "./ingest/ingest";
 export { type WebhookResponse } from "./ingest/webhook";
-export { nextOutboundStatus } from "./ingest/signals";
+export { aggregateStatus, nextOutboundStatus } from "./send/deliveries";
 export { REPLY_FUNCTION_ID, type ReplyRunOutcome } from "./reply/job";
 export { SEND_FUNCTION_ID } from "./send/job";
 export { SWEEPER_FUNCTION_ID, type SweepResult } from "./sweeper";
 export { splitText } from "./send/split";
-export { textToHtml } from "./send/prepare";
+export { optionsAsText, textToHtml } from "./send/prepare";
 export { messagingWindow } from "./send/window";
 export {
   receivedEventId,

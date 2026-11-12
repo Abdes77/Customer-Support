@@ -153,6 +153,12 @@ export const channelsSettings = defineCategory("channels", {
       field: f.nullable(f.text({ minLength: 1, maxLength: 120 }), "No template"),
       default: null,
     }),
+    "channels.whatsapp.staff_reply_template": setting({
+      label: "Template for the team's late replies",
+      help: "Name of the approved message template sent instead when someone at the business replies from the inbox more than 24 hours after the customer's last message. Empty: such replies cannot be sent on WhatsApp.",
+      field: f.nullable(f.text({ minLength: 1, maxLength: 120 }), "No template"),
+      default: null,
+    }),
     "channels.whatsapp.reminder_template": setting({
       label: "Reminder template",
       help: "Name of the approved message template used for meeting reminders outside the 24-hour window. Empty: such reminders are skipped on WhatsApp.",

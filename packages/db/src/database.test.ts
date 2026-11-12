@@ -31,6 +31,7 @@ import {
   auditLog,
   businesses,
   businessMemberships,
+  channelConnections,
   channelConnectionSecrets,
   contacts,
   conversations,
@@ -634,6 +635,30 @@ describe("directory", () => {
         connection?.["external_account_id"] as string,
       ),
     ).toBeNull();
+  });
+
+  it("finds every connection under a provider business account, across tenants", async () => {
+    const { a1, b1 } = world.businesses;
+    const waba = `waba-${Date.now()}`;
+    const insert = (tenant: typeof a1.tenant, account: string, config: Record<string, unknown>) =>
+      t.admin
+        .insert(channelConnections)
+        .values({ ...tenant, channel: "whatsapp", externalAccountId: account, config })
+        .returning({ id: channelConnections.id });
+    const [first] = await insert(a1.tenant, `${waba}-1`, { businessAccountId: waba });
+    const [second] = await insert(b1.tenant, `${waba}-2`, { businessAccountId: waba });
+    await insert(a1.tenant, `${waba}-3`, { businessAccountId: `${waba}-other` });
+    const found = await t.db.directory.findChannelConnectionsByBusinessAccount("whatsapp", waba);
+    expect(found.map((row) => [row.connectionId, row.businessId])).toEqual([
+      [first!.id, a1.tenant.businessId],
+      [second!.id, b1.tenant.businessId],
+    ]);
+    expect(await t.db.directory.findChannelConnectionsByBusinessAccount("messenger", waba)).toEqual(
+      [],
+    );
+    expect(await t.db.directory.findChannelConnectionsByBusinessAccount("whatsapp", "")).toEqual(
+      [],
+    );
   });
 
   it("finds a business's agency and lists active businesses for cron runs", async () => {

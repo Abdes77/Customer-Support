@@ -4,20 +4,29 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./server": "./src/server/index.ts",
+    "./testing": "./src/testing/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "live:check": "tsx scripts/live-check.ts"
   },
   "dependencies": {
-    "@repo/core": "workspace:*"
+    "@repo/channel-meta": "workspace:*",
+    "@repo/core": "workspace:*",
+    "@repo/db": "workspace:*",
+    "@repo/jobs": "workspace:*",
+    "@repo/settings": "workspace:*",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "tsx": "catalog:"
   }
 }

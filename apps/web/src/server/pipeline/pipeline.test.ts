@@ -143,7 +143,7 @@ describe("POST /api/webhooks/[channel]", () => {
     expect((await handle(signedRequest(body), params("carrier-pigeon"))).status).toBe(404);
     const oversized = new Request("http://localhost:3000/api/webhooks/test", {
       method: "POST",
-      headers: { "content-length": String(2 * 1024 * 1024) },
+      headers: { "content-length": String(5 * 1024 * 1024) },
       body: "{}",
     });
     expect((await handle(oversized, params("test"))).status).toBe(413);

@@ -452,6 +452,58 @@ the public API `/api/widget/v1` in `apps/web`.
 - **End to end.** `pnpm e2e` (Playwright, `apps/web/e2e`): a sample site on an allowed and a
   refused origin, a qualifying conversation with a photo at 1280×800 and 390×844.
 
+### As built (C9)
+
+WhatsApp: `packages/channels/meta` (shared with C10), `packages/channels/whatsapp` (adapter;
+`/server` for what touches the database; `/testing` for fixtures and a fake Graph API) and
+`POST /api/oauth/meta/whatsapp` in `apps/web`. Built from Meta's docs read on 2026-11-12,
+Graph API v27.0 (`META_GRAPH_API_VERSION`).
+
+- **Meta module** (`@repo/channel-meta`): `verifyMetaWebhook` (handshake, `X-Hub-Signature-256`
+  over the raw body, constant time), `createGraphClient` (injected `fetch`, token only in the
+  header, `GraphApiError` with Meta's code), `classifyGraphError` (window closed, rate limits
+  with their waits, auth failures), `downloadMedia`/`uploadMedia` (Meta hosts only, redirects
+  checked, size caps), `exchangeCode`.
+- **Adapter** (`createWhatsAppAdapter`): parses `messages` (text, image, video, document,
+  sticker, audio with the voice flag, location, button and list replies, template buttons,
+  reactions, contact cards, unsupported; reply context, ad referral and forwarding as
+  metadata; the sender is the BSUID, else the phone), statuses, `smb_message_echoes`
+  (`human_agent_replied`) and the account-level fields (`provider_event`). Sends text (links
+  never previewed), reply buttons or lists, media uploaded from our storage (a `MediaReader`
+  injected by the app), templates with named or positional parameters; `markRead`;
+  `sendTyping` (read receipt plus indicator on the newest customer message);
+  `fetchAttachment` by media id.
+- **Server half** (`@repo/channel-whatsapp/server`): `createConnectionService` (Embedded
+  Signup completion, list, disconnect, `templates.create/sync/remove/list`),
+  `createWhatsAppWindowFallback`, `createWhatsAppEventHandler`, `createVoiceMessageEnricher`
+  with `createDeepgramTranscriber`, `createWhatsAppJobs` (`whatsapp-template-sync`). Wired in
+  `apps/web/src/server/pipeline` when `META_APP_SECRET` and `META_WEBHOOK_VERIFY_TOKEN` are
+  set; `getWhatsApp()` in `apps/web/src/server/whatsapp` is what C16's pages call.
+- **Pipeline extension points** (`PipelineDeps`, registered by the infrastructure root):
+  `windowFallbacks` (asked when the window is closed, or when the provider says so for the
+  first part of a free-form message; the stored message becomes the template the customer
+  saw), `providerEvents` (account-level signals), `attachmentEnrichers` (own step
+  `enrich-<id>` after the download; the text becomes the attachment's `analysis`). Quick
+  replies are written under the text when the channel's button setting is off.
+- **Delivery statuses** (`packages/pipeline/src/send/deliveries.ts`, migration 0009): every
+  provider message of an outbound message is a `message_parts` row; a status for an id not
+  recorded yet, or for a message still being sent, waits in `pending_delivery_statuses` and is
+  applied when the send step records its parts (an advisory lock per provider id orders the
+  two); a message's status is the furthest every part reached. Webhook bodies up to 4 MB.
+- **Send step** (C9 review): each part's step checks the window again with the customer's
+  latest message and a one-minute margin (a closing window takes the template instead), and
+  notes what the provider accepted in `payload.sendJournal` (keyed by run and part, dropped
+  when the parts are recorded), so a re-run of a step that lost its memoized result does not
+  send the part again.
+- **For C10:** reuse `@repo/channel-meta` (extend it there), the `provider_event` signal and
+  `providerEvents`, `channels.meta.quick_replies` (already honoured by the pipeline), and
+  `directory.findChannelConnectionsByBusinessAccount` with `config.businessAccountId` if a
+  webhook names a group account. **For C13:** a follow-up turn's reply outside the window is
+  sent as `channels.whatsapp.follow_up_template` by the send step; nothing to do in the
+  handler. **For C16:** the connection page calls `getWhatsApp()`; Embedded Signup's browser
+  half posts to `/api/oauth/meta/whatsapp`; a manual reply outside the window goes out as
+  `channels.whatsapp.staff_reply_template` or fails with `window_closed`.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -601,6 +653,7 @@ Rules for every function:
 | `handoff-followup` | scheduled by action or cadence | `sleepUntil`, cancelled by `message.received`, respects quiet hours and windows | C13 |
 | `handoff-emergency-chain` | `lead.emergency` | alert, wait for acknowledgement, call, next contact | C13 |
 | `handoff-takeover-release` | `conversation.takeover_started` | sleeps for the idle timeout, cancelled by manual release | C13 |
+| `whatsapp-template-sync` | cron, every six hours | one step per connected number; webhooks keep statuses current in between | C9 |
 | `email-imap-poll` | cron, every minute | one step per inbox, limit per inbox | C11 |
 | `email-watch-renew` | cron | renews Gmail watches and Graph subscriptions before expiry | C11 |
 | `integrations-sync` | `lead.*` | per connection, idempotency key, backoff | C14 |

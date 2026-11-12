@@ -382,6 +382,83 @@ Format of an entry:
   browser test is `pnpm services:up && pnpm e2e` (Chromium for Playwright:
   `pnpm --filter @repo/web exec playwright install chromium`).
 
+### 12. WhatsApp: Meta app, Embedded Signup, webhook and a live conversation (C9)
+
+- **What:** WhatsApp is built and tested against recorded-style fixtures and a fake Graph API
+  (`pnpm verify`: signature checks, every inbound type, statuses, the 24-hour window and the
+  template fallback, Embedded Signup, templates, voice messages). It has not talked to Meta:
+  the build VM had no Meta credentials. Meta's docs were read on 2026-11-12; Graph API
+  **v27.0** is assumed (`META_GRAPH_API_VERSION`, default `v27.0`). Needed:
+  1. **A Meta app** (developers.facebook.com, My Apps, Create App, type Business) with the
+     WhatsApp product. Business verification of the agency's business portfolio and, for
+     onboarding clients, Tech Provider status and App Review of `whatsapp_business_messaging`
+     and `whatsapp_business_management` (C18 prepares the review pack).
+  2. **The webhook.** WhatsApp, Configuration: callback URL `<APP_URL>/api/webhooks/whatsapp`,
+     verify token = `META_WEBHOOK_VERIFY_TOKEN` (any random string, `openssl rand -hex 24`).
+     Subscribe the fields `messages`, `message_template_status_update`, `account_update`,
+     `phone_number_quality_update` and, for numbers that also use the WhatsApp Business app,
+     `smb_message_echoes`. Meta signs deliveries with the app secret.
+  3. **Embedded Signup** (Facebook Login for Business, Configurations, create one for
+     "WhatsApp Embedded Signup"): its id is `META_WHATSAPP_SIGNUP_CONFIG_ID`. Add the app's
+     domain to the allowed domains. The admin page that opens it is C16's; the server part is
+     `POST /api/oauth/meta/whatsapp`.
+  4. **Templates.** Outside the 24-hour window WhatsApp only delivers approved templates. For
+     each business, create the suggested templates (`SUGGESTED_TEMPLATES` in
+     `@repo/channel-whatsapp/server`, from the admin panel once C16 exists), wait for approval
+     (minutes), and set `channels.whatsapp.follow_up_template` (and `staff_reply_template`)
+     to their names. Until then, follow-ups after 24 hours are not sent (they fail with
+     `window_closed`, visible in the inbox).
+  5. **Voice messages (optional).** A Deepgram key (console.deepgram.com, API Keys) in
+     `DEEPGRAM_API_KEY`, and the business setting `channels.whatsapp.voice_messages` =
+     "transcribe". Without it the bot asks customers to type. The Deepgram request
+     (`POST https://api.deepgram.com/v1/listen?model=nova-3`) is written from Deepgram's
+     documented API and tested only against a recorded response.
+- **Where:** Vercel environment variables; the Meta app dashboard.
+- **Variables:** `META_APP_ID`, `NEXT_PUBLIC_META_APP_ID`, `META_APP_SECRET`,
+  `META_WEBHOOK_VERIFY_TOKEN`, `META_WHATSAPP_SIGNUP_CONFIG_ID`, optionally
+  `META_GRAPH_API_VERSION` and `DEEPGRAM_API_KEY`. For the live checks:
+  `META_TEST_WHATSAPP_PHONE_NUMBER_ID`, `META_TEST_WHATSAPP_ACCESS_TOKEN` (WhatsApp, API Setup:
+  a temporary token, or a system user token), `META_TEST_WHATSAPP_BUSINESS_ACCOUNT_ID`,
+  `META_TEST_WHATSAPP_RECIPIENT` (your own phone, added as a test recipient on API Setup).
+- **Live checks that were skipped:**
+  1. The Cloud API itself: `pnpm --filter @repo/channel-whatsapp live:check` reads the test
+     number, sends `hello_world`, a free-form text and reply buttons to your phone (write to
+     the test number first, or the last two fail with 131047, which also proves the window
+     rule), and lists the templates.
+  2. A real conversation round trip: run the app where Meta can reach it (a preview
+     deployment, or `pnpm dev` behind a tunnel such as `cloudflared tunnel --url
+     http://localhost:3000`), point the webhook there, connect the test number to a seeded
+     business with `pnpm --filter @repo/channel-whatsapp live:check connect --business
+     <business id>` (find it with `psql "$DATABASE_URL" -c "select id, name from businesses"`),
+     then write to the test number
+     from your phone. Expect: blue ticks and "typing…", one reply per burst of messages, a
+     photo stored, a voice note answered with "please type", and statuses moving to
+     delivered and read in `messages`. Then set the business's `follow_up_template`, push
+     the conversation's `last_inbound_at` back 25 hours in the database and send a
+     follow-up (C13) or a manual reply (C16): the template must arrive instead of text.
+  3. Embedded Signup with a real client number, once the app has Tech Provider access.
+- **Checked against Meta's reference in the C9 review (2026-11-12, docs only, nothing sent):**
+  the `smb_message_echoes` payload (`message_echoes` with `from`, `to`, `to_user_id`); the
+  inbound `from_user_id`/`user_id` fields and that `from`/`wa_id` are left out for users
+  with a username; the `account_update` events (DISABLED_UPDATE carries
+  `ban_info.waba_ban_state`, which can be REINSTATE).
+- **Unverified details (check them in live check 2):**
+  1. The BSUID format: the docs give only examples (`US.13491208655302741918`, parent ids
+     `US.ENT.…`); anything that is not a phone number is sent as `recipient`.
+  2. Meta's media host names: the docs show the media URL as a placeholder and name no
+     host. The downloader allows `fbsbx.com`, `facebook.com`, `fbcdn.net`, `whatsapp.net`
+     and `cdninstagram.com` (`META_MEDIA_HOST_SUFFIXES`); a photo that fails with "not one
+     of Meta's hosts" in the attachment's error means the list needs the host it names.
+  3. Whether 131047 (window closed) comes back in the send response or only later as a
+     "failed" status webhook: the error-code page says either or both. The send step checks
+     the window itself one minute early, so this matters only at the edge; a late 131047
+     marks the message failed (`meta_131047`) without a template. To see which: run live
+     check 1 when you have not written to the test number for more than 24 hours. If "send
+     free-form text" prints `FAIL ... meta_131047`, Meta answers in the response; if it
+     prints `ok`, the refusal comes only as a failed status webhook (watch the app's logs or
+     WhatsApp Manager), and the one-minute margin is the only guard at the edge.
+  4. The default waits for rate-limit codes (`packages/channels/meta/src/errors.ts`).
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -456,7 +533,11 @@ already listed and described in `.env.example`.
   C4 confirms them with the first live call.
 - `CHANNEL_CAPABILITIES` in `packages/core/src/contracts/channel.ts` (message length limits,
   messaging windows, button counts) are baseline values from memory. C8–C11 check each number
-  against the vendor's current documentation.
+  against the vendor's current documentation. WhatsApp's (C9) were checked against Meta's docs
+  on 2026-11-12: 4,096 characters, three reply buttons of 20 characters, typing and read
+  receipts, the 24-hour window with templates only after it.
+- **WhatsApp (C9).** Built from Meta's docs read on 2026-11-12, tested against recorded-style
+  fixtures and a fake Graph API; no request reached Meta (entry 12).
 - **Supabase (C1).** The schema, the row-level security and both access paths are tested on
   plain PostgreSQL 16 with a compatibility bootstrap that creates Supabase's roles and
   `auth.uid()`. Not yet seen on a real project: the `postgres` role switching to

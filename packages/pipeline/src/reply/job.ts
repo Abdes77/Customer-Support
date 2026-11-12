@@ -4,7 +4,7 @@ import { defineEventJob, type EventJobDefinition, type JobContext } from "@repo/
 
 import type { PipelineContext } from "../deps";
 import { raiseInAppAlert, recordDeadLetter } from "../failures";
-import { downloadAttachment } from "./attachments";
+import { downloadAttachment, enrichAttachment } from "./attachments";
 import { claimTurn, type ClaimResult, planTurn } from "./claim";
 import { commitTurn, releaseLease } from "./commit";
 import { generateTurn } from "./generate";
@@ -74,6 +74,14 @@ export async function runReplyTurn(
     await step.run(`attachment-${attachmentId}`, () =>
       downloadAttachment(p, data, claimed.channel, attachmentId),
     );
+  }
+  // Voice messages and the like become text the engine can read (C9).
+  if (p.attachmentEnrichers.some((item) => item.channel === claimed.channel)) {
+    for (const attachmentId of claimed.attachmentIds) {
+      await step.run(`enrich-${attachmentId}`, () =>
+        enrichAttachment(p, data, claimed.channel, attachmentId),
+      );
+    }
   }
   await step.run("presence-on", () => showPresence(p, data, claimed, "on", log));
 

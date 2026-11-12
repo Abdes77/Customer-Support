@@ -54,6 +54,17 @@ export interface Directory {
     externalAccountId: string,
   ): Promise<ChannelConnectionRef | null>;
 
+  /**
+   * The connections under one provider account group, for provider events that name the
+   * group rather than a connection (C9: a WhatsApp Business Account's template and account
+   * updates; it can hold several connected numbers, possibly of different businesses).
+   * Matches `config.businessAccountId`, which only a connect flow writes.
+   */
+  findChannelConnectionsByBusinessAccount(
+    channel: ChannelId,
+    businessAccountId: string,
+  ): Promise<ChannelConnectionRef[]>;
+
   /** The agency of a business, for callers that hold only a business id. */
   findBusiness(businessId: BusinessId): Promise<BusinessRef | null>;
 
@@ -97,6 +108,29 @@ export function createDirectory(connection: Connection): Directory {
         )
         .limit(1);
       return rows[0] ?? null;
+    },
+
+    async findChannelConnectionsByBusinessAccount(channel, businessAccountId) {
+      if (businessAccountId.length === 0) return [];
+      return db
+        .select({
+          connectionId: channelConnections.id,
+          agencyId: channelConnections.agencyId,
+          businessId: channelConnections.businessId,
+          channel: channelConnections.channel,
+          status: channelConnections.status,
+          businessStatus: businesses.status,
+        })
+        .from(channelConnections)
+        .innerJoin(businesses, eq(businesses.id, channelConnections.businessId))
+        .where(
+          and(
+            eq(channelConnections.channel, channel),
+            sql`(${channelConnections.config} ->> 'businessAccountId') = ${businessAccountId}`,
+          ),
+        )
+        .orderBy(channelConnections.createdAt)
+        .limit(100);
     },
 
     async findBusiness(businessId) {

@@ -5,6 +5,7 @@
 export * from "./businesses";
 export * from "./channels";
 export * from "./conversations";
+export * from "./deliveries";
 export * from "./integrations";
 export * from "./knowledge";
 export * from "./leads";

@@ -603,6 +603,36 @@ export const ISOLATION_MATRIX: readonly MatrixEntry[] = [
     user: READ_ONLY_FOR_USERS,
     system: "read_write",
   },
+  {
+    name: "message_parts",
+    table: tables.messageParts,
+    kind: "business",
+    row: (r) => ({
+      ...r.tenant,
+      messageId: r.ref("messages"),
+      channelConnectionId: r.ref("channel_connections"),
+      partIndex: r.uniqueInt(),
+      externalMessageId: r.unique("wamid"),
+    }),
+    change: { column: "error_code", value: "changed" },
+    user: READ_ONLY_FOR_USERS,
+    system: "read_write",
+  },
+  {
+    name: "pending_delivery_statuses",
+    table: tables.pendingDeliveryStatuses,
+    kind: "business",
+    row: (r) => ({
+      ...r.tenant,
+      channelConnectionId: r.ref("channel_connections"),
+      externalMessageId: r.unique("wamid"),
+      status: "delivered",
+      occurredAt: new Date(),
+    }),
+    change: { column: "error_code", value: "changed" },
+    user: READ_ONLY_FOR_USERS,
+    system: "read_write",
+  },
 
   // --- integrations ------------------------------------------------------------------------
   {

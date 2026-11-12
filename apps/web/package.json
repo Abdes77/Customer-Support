@@ -14,7 +14,9 @@
   },
   "dependencies": {
     "@repo/ai": "workspace:*",
+    "@repo/channel-meta": "workspace:*",
     "@repo/channel-test": "workspace:*",
+    "@repo/channel-whatsapp": "workspace:*",
     "@repo/channel-widget": "workspace:*",
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",

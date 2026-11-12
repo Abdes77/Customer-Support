@@ -1,9 +1,12 @@
+import { z } from "zod";
+
 import {
   AppError,
   type ChannelConnectionId,
   type EventPayload,
   ExternalServiceError,
   type MessageId,
+  type OutboundMessage,
   type SendTarget,
 } from "@repo/core";
 import {
@@ -29,7 +32,9 @@ import { loadConnectionContext } from "../connection";
 import type { PipelineContext } from "../deps";
 import { sendFailedEventId } from "../event-ids";
 import { raiseInAppAlert, recordDeadLetter } from "../failures";
-import { prepareSend, type SendPlan } from "./prepare";
+import { applyHeldStatuses, recordParts } from "./deliveries";
+import { prepareSend, type SendTargetInfo } from "./prepare";
+import { messagingWindow } from "./window";
 
 type SendData = EventPayload<"message.send_requested">;
 
@@ -112,13 +117,36 @@ async function hasPendingPredecessor(
   return earlier !== undefined;
 }
 
-async function sendPart(
+/**
+ * A free-form part is sent only when the window is still open this long from now: the
+ * window may have closed since `prepare` (order waits, retries after a rate limit), and
+ * Meta reports a closed window (131047) possibly only later, in a "failed" status, when no
+ * template can replace the message any more.
+ */
+export const SEND_WINDOW_MARGIN_MS = 60_000;
+
+const JournalEntry = z.object({
+  runId: z.string(),
+  externalMessageId: z.string().min(1),
+  sentAt: z.string(),
+});
+
+/**
+ * One part of an outbound message, in its own step. What the provider accepted is noted in
+ * the message's `payload.sendJournal` before the step returns, so a re-run of the step whose
+ * memoized result was lost (the answer to the job platform never arrived) returns it instead
+ * of sending the part a second time. A crash between the provider's answer and that note, or
+ * a provider timeout after it accepted the message, can still send twice (DECISIONS 168).
+ */
+export async function sendPart(
   p: PipelineContext,
   data: SendData,
-  plan: Extract<SendPlan, { kind: "send" }>,
+  info: SendTargetInfo,
+  part: OutboundMessage,
   index: number,
+  runId: string,
 ): Promise<PartResult> {
-  const adapter = p.adapters.find(plan.target.channel);
+  const adapter = p.adapters.find(info.channel);
   if (adapter === undefined) {
     return {
       ok: false,
@@ -127,32 +155,95 @@ async function sendPart(
       windowClosed: false,
     };
   }
-  const connection = await p.db
-    .forBusiness(data.businessId, { agencyId: data.agencyId })
-    .run((ctx) =>
-      loadConnectionContext(ctx, p.db, plan.target.connectionId as ChannelConnectionId),
+  const journalKey = `${part.kind === "template" ? "t" : ""}${index}`;
+  const scope = p.db.forBusiness(data.businessId, { agencyId: data.agencyId });
+  const state = await scope.run(async (ctx) => {
+    const [row] = await ctx.tx
+      .select({
+        payload: messages.payload,
+        lastInboundAt: conversations.lastInboundAt,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(eq(messages.id, data.messageId))
+      .limit(1);
+    return row;
+  });
+  const journal: unknown = state?.payload["sendJournal"];
+  const journaled = JournalEntry.safeParse(
+    journal !== null && typeof journal === "object"
+      ? (journal as Record<string, unknown>)[journalKey]
+      : undefined,
+  );
+  if (journaled.success && journaled.data.runId === runId) {
+    return {
+      ok: true,
+      externalMessageId: journaled.data.externalMessageId,
+      sentAt: journaled.data.sentAt,
+    };
+  }
+  if (part.kind !== "template") {
+    // Invariant I6 checked again at the moment of sending, with the customer's latest message.
+    const lastInboundAt = state?.lastInboundAt ?? null;
+    const window = messagingWindow(
+      adapter.capabilities,
+      lastInboundAt === null ? null : new Date(lastInboundAt),
+      new Date(p.clock().getTime() + SEND_WINDOW_MARGIN_MS),
+      info.sentByHuman,
     );
+    if (!window.open) {
+      return {
+        ok: false,
+        code: "window_closed",
+        message: "The messaging window closed before the message could be sent.",
+        windowClosed: true,
+      };
+    }
+  }
+  const connection = await scope.run((ctx) =>
+    loadConnectionContext(ctx, p.db, info.connectionId as ChannelConnectionId),
+  );
   const target: SendTarget = {
     connection,
-    conversationId: plan.target.conversationId,
-    recipientExternalId: plan.target.recipientExternalId,
-    externalThreadId: plan.target.externalThreadId,
-    replyToExternalMessageId: plan.target.replyToExternalMessageId,
-    window: plan.target.window,
-    email: plan.target.email,
-    idempotencyKey: `${data.messageId}:${index}`,
-    sentByHuman: plan.target.sentByHuman,
+    conversationId: info.conversationId,
+    recipientExternalId: info.recipientExternalId,
+    externalThreadId: info.externalThreadId,
+    replyToExternalMessageId: info.replyToExternalMessageId,
+    window: info.window,
+    email: info.email,
+    idempotencyKey: `${data.messageId}:${part.kind === "template" ? "t" : ""}${index}`,
+    sentByHuman: info.sentByHuman,
   };
-  const part = plan.parts[index]!;
   const result = await adapter.send(part, target);
   if (result.ok) {
+    const entry = JSON.stringify({
+      [journalKey]: { runId, externalMessageId: result.externalMessageId, sentAt: result.sentAt },
+    });
+    try {
+      await scope.run(async (ctx) => {
+        await ctx.tx
+          .update(messages)
+          .set({
+            payload: sql`${messages.payload} || jsonb_build_object('sendJournal', coalesce(${messages.payload} -> 'sendJournal', '{}'::jsonb) || ${entry}::jsonb)`,
+          })
+          .where(and(eq(messages.id, data.messageId), eq(messages.status, "sending")));
+      });
+    } catch (error) {
+      // The part went out: failing the step now would send it again on the retry.
+      p.logger.warn("send.journal_failed", {
+        traceId: data.traceId,
+        businessId: data.businessId,
+        messageId: data.messageId,
+        error,
+      });
+    }
     return { ok: true, externalMessageId: result.externalMessageId, sentAt: result.sentAt };
   }
   const { error } = result;
   if (error.retryable && !error.windowClosed) {
     // Thrown, so the job platform retries this step (honouring retry-after).
     throw new ExternalServiceError(`Sending failed: ${error.code}`, {
-      provider: plan.target.channel,
+      provider: info.channel,
       retryable: true,
       ...(error.retryAfterSeconds === null ? {} : { retryAfterSeconds: error.retryAfterSeconds }),
       details: { code: error.code },
@@ -164,6 +255,67 @@ async function sendPart(
     message: error.message.slice(0, 500),
     windowClosed: error.windowClosed,
   };
+}
+
+/**
+ * Asks the channel's window fallback for an approved template that may replace the message
+ * now that the messaging window is closed (invariant I6). When it has one, the message row
+ * becomes that template (kind, text the customer will see, the template in the payload, the
+ * original text kept), so the inbox and the bot's history show what was really sent and a
+ * retried run sends the same template. Null: no template, the message fails.
+ */
+async function resolveWindowFallback(
+  p: PipelineContext,
+  data: SendData,
+  info: SendTargetInfo,
+  author: "bot" | "human_agent",
+  step: JobContext<SendData>["step"],
+): Promise<Extract<OutboundMessage, { kind: "template" }> | null> {
+  const resolver = p.windowFallbacks.find((item) => item.channel === info.channel);
+  if (resolver === undefined) return null;
+  const result = await step.run("window-fallback", () =>
+    resolver.resolve({
+      agencyId: data.agencyId,
+      businessId: data.businessId,
+      connectionId: info.connectionId as ChannelConnectionId,
+      conversationId: data.conversationId,
+      messageId: data.messageId,
+      author,
+    }),
+  );
+  if (result.kind === "none") {
+    p.logger.info("send.window_fallback_none", {
+      traceId: data.traceId,
+      businessId: data.businessId,
+      messageId: data.messageId,
+      reason: result.reason,
+    });
+    return null;
+  }
+  await step.run("window-fallback-record", () =>
+    p.db.forBusiness(data.businessId, { agencyId: data.agencyId }).run(async (ctx) => {
+      const fallback = JSON.stringify({
+        template: {
+          templateName: result.message.templateName,
+          languageCode: result.message.languageCode,
+          variables: result.message.variables,
+          ...(result.message.namedVariables === undefined
+            ? {}
+            : { namedVariables: result.message.namedVariables }),
+        },
+      });
+      await ctx.tx
+        .update(messages)
+        .set({
+          kind: "template",
+          text: result.renderedText,
+          payload: sql`${messages.payload} || ${fallback}::jsonb || jsonb_build_object('windowFallback', jsonb_build_object('originalKind', ${messages.kind}::text, 'originalText', ${messages.text}::text))`,
+        })
+        .where(and(eq(messages.id, data.messageId), eq(messages.status, "sending")));
+      return null;
+    }),
+  );
+  return result.message;
 }
 
 /**
@@ -245,7 +397,8 @@ async function markSent(
       status: "sent",
       externalMessageId: first.externalMessageId,
       sentAt: new Date(first.sentAt),
-      payload: sql`${messages.payload} || ${delivery}::jsonb`,
+      // The parts are recorded now; the journal of the send steps is no longer needed.
+      payload: sql`(${messages.payload} - 'sendJournal') || ${delivery}::jsonb`,
     })
     .where(and(eq(messages.id, data.messageId), eq(messages.status, "sending")));
   await ctx.tx
@@ -307,24 +460,72 @@ export async function runSend(
   let failure: { code: string; message: string; retryable: boolean | null } | null =
     plan.kind === "fail" ? { code: plan.code, message: plan.message, retryable: false } : null;
   const sent: Extract<PartResult, { ok: true }>[] = [];
-  if (plan.kind === "send") {
-    for (let index = 0; index < plan.parts.length; index += 1) {
-      const result = await step.run(`send-${index}`, () => sendPart(p, data, plan, index));
-      if (!result.ok) {
-        failure = { code: result.code, message: result.message, retryable: false };
-        break;
+
+  if (plan.kind === "send" || plan.kind === "window_closed") {
+    let parts: readonly OutboundMessage[] = plan.kind === "send" ? plan.parts : [];
+    let prefix = "send";
+    // Asked at most once: when the window is known to be closed, or when the provider says
+    // so for the first part of a free-form message.
+    let fallbackAsked = false;
+    const fallback = async (): Promise<boolean> => {
+      fallbackAsked = true;
+      const resolved = await resolveWindowFallback(p, data, plan.target, plan.author, step);
+      if (resolved === null) return false;
+      parts = [resolved];
+      prefix = "send-fallback";
+      return true;
+    };
+    if (plan.kind === "window_closed" && !(await fallback())) {
+      failure = {
+        code: "window_closed",
+        message: "The messaging window is closed and no approved template can replace the message.",
+        retryable: false,
+      };
+    }
+    const target = plan.target;
+    for (let index = 0; failure === null && index < parts.length; index += 1) {
+      const part = parts[index]!;
+      const result = await step.run(`${prefix}-${index}`, () =>
+        sendPart(p, data, target, part, index, runId),
+      );
+      if (result.ok) {
+        sent.push(result);
+        continue;
       }
-      sent.push(result);
+      const canFallBack =
+        result.windowClosed &&
+        index === 0 &&
+        !fallbackAsked &&
+        plan.kind === "send" &&
+        plan.freeForm &&
+        p.windowFallbacks.some((item) => item.channel === target.channel);
+      if (canFallBack && (await fallback())) {
+        index = -1;
+        continue;
+      }
+      failure = { code: result.code, message: result.message, retryable: false };
     }
   }
 
+  const connectionId = plan.kind === "fail" ? null : plan.target.connectionId;
   const failedEvent = await step.run("finish", () =>
     scope().run(async (ctx) => {
-      if (failure === null) {
-        await markSent(ctx, p, data, runId, sent);
-        return null;
+      // Every provider message that went out is recorded, also when a later part failed, so
+      // its delivery statuses count; statuses that arrived first are applied now.
+      if (connectionId !== null && sent.length > 0) {
+        await recordParts(ctx, data.messageId, connectionId, sent);
       }
-      return markSendFailed(ctx, p, data, failure, event.id);
+      let failedNow: AnyJobEvent | null = null;
+      if (failure === null) await markSent(ctx, p, data, runId, sent);
+      else failedNow = await markSendFailed(ctx, p, data, failure, event.id);
+      if (connectionId !== null && sent.length > 0) {
+        await applyHeldStatuses(
+          ctx,
+          connectionId,
+          sent.map((part) => part.externalMessageId),
+        );
+      }
+      return failedNow;
     }),
   );
   if (failedEvent !== null) {

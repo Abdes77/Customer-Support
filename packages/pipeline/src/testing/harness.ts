@@ -10,6 +10,7 @@ import {
   buildTestWebhookRequest,
 } from "@repo/channel-test";
 import {
+  type ChannelAdapter,
   type ConversationEngine,
   createLogger,
   type EngineTurnInput,
@@ -149,6 +150,8 @@ export async function createHarness(
   overrides: Partial<Omit<PipelineDeps, "db" | "adapters" | "events" | "engine">> & {
     /** False: events are only recorded, no job runs (tests that drive the jobs themselves). */
     readonly runJobs?: boolean;
+    /** Changes what the pipeline sees of the test adapter (capabilities, send behaviour). */
+    readonly wrapAdapter?: (adapter: TestChannelAdapter) => ChannelAdapter;
   } = {},
 ): Promise<Harness> {
   const t = await createTestDatabase();
@@ -161,10 +164,10 @@ export async function createHarness(
   const echo = createEchoEngine();
   const engine = { respond: echo.respond.bind(echo) };
   const store = new MemoryObjectStore();
-  const { runJobs: _runJobs, ...deps } = overrides;
+  const { runJobs: _runJobs, wrapAdapter, ...deps } = overrides;
   const pipeline = createPipeline({
     db: t.db,
-    adapters: createAdapterRegistry([adapter]),
+    adapters: createAdapterRegistry([wrapAdapter === undefined ? adapter : wrapAdapter(adapter)]),
     engine: { respond: (input, ports) => engine.respond(input, ports) },
     events,
     logger,

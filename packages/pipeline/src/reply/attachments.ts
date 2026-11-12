@@ -1,6 +1,7 @@
 import type { ChannelId, EventPayload } from "@repo/core";
 import { attachments, eq, messages } from "@repo/db";
 import { isPermanentError } from "@repo/jobs";
+import { loadSettings } from "@repo/settings/server";
 
 import { loadConnectionContext } from "../connection";
 import type { PipelineContext } from "../deps";
@@ -88,4 +89,64 @@ export async function downloadAttachment(
     await mark({ status: "failed", error: (error as Error).message.slice(0, 500) });
     return "failed";
   }
+}
+
+/**
+ * Lets the channel's enrichers turn an attachment into text for the engine (C9: voice
+ * messages), in its own step after the download. Skips attachments that already have text.
+ */
+export async function enrichAttachment(
+  p: PipelineContext,
+  data: ReceivedData,
+  channel: ChannelId,
+  attachmentId: string,
+): Promise<"enriched" | "skipped"> {
+  const scope = p.db.forBusiness(data.businessId, { agencyId: data.agencyId });
+  const row = await scope.run(async (ctx) => {
+    const [found] = await ctx.tx
+      .select({
+        kind: attachments.kind,
+        status: attachments.status,
+        mimeType: attachments.mimeType,
+        storagePath: attachments.storagePath,
+        analysis: attachments.analysis,
+      })
+      .from(attachments)
+      .where(eq(attachments.id, attachmentId))
+      .limit(1);
+    return found;
+  });
+  if (row === undefined || (row.analysis ?? "").trim().length > 0) return "skipped";
+  const enrichers = p.attachmentEnrichers.filter(
+    (item) => item.channel === channel && item.kinds.includes(row.kind),
+  );
+  if (enrichers.length === 0) return "skipped";
+
+  const tenant = { agencyId: data.agencyId, businessId: data.businessId };
+  let bytes: Uint8Array | null = null;
+  if (row.status === "stored" && row.storagePath !== null) {
+    const stored = await p.storage(tenant).get(row.storagePath);
+    bytes = stored?.bytes ?? null;
+  }
+  const settings = await scope.run((ctx) => loadSettings(ctx, ctx.tenant, { logger: p.logger }));
+  for (const enricher of enrichers) {
+    const text = await enricher.enrich({
+      tenant,
+      attachmentId,
+      kind: row.kind,
+      mimeType: row.mimeType,
+      bytes,
+      settings,
+      logger: p.logger.child({ enricher: enricher.name, businessId: data.businessId }),
+    });
+    if (text === null || text.trim().length === 0) continue;
+    await scope.run(async (ctx) => {
+      await ctx.tx
+        .update(attachments)
+        .set({ analysis: text.trim().slice(0, 4000) })
+        .where(eq(attachments.id, attachmentId));
+    });
+    return "enriched";
+  }
+  return "skipped";
 }

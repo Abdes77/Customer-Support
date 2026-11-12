@@ -1,10 +1,12 @@
 import { z } from "zod";
 
 import {
+  type AgencyId,
   type BusinessId,
   type ChannelConnectionId,
   type ConversationId,
   IsoDateTime,
+  type MessageId,
 } from "../ids";
 
 /**
@@ -161,6 +163,22 @@ export const ChannelSignal = z.discriminatedUnion("type", [
     channel: ChannelId,
     externalAccountId: z.string().min(1),
     reason: z.string(),
+    occurredAt: IsoDateTime,
+  }),
+  /**
+   * Anything else the provider reports about an account that the pipeline itself does not
+   * act on (a template was approved, the number's quality rating changed, the business
+   * removed the app from its WhatsApp account). Handed to the `ProviderEventHandler`
+   * registered for the channel. `externalAccountId` is the account the event names, which
+   * may be a group account (a WhatsApp Business Account id) rather than a connection's own
+   * id. `data` holds ids and classifications only, never customer content or credentials.
+   */
+  z.object({
+    type: z.literal("provider_event"),
+    channel: ChannelId,
+    externalAccountId: z.string().min(1),
+    event: z.string().min(1).max(100),
+    data: z.record(z.string(), z.unknown()),
     occurredAt: IsoDateTime,
   }),
 ]);
@@ -364,7 +382,10 @@ export type OutboundMessage =
       readonly kind: "template";
       readonly templateName: string;
       readonly languageCode: string;
+      /** Positional body parameters ({{1}}, {{2}}...), in order. */
       readonly variables: readonly string[];
+      /** Named body parameters ({{first_name}}); used instead of `variables` when present. */
+      readonly namedVariables?: Readonly<Record<string, string>>;
     }
   | {
       readonly kind: "email";
@@ -372,6 +393,36 @@ export type OutboundMessage =
       readonly text: string;
       readonly html: string;
     };
+
+/**
+ * Asked by the pipeline when a message may not go out free-form because the channel's
+ * messaging window has closed (WhatsApp: 24 hours after the customer's last message). The
+ * channel answers with an approved template that may replace it, or with the reason there
+ * is none; the pipeline never sends free-form text outside the window (invariant I6).
+ */
+export interface WindowFallbackRequest {
+  readonly agencyId: AgencyId;
+  readonly businessId: BusinessId;
+  readonly connectionId: ChannelConnectionId;
+  readonly conversationId: ConversationId;
+  readonly messageId: MessageId;
+  /** Who wrote the message that cannot go out as it is. */
+  readonly author: "bot" | "human_agent";
+}
+
+export type WindowFallbackResult =
+  | {
+      readonly kind: "template";
+      readonly message: Extract<OutboundMessage, { kind: "template" }>;
+      /** The text the customer will see, for the inbox and the bot's history. */
+      readonly renderedText: string;
+    }
+  | { readonly kind: "none"; readonly reason: string };
+
+export interface WindowFallbackResolver {
+  readonly channel: ChannelId;
+  resolve(request: WindowFallbackRequest): Promise<WindowFallbackResult>;
+}
 
 export interface SendTarget {
   readonly connection: ChannelConnectionContext;

@@ -46,7 +46,8 @@ export async function showPresence(
       conversationId: data.conversationId,
       recipientExternalId: claim.contactExternalId,
       externalThreadId: null,
-      replyToExternalMessageId: null,
+      // The customer's newest message: WhatsApp shows typing on it (C9).
+      replyToExternalMessageId: claim.latestExternalMessageId,
       window: { open: true, closesAt: null },
       email: null,
       idempotencyKey: `${claim.turnId}:presence:${state}`,

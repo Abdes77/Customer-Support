@@ -28,7 +28,7 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 | `pnpm db:doctor` / `pnpm db:create-admin --slug <agency> --email <user>` | Check a database (roles, migrations, RLS, privileges, encryption key) / make a user agency_admin (first-time setup) |
 | `pnpm dev` | Run the Next.js app at http://localhost:3000 (jobs in-process without Inngest, offline model without a key; test chat at `/dev/chat`) |
 | `pnpm e2e` / `pnpm --filter @repo/widget-embed build` | Playwright in `apps/web/e2e` on a fresh database (needs `services:up`, port 3100 free, no other `next dev`) / rebuild the website chat script after editing `packages/widget-embed/src/browser` |
-| `pnpm --filter @repo/pipeline live:roundtrip` | Live webhook → jobs → reply check against a running app (HUMAN_TODO 7) |
+| `pnpm --filter @repo/pipeline live:roundtrip` / `@repo/channel-whatsapp live:check` | Live webhook → jobs → reply check against a running app (HUMAN_TODO 7) / WhatsApp Cloud API check with Meta's test number (HUMAN_TODO 12) |
 | `pnpm --filter @repo/ai live:conversations` / `prompt:fingerprint --print` | Scripted customers against the Claude API (needs a key, HUMAN_TODO 2) / show the prompt as the model gets it |
 | `pnpm --filter @repo/knowledge live:playbook` / `live:crawl <url>` / `api-key --slug <agency> --name <name>` | Generate playbooks with the Claude API and web search (HUMAN_TODO 8) / read a website through the guarded fetcher / create an import API key |
 

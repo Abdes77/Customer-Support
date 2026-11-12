@@ -1,10 +1,29 @@
 import { randomBytes } from "node:crypto";
 
 import { createModelClientFromEnv, type ModelMode, modelModeFromEnv } from "@repo/ai";
+import { createGraphClient, type FetchLike } from "@repo/channel-meta";
 import { createTestChannelAdapter, type TestChannelAdapter } from "@repo/channel-test";
+import { createWhatsAppAdapter, type MediaReader } from "@repo/channel-whatsapp";
+import {
+  type ConnectionService,
+  createConnectionService,
+  createDeepgramTranscriber,
+  createVoiceMessageEnricher,
+  createWhatsAppEventHandler,
+  createWhatsAppJobs,
+  createWhatsAppWindowFallback,
+} from "@repo/channel-whatsapp/server";
 import { createRealtimeNotifier, createWidgetAdapter, silentNotifier } from "@repo/channel-widget";
 import { createWidgetService, type WidgetService } from "@repo/channel-widget/server";
-import { type ChannelAdapter, ConfigError, logger as rootLogger, type Logger } from "@repo/core";
+import {
+  type BusinessId,
+  type AgencyId,
+  type ChannelAdapter,
+  ConfigError,
+  logger as rootLogger,
+  type Logger,
+  NotFoundError,
+} from "@repo/core";
 import { type DeploymentInfo, deploymentInfo, type Env, getEnv, hasEnv } from "@repo/core/env";
 import { type BusinessTenant, type Database, getDatabase } from "@repo/db";
 import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
@@ -41,8 +60,10 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
  *
  * Registered so far besides the pipeline's own jobs: `knowledge-playbook-generate` and
  * `knowledge-import` (C6), and the knowledge services the admin panel and the import API use;
- * `leads-outbox` (C5). Channel adapters: the test channel (C3) and the website chat (C8),
- * whose public API service (`widget`) serves `/api/widget/v1`.
+ * `leads-outbox` (C5); `whatsapp-template-sync` (C9). Channel adapters: the test channel (C3),
+ * the website chat (C8), whose public API service (`widget`) serves `/api/widget/v1`, and
+ * WhatsApp (C9) with its window fallback, account-event handler and voice-message enricher,
+ * and the connection services (`whatsapp`) behind Embedded Signup and the admin panel.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -63,6 +84,12 @@ export interface ServerPipeline {
   readonly testChannel: { readonly adapter: TestChannelAdapter; readonly secret: string } | null;
   /** The website chat's public API; null on a hosted deployment without WIDGET_SESSION_SECRET. */
   readonly widget: WidgetService | null;
+  /**
+   * WhatsApp connections and templates for the admin panel and the Embedded Signup route
+   * (C9); null when the deployment has no Meta app (`META_APP_SECRET`,
+   * `META_WEBHOOK_VERIFY_TOKEN`).
+   */
+  readonly whatsapp: ConnectionService | null;
 }
 
 export interface ServerPipelineOptions {
@@ -78,6 +105,29 @@ export interface ServerPipelineOptions {
   readonly widgetSecret?: string;
   /** Tests inject file storage. */
   readonly storage?: (tenant: BusinessTenant) => TenantStorage;
+  /** Tests inject a fake Graph API (and the speech-to-text service) behind this fetch. */
+  readonly metaFetch?: FetchLike;
+}
+
+/**
+ * Reads the file of an outbound media message for the WhatsApp adapter. The path is in the
+ * tenant's folder (`{agency}/{business}/...`); it must be the connection's own business.
+ */
+function storageMediaReader(storage: (tenant: BusinessTenant) => TenantStorage): MediaReader {
+  return async (connection, location) => {
+    const [agencyId, businessId] = location.path.split("/");
+    if (agencyId === undefined || businessId !== connection.businessId) {
+      throw new NotFoundError("The file is not in this business's storage.");
+    }
+    const tenant = { agencyId: agencyId as AgencyId, businessId: businessId as BusinessId };
+    const file = await storage(tenant).get(location.path);
+    if (file === null) throw new NotFoundError("The file to send is missing.");
+    return {
+      bytes: file.bytes,
+      mimeType: file.contentType,
+      fileName: location.path.split("/").at(-1) ?? "file",
+    };
+  };
 }
 
 // The local test-channel secret when none is configured: valid for this process only, which
@@ -142,9 +192,43 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
                 }),
           logger,
         });
+  const storage = options.storage ?? getTenantStorage;
+  // WhatsApp (C9): on when the Meta app's webhook secrets are configured.
+  const whatsappConfigured = hasEnv(env, "META_APP_SECRET", "META_WEBHOOK_VERIFY_TOKEN");
+  const graph = whatsappConfigured
+    ? createGraphClient({
+        version: env.META_GRAPH_API_VERSION,
+        ...(options.metaFetch === undefined ? {} : { fetch: options.metaFetch }),
+      })
+    : null;
+  const whatsappDeps =
+    graph === null
+      ? null
+      : {
+          db,
+          graph,
+          logger: logger.child({ component: "whatsapp" }),
+          app:
+            env.META_APP_ID === undefined || env.META_APP_SECRET === undefined
+              ? null
+              : { appId: env.META_APP_ID, appSecret: env.META_APP_SECRET },
+          signupConfigId: env.META_WHATSAPP_SIGNUP_CONFIG_ID ?? null,
+        };
+  const whatsappAdapter =
+    whatsappDeps === null
+      ? null
+      : createWhatsAppAdapter({
+          appSecret: env.META_APP_SECRET!,
+          verifyToken: env.META_WEBHOOK_VERIFY_TOKEN!,
+          graph: whatsappDeps.graph,
+          media: storageMediaReader(storage),
+          logger: whatsappDeps.logger,
+        });
+
   const channelAdapters: ChannelAdapter[] = [];
   if (testChannel !== null) channelAdapters.push(testChannel.adapter);
   if (widgetAdapter !== null) channelAdapters.push(widgetAdapter);
+  if (whatsappAdapter !== null) channelAdapters.push(whatsappAdapter);
   const adapters = createAdapterRegistry(channelAdapters);
 
   const inngest =
@@ -167,7 +251,13 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   // model client is infrastructure: it is chosen here, from this deployment's environment.
   const modelMode = modelModeFromEnv(env, deployment);
   const model = createModelClientFromEnv({ env, deployment, logger });
-  const storage = options.storage ?? getTenantStorage;
+  const transcriber =
+    env.DEEPGRAM_API_KEY === undefined
+      ? null
+      : createDeepgramTranscriber({
+          apiKey: env.DEEPGRAM_API_KEY,
+          ...(options.metaFetch === undefined ? {} : { fetch: options.metaFetch }),
+        });
   const pipeline = createPipeline({
     db,
     adapters,
@@ -175,6 +265,15 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     logger,
     model,
     ...(options.storage === undefined ? {} : { storage: options.storage }),
+    // Channel parts of WhatsApp (C9): templates outside the 24-hour window, template and
+    // account webhooks, voice messages.
+    ...(whatsappDeps === null
+      ? {}
+      : {
+          windowFallbacks: [createWhatsAppWindowFallback(whatsappDeps)],
+          providerEvents: [createWhatsAppEventHandler(whatsappDeps)],
+          attachmentEnrichers: [createVoiceMessageEnricher({ transcriber })],
+        }),
   });
   const widget =
     widgetSecret === undefined
@@ -194,7 +293,9 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   const knowledge = createKnowledgeServices({ db, events, logger });
   // `leads-outbox` sends lead events a failed turn left behind (C5).
   const leadJobs = createLeadJobs({ db, events, logger });
-  const jobs = [...pipeline.jobs(), ...knowledgeJobs, ...leadJobs];
+  // `whatsapp-template-sync` (C9).
+  const whatsappJobs = whatsappDeps === null ? [] : createWhatsAppJobs(whatsappDeps);
+  const jobs = [...pipeline.jobs(), ...knowledgeJobs, ...leadJobs, ...whatsappJobs];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
     jobs: mode,
@@ -202,6 +303,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     channels: adapters.channels(),
     testChannel: testChannel !== null,
     widget: widget === null ? "off" : realtime === null ? "polling" : "realtime",
+    whatsapp: whatsappDeps !== null,
   });
   return {
     pipeline,
@@ -214,6 +316,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     runner,
     testChannel,
     widget,
+    whatsapp: whatsappDeps === null ? null : createConnectionService(whatsappDeps),
   };
 }
 

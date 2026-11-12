@@ -59,7 +59,7 @@ describe("handleWebhook", () => {
       url: "http://x",
       headers: {},
       query: {},
-      rawBody: "x".repeat(1024 * 1024 + 1),
+      rawBody: "x".repeat(4 * 1024 * 1024 + 1),
     });
     expect(tooLarge.status).toBe(413);
     await h.idle();
