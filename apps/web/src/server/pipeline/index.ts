@@ -2,6 +2,13 @@ import { randomBytes } from "node:crypto";
 
 import { createModelClientFromEnv, type ModelMode, modelModeFromEnv } from "@repo/ai";
 import { createGraphClient, type FetchLike } from "@repo/channel-meta";
+import { createInstagramAdapter, createMessengerAdapter } from "@repo/channel-messenger-instagram";
+import {
+  createMetaPagesEventHandler,
+  createMetaPagesService,
+  type MetaPagesService,
+  metaChannelGuard,
+} from "@repo/channel-messenger-instagram/server";
 import { createTestChannelAdapter, type TestChannelAdapter } from "@repo/channel-test";
 import { createWhatsAppAdapter, type MediaReader } from "@repo/channel-whatsapp";
 import {
@@ -63,7 +70,9 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
  * `leads-outbox` (C5); `whatsapp-template-sync` (C9). Channel adapters: the test channel (C3),
  * the website chat (C8), whose public API service (`widget`) serves `/api/widget/v1`, and
  * WhatsApp (C9) with its window fallback, account-event handler and voice-message enricher,
- * and the connection services (`whatsapp`) behind Embedded Signup and the admin panel.
+ * and the connection services (`whatsapp`) behind Embedded Signup and the admin panel;
+ * Messenger and Instagram (C10) with their account-event handlers and channel guard, and the
+ * connection services (`metaPages`) behind Facebook Login and the admin panel.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -90,6 +99,11 @@ export interface ServerPipeline {
    * `META_WEBHOOK_VERIFY_TOKEN`).
    */
   readonly whatsapp: ConnectionService | null;
+  /**
+   * Facebook Pages and Instagram accounts for the admin panel and the Facebook Login route
+   * (C10); null when the deployment has no Meta app.
+   */
+  readonly metaPages: MetaPagesService | null;
 }
 
 export interface ServerPipelineOptions {
@@ -110,7 +124,8 @@ export interface ServerPipelineOptions {
 }
 
 /**
- * Reads the file of an outbound media message for the WhatsApp adapter. The path is in the
+ * Reads the file of an outbound media message for the Meta adapters (WhatsApp, Messenger,
+ * Instagram). The path is in the
  * tenant's folder (`{agency}/{business}/...`); it must be the connection's own business.
  */
 function storageMediaReader(storage: (tenant: BusinessTenant) => TenantStorage): MediaReader {
@@ -225,10 +240,40 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
           logger: whatsappDeps.logger,
         });
 
+  // Messenger and Instagram (C10): the same Meta app, webhooks and Graph client as WhatsApp.
+  const metaPagesDeps =
+    graph === null
+      ? null
+      : {
+          db,
+          graph,
+          logger: logger.child({ component: "meta-pages" }),
+          app: whatsappDeps?.app ?? null,
+          loginConfigId: env.META_LOGIN_CONFIG_ID ?? null,
+        };
+  const metaAdapterOptions =
+    metaPagesDeps === null
+      ? null
+      : {
+          appSecret: env.META_APP_SECRET!,
+          verifyToken: env.META_WEBHOOK_VERIFY_TOKEN!,
+          graph: metaPagesDeps.graph,
+          // Echoes of our own sends carry this id; any other is a person in Meta's inbox.
+          appId: env.META_APP_ID ?? null,
+          media: storageMediaReader(storage),
+          logger: metaPagesDeps.logger,
+        };
+
   const channelAdapters: ChannelAdapter[] = [];
   if (testChannel !== null) channelAdapters.push(testChannel.adapter);
   if (widgetAdapter !== null) channelAdapters.push(widgetAdapter);
   if (whatsappAdapter !== null) channelAdapters.push(whatsappAdapter);
+  if (metaAdapterOptions !== null) {
+    channelAdapters.push(
+      createMessengerAdapter(metaAdapterOptions),
+      createInstagramAdapter(metaAdapterOptions),
+    );
+  }
   const adapters = createAdapterRegistry(channelAdapters);
 
   const inngest =
@@ -267,12 +312,19 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     ...(options.storage === undefined ? {} : { storage: options.storage }),
     // Channel parts of WhatsApp (C9): templates outside the 24-hour window, template and
     // account webhooks, voice messages.
-    ...(whatsappDeps === null
+    // Messenger and Instagram (C10): policy events per account, and the guard that leaves
+    // story replies (per setting) and conversations another app controls to the team.
+    ...(whatsappDeps === null || metaPagesDeps === null
       ? {}
       : {
           windowFallbacks: [createWhatsAppWindowFallback(whatsappDeps)],
-          providerEvents: [createWhatsAppEventHandler(whatsappDeps)],
+          providerEvents: [
+            createWhatsAppEventHandler(whatsappDeps),
+            createMetaPagesEventHandler(metaPagesDeps, "messenger"),
+            createMetaPagesEventHandler(metaPagesDeps, "instagram"),
+          ],
           attachmentEnrichers: [createVoiceMessageEnricher({ transcriber })],
+          channelGuards: [metaChannelGuard],
         }),
   });
   const widget =
@@ -304,6 +356,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     testChannel: testChannel !== null,
     widget: widget === null ? "off" : realtime === null ? "polling" : "realtime",
     whatsapp: whatsappDeps !== null,
+    messengerInstagram: metaPagesDeps !== null,
   });
   return {
     pipeline,
@@ -317,6 +370,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     testChannel,
     widget,
     whatsapp: whatsappDeps === null ? null : createConnectionService(whatsappDeps),
+    metaPages: metaPagesDeps === null ? null : createMetaPagesService(metaPagesDeps),
   };
 }
 

@@ -11,8 +11,8 @@ import {
   type FetchLike,
   GraphApiError,
 } from "./graph";
-import { downloadMedia, uploadMedia } from "./media";
-import { exchangeCode } from "./oauth";
+import { downloadMedia, uploadMedia, uploadMessageAttachment } from "./media";
+import { exchangeCode, exchangeForLongLivedToken } from "./oauth";
 import { metaSignature, safeEqual, verifyMetaSignature, verifyMetaWebhook } from "./signature";
 
 const SECRETS = { appSecret: "app-secret-for-tests", verifyToken: "verify-token-123" };
@@ -137,6 +137,40 @@ describe("error classification", () => {
     expect(classifyGraphError({ code: null, httpStatus: 429 })).toMatchObject({
       retryable: true,
       retryAfterSeconds: 60,
+    });
+  });
+
+  it("tells Messenger's and Instagram's situations apart by subcode (C10)", () => {
+    // Outside the standard window: code 10 with one of two subcodes, not a permission problem.
+    for (const subcode of [2534022, 2018278]) {
+      expect(classifyGraphError({ code: 10, subcode, httpStatus: 400 })).toMatchObject({
+        windowClosed: true,
+        authFailed: false,
+        retryable: false,
+      });
+    }
+    // Another app (or Meta's assistant) controls the thread.
+    expect(classifyGraphError({ code: 10, subcode: 2018300, httpStatus: 400 })).toMatchObject({
+      threadControlled: true,
+      authFailed: false,
+    });
+    expect(classifyGraphError({ code: 100, subcode: 2534037, httpStatus: 400 })).toMatchObject({
+      threadControlled: true,
+    });
+    // The person blocked the Page or is unavailable.
+    expect(classifyGraphError({ code: 551, httpStatus: 400 })).toMatchObject({
+      recipientUnavailable: true,
+      retryable: false,
+    });
+    expect(classifyGraphError({ code: 200, subcode: 1545041, httpStatus: 400 })).toMatchObject({
+      recipientUnavailable: true,
+      authFailed: false,
+    });
+    // Code 10 without a known subcode is still a permission problem; 613 a rate limit.
+    expect(classifyGraphError({ code: 10, subcode: 1, httpStatus: 400 }).authFailed).toBe(true);
+    expect(classifyGraphError({ code: 613, subcode: 2534040, httpStatus: 400 })).toMatchObject({
+      retryable: true,
+      rateLimited: true,
     });
   });
 
@@ -380,7 +414,62 @@ describe("media", () => {
   });
 });
 
+describe("Messenger and Instagram media (C10)", () => {
+  it("uploads an attachment for Instagram through the Page and returns its id", async () => {
+    const fetch = fakeFetch(() => Response.json({ attachment_id: "1857777774821032" }));
+    const id = await uploadMessageAttachment(createGraphClient({ fetch }), {
+      pageId: "1234567890",
+      token: "page-token",
+      platform: "instagram",
+      type: "image",
+      bytes: new Uint8Array([1, 2, 3]),
+      mimeType: "image/png",
+      fileName: "roof photo (1).png",
+    });
+    expect(id).toBe("1857777774821032");
+    const call = fetch.calls[0]!;
+    expect(call.url.pathname).toBe("/v27.0/1234567890/message_attachments");
+    const form = call.init.body as FormData;
+    expect(form.get("platform")).toBe("instagram");
+    expect(JSON.parse(form.get("message") as string)).toEqual({
+      attachment: { type: "image", payload: { is_reusable: false } },
+    });
+    expect((form.get("filedata") as File).name).toBe("roof_photo__1_.png");
+    expect(new Headers(call.init.headers).get("authorization")).toBe("Bearer page-token");
+  });
+
+  it("downloads a signed CDN link without sending any token, Meta's hosts only", async () => {
+    const fetch = fakeFetch(
+      () => new Response(new Uint8Array([9, 9]), { headers: { "content-type": "image/jpeg" } }),
+    );
+    const graph = createGraphClient({ fetch });
+    const file = await graph.download("https://scontent.xx.fbcdn.net/v/t1/abc.jpg?oh=1", null, {
+      maxBytes: 100,
+    });
+    expect(file).toEqual({ bytes: new Uint8Array([9, 9]), mimeType: "image/jpeg" });
+    expect(new Headers(fetch.calls[0]!.init.headers).get("authorization")).toBeNull();
+    await expect(
+      graph.download("https://evil.example.com/a.jpg", null, { maxBytes: 100 }),
+    ).rejects.toThrow(/Meta's hosts/);
+  });
+});
+
 describe("code exchange", () => {
+  it("exchanges a short-lived user token for a long-lived one", async () => {
+    const fetch = fakeFetch(() =>
+      Response.json({ access_token: "EAAL...", token_type: "bearer", expires_in: 5_183_944 }),
+    );
+    const token = await exchangeForLongLivedToken(createGraphClient({ fetch }), {
+      appId: "app",
+      appSecret: "shh",
+      token: "short",
+    });
+    expect(token).toEqual({ accessToken: "EAAL...", expiresInSeconds: 5_183_944 });
+    const url = fetch.calls[0]!.url;
+    expect(url.searchParams.get("grant_type")).toBe("fb_exchange_token");
+    expect(url.searchParams.get("fb_exchange_token")).toBe("short");
+  });
+
   it("exchanges the Embedded Signup code for a business token", async () => {
     const fetch = fakeFetch(() => Response.json({ access_token: "EAAB...", token_type: "bearer" }));
     const token = await exchangeCode(createGraphClient({ fetch }), {
@@ -415,5 +504,26 @@ describe("code exchange", () => {
     }).catch((caught: unknown) => caught)) as GraphApiError;
     expect(error.graphCode).toBe(100);
     expect(error.retryable).toBe(false);
+  });
+
+  it("keeps Meta's subcode on the error", async () => {
+    const fetch = fakeFetch(() =>
+      Response.json(
+        {
+          error: {
+            message: "(#10) This message is sent outside of allowed window.",
+            code: 10,
+            error_subcode: 2018278,
+            type: "OAuthException",
+          },
+        },
+        { status: 400 },
+      ),
+    );
+    const error = (await createGraphClient({ fetch })
+      .request({ method: "POST", path: "/1/messages", token: "t", json: {} })
+      .catch((caught: unknown) => caught)) as GraphApiError;
+    expect(error.subcode).toBe(2018278);
+    expect(error.classification.windowClosed).toBe(true);
   });
 });

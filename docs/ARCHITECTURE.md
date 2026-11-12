@@ -504,6 +504,60 @@ Graph API v27.0 (`META_GRAPH_API_VERSION`).
   half posts to `/api/oauth/meta/whatsapp`; a manual reply outside the window goes out as
   `channels.whatsapp.staff_reply_template` or fails with `window_closed`.
 
+### As built (C10)
+
+Messenger and Instagram Direct: `packages/channels/messenger-instagram` (adapters; `/server`
+for what touches the database; `/testing` for fixtures and a fake Graph API) on
+`@repo/channel-meta`, and `POST /api/oauth/meta/facebook` in `apps/web`. Built from Meta's
+docs read on 2026-11-12 (Messenger Platform webhooks, Send API, message tags, quick replies,
+sender actions, error codes; Instagram messaging webhooks and sending; Facebook Login for
+Business), Graph API v27.0.
+
+- **Two adapters, one sender** (`createMessengerAdapter`, `createInstagramAdapter`): both send
+  through the Facebook Page (`POST /{page-id}/messages`, Page token); an Instagram connection
+  is keyed by the Instagram account id and its config names the Page. Webhooks:
+  `/api/webhooks/messenger` (object `page`) and `/api/webhooks/instagram` (object
+  `instagram`), signed like WhatsApp's. Parsed: text, quick-reply taps and postbacks
+  (`interactive_reply`), attachments as `url` sources (downloaded later from Meta's CDN
+  without a token, Meta hosts only), story replies and mentions (`story_reply`), reactions,
+  inline replies, ad referrals and shares as metadata; `standby` events are marked;
+  deliveries by id and by watermark, reads (Messenger watermark, Instagram message id);
+  `messaging_policy_enforcement` as a `provider_event`.
+- **Sending:** `messaging_type: RESPONSE`; a person's reply after the standard window goes as
+  `MESSAGE_TAG` + `HUMAN_AGENT` (the send step passes `SendTarget.standardWindowOpen`; the
+  human-agent window of seven days is in the capabilities, so the pipeline refuses later
+  ones). Quick replies (≤13 × 20 characters) or the options written under the text; media
+  uploaded from our storage (`uploadMessageAttachment`) and sent by attachment id, the caption
+  as a following text; `mark_seen`, `typing_on`/`typing_off`. Every send carries
+  `metadata: "hsrb:<message id>:<part>"`. Meta's codes with subcodes are classified in
+  `@repo/channel-meta` (window closed, thread controlled by another app, person unavailable).
+- **Hand-over:** echoes of what the Page sent come back. Ours (our `META_APP_ID`, or our
+  metadata) are dropped; another app's (the Page inbox, Meta Business Suite) become
+  `human_agent_replied`, which the pipeline turns into a stored `human_agent` message and a
+  `provider_inbox` takeover (C9's path, `handoff.provider_inbox_takeover`). An Instagram echo
+  has no app id (`attribution: "unverified"`): the pipeline matches it against its own sends
+  (stored ids, `message_parts`, send journals, then words equal to the whole text or one
+  sent part of an outbound message being sent or sent within 30 minutes before the echo)
+  before treating it as a person (`isOurSend` in `packages/pipeline/src/ingest/signals.ts`).
+- **Watermarks:** the `delivery_watermark` signal moves the named contact's outbound parts on
+  that connection, sent at or before it, through `applyDeliveryStatus` (in a fixed order of
+  provider ids). These adapters date a send from just before its request, so Meta's stamp of
+  the message, and the watermark that reports it, is not earlier than our time.
+- **Server half** (`@repo/channel-messenger-instagram/server`): `createMetaPagesService`
+  (`loginConfig`, `completeFacebookLogin` with `choose_page` when several Pages were shared,
+  `list`, `disconnect` with unsubscribe once the Page is unused; a Page and its Instagram
+  account belong to one business), `createMetaPagesEventHandler`
+  per channel (policy block/unblock/warning on the named connection only, never older than
+  `connected_at`), `metaChannelGuard` (story replies per `channels.instagram.story_replies`,
+  standby). Wired in `apps/web/src/server/pipeline` with WhatsApp's Meta secrets;
+  `getMetaPages()` in `apps/web/src/server/meta-pages` is what C16's page calls.
+- **Pipeline extension point `channelGuards`** (`PipelineDeps`): guards a channel registers
+  from the infrastructure root; they run after the domain guards.
+- **For C13:** follow-ups on these channels need no channel code; outside 24 hours the bot's
+  message fails with `window_closed` (no template exists). **For C16:** a manual reply is
+  tagged automatically when needed; the connection page calls `getMetaPages()` and posts the
+  login code to `/api/oauth/meta/facebook`.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |

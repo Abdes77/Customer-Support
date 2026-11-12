@@ -156,6 +156,28 @@ export const ChannelSignal = z.discriminatedUnion("type", [
     externalMessageId: z.string().min(1),
     text: z.string().nullable(),
     occurredAt: IsoDateTime,
+    /**
+     * `external` (the default): the provider says the message came from somewhere else
+     * than this app (WhatsApp's coexistence echoes, a Messenger echo with another app id).
+     * `unverified`: an echo of a message the business sent that may be one of our own sends
+     * (Instagram echoes carry no app id); the pipeline matches it against what it sent
+     * before treating it as a person's reply (C10).
+     */
+    attribution: z.enum(["external", "unverified"]).optional(),
+  }),
+  /**
+   * The customer's app reported that every message the business sent before `watermark`
+   * was delivered or read (Messenger reports deliveries and reads this way, without message
+   * ids). The pipeline applies it to the outbound messages of that contact on that account.
+   */
+  z.object({
+    type: z.literal("delivery_watermark"),
+    channel: ChannelId,
+    externalAccountId: z.string().min(1),
+    contactExternalId: z.string().min(1),
+    status: z.enum(["delivered", "read"]),
+    watermark: IsoDateTime,
+    occurredAt: IsoDateTime,
   }),
   /** The business removed our access (deauthorized app, revoked token, deleted inbox). */
   z.object({
@@ -438,6 +460,12 @@ export interface SendTarget {
   readonly idempotencyKey: string;
   /** True when a person, not the bot, wrote the message (enables the human-agent tag). */
   readonly sentByHuman: boolean;
+  /**
+   * Whether the channel's standard window (without the human-agent extension) is open now.
+   * Set by the pipeline's send step; Messenger and Instagram send a person's reply with the
+   * HUMAN_AGENT tag once it has closed (C10). Absent: the adapter decides from `window`.
+   */
+  readonly standardWindowOpen?: boolean;
 }
 
 export interface SendFailure {

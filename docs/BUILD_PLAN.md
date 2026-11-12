@@ -203,6 +203,13 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   them; C10 only emits the signal), connection screens (C16).
 - **Must deliver:** `human_agent_replied` signals that trigger takeover through the pipeline;
   human-agent tagging driven by `SendTarget.sentByHuman`.
+- **Delivered, for C13, C16 and C17:** `@repo/channel-messenger-instagram` (two adapters over
+  the Page's Send API, fixtures and a fake Graph API under `/testing`); hand-over on a reply
+  from Meta's inbox (`human_agent_replied` with `attribution`, matched against our own sends
+  by the pipeline); the HUMAN_AGENT tag from `SendTarget.standardWindowOpen`; the
+  `delivery_watermark` signal; `PipelineDeps.channelGuards` with `metaChannelGuard`;
+  `getMetaPages()` in `apps/web/src/server/meta-pages` and `POST /api/oauth/meta/facebook`
+  for C16's connection page. ARCHITECTURE §2 "As built (C10)" has the rest.
 
 ### C11 · Email
 

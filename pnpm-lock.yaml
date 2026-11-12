@@ -149,6 +149,9 @@ importers:
       '@repo/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@repo/channel-messenger-instagram':
+        specifier: workspace:*
+        version: link:../../packages/channels/messenger-instagram
       '@repo/channel-meta':
         specifier: workspace:*
         version: link:../../packages/channels/meta
@@ -293,9 +296,24 @@ importers:
 
   packages/channels/messenger-instagram:
     dependencies:
+      '@repo/channel-meta':
+        specifier: workspace:*
+        version: link:../meta
       '@repo/core':
         specifier: workspace:*
         version: link:../../core
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../../db
+      '@repo/jobs':
+        specifier: workspace:*
+        version: link:../../jobs
+      '@repo/settings':
+        specifier: workspace:*
+        version: link:../../settings
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -303,6 +321,9 @@ importers:
       eslint:
         specifier: 'catalog:'
         version: 10.14.0(jiti@2.7.0)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

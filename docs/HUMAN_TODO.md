@@ -459,6 +459,97 @@ Format of an entry:
      WhatsApp Manager), and the one-minute margin is the only guard at the edge.
   4. The default waits for rate-limit codes (`packages/channels/meta/src/errors.ts`).
 
+### 13. Messenger and Instagram: Facebook Login, Page webhooks and live conversations (C10)
+
+- **What:** Messenger and Instagram Direct are built and tested against recorded-style
+  fixtures and a fake Graph API (`pnpm verify`: signatures, every inbound kind on both
+  platforms, echoes and the hand-over to a person in Meta's inbox, duplicate deliveries, the
+  24-hour window and the HUMAN_AGENT tag up to seven days, delivery and read statuses, story
+  replies, Facebook Login). Nothing reached Meta: no credentials in the build VM. Meta's docs
+  were read on 2026-11-12 (Graph API v27.0, the same Meta app and webhook secrets as
+  WhatsApp, entry 12). Needed:
+  1. **The Meta app of entry 12**, with the Messenger and Instagram products (use case
+     "Engage with customers on Messenger from Meta" and the Instagram messaging one), and
+     App Review for `pages_messaging`, `pages_manage_metadata`, `pages_show_list`,
+     `instagram_basic`, `instagram_manage_messages`, `business_management` and the
+     **Human Agent** feature (without it a person's reply after 24 hours fails; C18 prepares
+     the review pack).
+  2. **Webhooks.** In the App Dashboard, Webhooks: object **Page**, callback
+     `<APP_URL>/api/webhooks/messenger`; object **Instagram**, callback
+     `<APP_URL>/api/webhooks/instagram`; verify token = `META_WEBHOOK_VERIFY_TOKEN`. Subscribe
+     the Page fields `messages`, `message_echoes`, `message_deliveries`, `message_reads`,
+     `message_reactions`, `messaging_postbacks`, `messaging_referrals`,
+     `messaging_policy_enforcement`, `standby`, and the Instagram fields `messages`,
+     `messaging_postbacks`, `message_reactions`, `messaging_referral`, `messaging_seen`,
+     `standby`. Connecting a Page subscribes it to the app (`subscribed_apps`).
+  3. **Facebook Login for Business.** Configurations, create one with a **System-user access
+     token** (never expires), assets Pages and Instagram accounts, and the permissions of
+     step 1. Its id is `META_LOGIN_CONFIG_ID`. The admin page that opens it is C16's (`FB.login`
+     with `config_id`, `response_type: "code"`, `override_default_response_type: true`); the
+     server part is `POST /api/oauth/meta/facebook`.
+  4. **On each client's Page:** in Meta Business Suite, Settings, Messaging (or the Page's
+     Advanced messaging settings), leave the app as the Page's messaging app and make sure no
+     other automation (Meta Business AI, another bot) answers first; for Instagram, the
+     professional account's Settings, Messages and story replies, Message controls,
+     **Allow access to messages** must be on.
+- **Where:** Vercel environment variables; the Meta app dashboard; each client's Meta
+  Business Suite.
+- **Variables:** those of entry 12 plus `META_LOGIN_CONFIG_ID`. `META_APP_ID` matters here:
+  Messenger echoes of messages our app sent carry it, and without it the bot cannot tell its
+  own echoes from another app's. For the live checks: `META_TEST_PAGE_ID`,
+  `META_TEST_PAGE_ACCESS_TOKEN` (Graph API Explorer, your app, Get Page Access Token for the
+  test Page), `META_TEST_INSTAGRAM_ACCOUNT_ID` (the Page's `instagram_business_account`).
+- **Live checks that were skipped:**
+  1. The Graph API with the test Page: `pnpm --filter @repo/channel-messenger-instagram
+     live:check` reads the Page and its Instagram account and subscribes the app to the
+     Page's fields. Then write to the Page from your own Messenger account and run
+     `live:check send --to <your PSID>` (and `--instagram --to <your IGSID>` after writing to
+     the Instagram account): a text with two quick replies, "seen" and typing. The ids are
+     the `sender.id` of your message in the app's logs of a webhook test, or in
+     `contact_identities` once the round trip below works.
+  2. A real conversation round trip on both platforms: run the app where Meta can reach it
+     (a preview deployment, or `pnpm dev` behind `cloudflared tunnel --url
+     http://localhost:3000`), point both webhooks there, connect the test Page to a seeded
+     business with `pnpm --filter @repo/channel-messenger-instagram live:check connect
+     --business <business id>`, then write to the Page and to the Instagram account. Expect:
+     "seen" and typing, one reply per burst, quick replies as buttons, a photo stored,
+     statuses moving to delivered and read. Then answer the customer yourself from Meta
+     Business Suite's inbox: the reply must appear in `messages` as `human_agent` and the
+     bot must stay silent (a `takeover_locks` row with source `provider_inbox`).
+  3. The window rules: push the conversation's `last_inbound_at` back 25 hours in the
+     database and send a manual reply (C16) or a follow-up (C13): a person's reply must go
+     out tagged HUMAN_AGENT, the bot's must fail with `window_closed`.
+  4. Facebook Login with a real client Page once the app has Advanced Access.
+- **Unverified details (check them in live check 2):**
+  1. Whether Instagram echoes carry `app_id` or our `metadata` (the webhook reference,
+     re-read on 2026-11-12, shows neither on an Instagram echo; Messenger's echo reference
+     shows both). Without them the bot matches an echo to what it sent (the provider id, then
+     words equal to a whole message or part it sent in the 30 minutes before the echo), so a
+     person who repeats a whole bot message word for word, within 30 minutes of it, is taken
+     for the bot and the bot keeps answering. Check in live check 2: answer from the
+     Instagram inbox and look at the webhook body for `app_id` and `metadata`.
+  2. The Page inbox app id: the docs print `26390203743090`; the long-known id is
+     `263902037430900`; both are accepted (`PAGE_INBOX_APP_IDS`).
+  3. Messenger delivery and read watermarks against our own clock: sends are dated just
+     before the request, so a watermark covers them while our clock is not ahead of Meta's
+     by more than the request takes; with more skew, the newest message stays "delivered"
+     (or "sent") until a later watermark.
+  4. The Attachment Upload API for Instagram through the Page (`platform: instagram`,
+     multipart `filedata`) and sending by `attachment_id` with `type: image`. Re-read on
+     2026-11-12: Instagram's upload page documents the upload as built, but its own send
+     example uses `type: "MEDIA_SHARE"` with `payload.attachment_id`, while Messenger's uses
+     the media type; the code sends the media type. If an Instagram photo reply fails with
+     code 100, try `MEDIA_SHARE` in `attachmentBody`. A staff photo reply (C16) is the first
+     real use; Instagram takes only PDF as `file`.
+  5. Whether `/me/accounts` lists the Pages of a business integration system user token from
+     Facebook Login for Business: the Facebook Login for Business page (re-read 2026-11-12)
+     describes the token types and `/me?fields=client_business_id`, not this call, so it is
+     unverified. If it comes back empty, the connect route answers "did not share any
+     Facebook Page" (400), and the token's Pages have to be read from the client business
+     instead (`/{client-business-id}/owned_pages` or `client_pages`).
+  6. Messenger's default rate-limit waits and Instagram's 1,000-byte text limit (texts are
+     split at 900 characters and trimmed in bytes).
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -538,6 +629,12 @@ already listed and described in `.env.example`.
   receipts, the 24-hour window with templates only after it.
 - **WhatsApp (C9).** Built from Meta's docs read on 2026-11-12, tested against recorded-style
   fixtures and a fake Graph API; no request reached Meta (entry 12).
+- **Messenger and Instagram (C10).** Built from Meta's docs read on 2026-11-12 (Messenger
+  Platform webhooks and Send API, Instagram messaging, Facebook Login for Business), tested
+  against recorded-style fixtures and a fake Graph API; no request reached Meta (entry 13).
+  Their capabilities were checked against the docs: Messenger 2,000 characters, Instagram
+  1,000 bytes, 13 quick replies of 20 characters, a 24-hour standard window and seven days
+  with the HUMAN_AGENT tag.
 - **Supabase (C1).** The schema, the row-level security and both access paths are tested on
   plain PostgreSQL 16 with a compatibility bootstrap that creates Supabase's roles and
   `auth.uid()`. Not yet seen on a real project: the `postgres` role switching to

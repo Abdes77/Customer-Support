@@ -52,3 +52,29 @@ export async function exchangeCode(
     expiresInSeconds: result.expires_in ?? null,
   };
 }
+
+/**
+ * Turns a short-lived user token (Facebook Login with a user-token configuration) into a
+ * long-lived one (`grant_type=fb_exchange_token`, about 60 days). Page tokens read with a
+ * long-lived user token do not expire. A business integration system user token (the
+ * System-user configuration) already does not expire and needs no exchange.
+ */
+export async function exchangeForLongLivedToken(
+  graph: GraphClient,
+  options: { readonly appId: string; readonly appSecret: string; readonly token: string },
+): Promise<ExchangedToken> {
+  const result = await graph.request(
+    {
+      method: "GET",
+      path: "/oauth/access_token",
+      query: {
+        grant_type: "fb_exchange_token",
+        client_id: options.appId,
+        client_secret: options.appSecret,
+        fb_exchange_token: options.token,
+      },
+    },
+    TokenResponse,
+  );
+  return { accessToken: result.access_token, expiresInSeconds: result.expires_in ?? null };
+}

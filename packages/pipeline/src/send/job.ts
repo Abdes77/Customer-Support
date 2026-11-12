@@ -203,6 +203,15 @@ export async function sendPart(
   const connection = await scope.run((ctx) =>
     loadConnectionContext(ctx, p.db, info.connectionId as ChannelConnectionId),
   );
+  // Messenger and Instagram: a person's reply once the standard window (without the
+  // human-agent extension) has closed, or closes within the margin, needs the HUMAN_AGENT tag.
+  const lastInbound = state?.lastInboundAt ?? null;
+  const standardWindowOpen = messagingWindow(
+    adapter.capabilities,
+    lastInbound === null ? null : new Date(lastInbound),
+    new Date(p.clock().getTime() + SEND_WINDOW_MARGIN_MS),
+    false,
+  ).open;
   const target: SendTarget = {
     connection,
     conversationId: info.conversationId,
@@ -213,6 +222,7 @@ export async function sendPart(
     email: info.email,
     idempotencyKey: `${data.messageId}:${part.kind === "template" ? "t" : ""}${index}`,
     sentByHuman: info.sentByHuman,
+    standardWindowOpen,
   };
   const result = await adapter.send(part, target);
   if (result.ok) {

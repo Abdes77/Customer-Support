@@ -168,6 +168,12 @@ export interface PipelineDeps {
   readonly knowledge?: KnowledgeRetriever;
   readonly modelCalls?: ModelCallSink;
   readonly guards?: readonly TurnGuard[];
+  /**
+   * Guards of one channel, registered by the infrastructure root next to its adapter (C10:
+   * Instagram story replies the team answers, Meta's standby channel). They run after the
+   * domain guards, which `guards` replaces and this list never does.
+   */
+  readonly channelGuards?: readonly TurnGuard[];
   readonly observers?: readonly TurnObserver[];
   readonly loaders?: Partial<TurnLoaders>;
   /*
@@ -226,7 +232,7 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
     actions: deps.actions ?? domain.actions,
     knowledge: deps.knowledge ?? domain.knowledge,
     modelCalls: deps.modelCalls ?? null,
-    guards: deps.guards ?? domain.guards,
+    guards: [...(deps.guards ?? domain.guards), ...(deps.channelGuards ?? [])],
     observers: deps.observers ?? domain.observers,
     loaders: {
       playbook: deps.loaders?.playbook ?? domain.loaders.playbook,

@@ -108,6 +108,8 @@ const GraphErrorBody = z.object({
 export class GraphApiError extends ExternalServiceError {
   /** Meta's error code, or null when no answer came back (network, timeout). */
   readonly graphCode: number | null;
+  /** `error_subcode`, which Messenger and Instagram still send (null otherwise). */
+  readonly subcode: number | null;
   readonly httpStatus: number | null;
   readonly fbtraceId: string | null;
   readonly classification: GraphErrorClass;
@@ -117,6 +119,7 @@ export class GraphApiError extends ExternalServiceError {
     options: {
       readonly graphCode: number | null;
       readonly httpStatus: number | null;
+      readonly subcode?: number | null;
       readonly fbtraceId?: string | null;
       readonly usageHeader?: string | null;
       readonly cause?: unknown;
@@ -126,6 +129,7 @@ export class GraphApiError extends ExternalServiceError {
       code: options.graphCode,
       httpStatus: options.httpStatus,
       usageHeader: options.usageHeader ?? null,
+      subcode: options.subcode ?? null,
     });
     super(message, {
       provider: "meta",
@@ -134,10 +138,15 @@ export class GraphApiError extends ExternalServiceError {
       ...(classification.retryAfterSeconds === null
         ? {}
         : { retryAfterSeconds: classification.retryAfterSeconds }),
-      details: { graphCode: options.graphCode, httpStatus: options.httpStatus },
+      details: {
+        graphCode: options.graphCode,
+        httpStatus: options.httpStatus,
+        ...(options.subcode == null ? {} : { subcode: options.subcode }),
+      },
       cause: options.cause,
     });
     this.graphCode = options.graphCode;
+    this.subcode = options.subcode ?? null;
     this.httpStatus = options.httpStatus;
     this.fbtraceId = options.fbtraceId ?? null;
     this.classification = classification;
@@ -154,12 +163,13 @@ export interface GraphClient {
   /** Calls the API and returns the JSON answer, checked against `schema` when given. */
   request<T = unknown>(request: GraphRequest, schema?: z.ZodType<T>): Promise<T>;
   /**
-   * Downloads bytes from a URL the API handed out (media), with the token in the header.
-   * The caller checks the host first (`assertMetaMediaUrl`).
+   * Downloads bytes from a URL the API handed out (media), with the token in the header, or
+   * without one (`null`) for the signed CDN links of Messenger and Instagram attachments.
+   * Only Meta's hosts are fetched (`assertMetaMediaUrl`), on every redirect too.
    */
   download(
     url: string,
-    token: string,
+    token: string | null,
     options: { readonly maxBytes: number },
   ): Promise<{ readonly bytes: Uint8Array; readonly mimeType: string }>;
 }
@@ -218,6 +228,7 @@ async function errorFrom(response: Response): Promise<GraphApiError> {
   return new GraphApiError(message.slice(0, 500), {
     graphCode: code,
     httpStatus: response.status,
+    subcode: parsed?.error.error_subcode ?? null,
     fbtraceId: parsed?.error.fbtrace_id ?? null,
     usageHeader:
       response.headers.get("x-business-use-case-usage") ?? response.headers.get("x-app-usage"),
@@ -296,7 +307,7 @@ export function createGraphClient(options: GraphClientOptions = {}): GraphClient
       for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
         response = await send(target.toString(), {
           method: "GET",
-          headers: { authorization: `Bearer ${token}` },
+          headers: token === null ? {} : { authorization: `Bearer ${token}` },
           redirect: "manual",
         });
         const location = response.headers.get("location");

@@ -84,3 +84,48 @@ export async function uploadMedia(
   );
   return result.id;
 }
+
+const AttachmentUploadResult = z.object({ attachment_id: z.string().min(1) });
+
+/** Media kinds of the Messenger Platform's Attachment Upload API. */
+export type MessageAttachmentType = "image" | "audio" | "video" | "file";
+
+/**
+ * Uploads a file for Messenger or Instagram Direct (`POST /{page-id}/message_attachments`,
+ * multipart, Attachment Upload API) and returns the attachment id to send it by. Instagram
+ * accounts linked to a Page use the same endpoint with `platform: instagram` and the Page's
+ * token. File names must be ASCII (Meta refuses others), so the name is cleaned first.
+ */
+export async function uploadMessageAttachment(
+  graph: GraphClient,
+  options: {
+    readonly pageId: string;
+    readonly token: string;
+    readonly platform: "messenger" | "instagram";
+    readonly type: MessageAttachmentType;
+    readonly bytes: Uint8Array;
+    readonly mimeType: string;
+    readonly fileName: string;
+  },
+): Promise<string> {
+  const form = new FormData();
+  if (options.platform === "instagram") form.set("platform", "instagram");
+  form.set(
+    "message",
+    JSON.stringify({ attachment: { type: options.type, payload: { is_reusable: false } } }),
+  );
+  const copy = new Uint8Array(options.bytes.byteLength);
+  copy.set(options.bytes);
+  const name = options.fileName.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 100) || "file";
+  form.set("filedata", new Blob([copy.buffer], { type: options.mimeType }), name);
+  const result = await graph.request(
+    {
+      method: "POST",
+      path: `/${options.pageId}/message_attachments`,
+      token: options.token,
+      form,
+    },
+    AttachmentUploadResult,
+  );
+  return result.attachment_id;
+}

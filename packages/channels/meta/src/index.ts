@@ -22,8 +22,15 @@ export {
   type GraphRequest,
   META_MEDIA_HOST_SUFFIXES,
 } from "./graph";
-export { type DownloadedMedia, downloadMedia, MediaInfo, uploadMedia } from "./media";
-export { type ExchangedToken, exchangeCode } from "./oauth";
+export {
+  type DownloadedMedia,
+  downloadMedia,
+  MediaInfo,
+  type MessageAttachmentType,
+  uploadMedia,
+  uploadMessageAttachment,
+} from "./media";
+export { type ExchangedToken, exchangeCode, exchangeForLongLivedToken } from "./oauth";
 export {
   META_SIGNATURE_HEADER,
   metaSignature,

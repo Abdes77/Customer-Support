@@ -15,6 +15,7 @@
   "dependencies": {
     "@repo/ai": "workspace:*",
     "@repo/channel-meta": "workspace:*",
+    "@repo/channel-messenger-instagram": "workspace:*",
     "@repo/channel-test": "workspace:*",
     "@repo/channel-whatsapp": "workspace:*",
     "@repo/channel-widget": "workspace:*",
