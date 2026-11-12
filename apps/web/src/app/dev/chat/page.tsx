@@ -23,6 +23,14 @@ const JOBS_NOTE = {
     "Background jobs are not configured, so the bot cannot reply. See docs/HUMAN_TODO.md.",
 } as const;
 
+const MODEL_NOTE = {
+  live: "Replies are written by the Claude API.",
+  offline:
+    "Replies come from the built-in offline stand-in, not from Claude (ANTHROPIC_API_KEY is not set).",
+  unconfigured:
+    "The Claude API is not configured, so the bot cannot reply. See docs/HUMAN_TODO.md.",
+} as const;
+
 /**
  * Chat with any business of your agency as a customer would, through the "test" channel:
  * the message goes through the webhook path, the reply function and the send function like
@@ -70,8 +78,7 @@ export default async function DevChatPage({
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold">Test chat</h1>
         <p className="text-sm text-slate-600">
-          Write as a customer. {JOBS_NOTE[server.mode]} The reply engine is the echo stub until the
-          conversation engine is installed.
+          Write as a customer. {JOBS_NOTE[server.mode]} {MODEL_NOTE[server.modelMode]}
         </p>
       </header>
       <form method="get" className="flex flex-wrap items-end gap-2">

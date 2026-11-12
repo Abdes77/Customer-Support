@@ -1,3 +1,4 @@
+import type { ModelClient } from "@repo/ai";
 import {
   type BusinessProfile,
   type ChannelId,
@@ -95,6 +96,12 @@ export interface PipelineDeps {
    * later chunks register theirs. Pass them only to override (tests, experiments).
    */
   readonly engine?: ConversationEngine;
+  /**
+   * The model client behind the default engine and the photo analysis. Default: chosen from
+   * the environment (`createModelClientFromEnv` in @repo/ai). Ignored for the engine when
+   * `engine` is given.
+   */
+  readonly model?: ModelClient;
   readonly actions?: ActionHandlerRegistry;
   readonly knowledge?: KnowledgeRetriever;
   readonly modelCalls?: ModelCallSink;
@@ -127,7 +134,15 @@ export interface PipelineContext {
 
 export function resolveDeps(deps: PipelineDeps): PipelineContext {
   const logger = (deps.logger ?? createLogger()).child({ component: "pipeline" });
-  const domain = createDomainComposition({ db: deps.db, logger });
+  const options = { ...DEFAULT_PIPELINE_OPTIONS, ...deps.options };
+  const storage = deps.storage ?? getTenantStorage;
+  const domain = createDomainComposition({
+    db: deps.db,
+    logger,
+    leaseSeconds: options.leaseSeconds,
+    storage,
+    ...(deps.model === undefined ? {} : { model: deps.model }),
+  });
   return {
     db: deps.db,
     adapters: deps.adapters,
@@ -141,9 +156,9 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
       playbook: deps.loaders?.playbook ?? domain.loaders.playbook,
       lead: deps.loaders?.lead ?? domain.loaders.lead,
     },
-    storage: deps.storage ?? getTenantStorage,
+    storage,
     logger,
     clock: deps.clock ?? (() => new Date()),
-    options: { ...DEFAULT_PIPELINE_OPTIONS, ...deps.options },
+    options,
   };
 }

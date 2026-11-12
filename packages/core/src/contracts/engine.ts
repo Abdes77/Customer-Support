@@ -44,6 +44,27 @@ export interface BusinessProfile {
   readonly segment: { readonly id: SegmentId; readonly slug: string; readonly name: string };
   /** IANA time zone, for example "America/Chicago". */
   readonly timezone: string;
+  /**
+   * How to reach the business, as stored with its profile. The engine uses it for the link
+   * allow-list (the business's own website) and to say where the business is. Absent in
+   * callers that predate it; every part is null when the profile does not have it.
+   */
+  readonly contact?: {
+    readonly phone: string | null;
+    readonly email: string | null;
+    readonly websiteUrl: string | null;
+    readonly city: string | null;
+    readonly state: string | null;
+    readonly postalCode: string | null;
+  };
+}
+
+/** What is already known about the customer from the channel and earlier conversations. */
+export interface CustomerProfile {
+  readonly name: string | null;
+  /** E.164, when the channel reveals it (WhatsApp) or the customer gave it before. */
+  readonly phone: string | null;
+  readonly email: string | null;
 }
 
 export const TURN_AUTHORS = ["customer", "bot", "human_agent"] as const;
@@ -55,6 +76,8 @@ export interface TurnAttachment {
   readonly mimeType: string | null;
   /** Private storage location, present once the pipeline has downloaded the bytes. */
   readonly storage: { readonly bucket: string; readonly path: string } | null;
+  /** What an earlier `analyze_photos` action recorded about the file, if anything. */
+  readonly analysis?: string | null;
 }
 
 /** One stored message as the engine sees it. */
@@ -71,6 +94,13 @@ export interface ConversationTurn {
 export const TURN_TRIGGERS = ["inbound_message", "follow_up", "takeover_released"] as const;
 export type TurnTrigger = (typeof TURN_TRIGGERS)[number];
 
+/** The channel of the conversation as the engine and the action handlers see it. */
+export interface TurnChannel {
+  readonly id: ChannelId;
+  readonly capabilities: ChannelCapabilities;
+  readonly window: MessagingWindowState;
+}
+
 export interface EngineTurnInput<
   TSettings extends Record<string, unknown> = Record<string, unknown>,
 > {
@@ -81,11 +111,9 @@ export interface EngineTurnInput<
   /** Injected clock. The engine never calls Date.now(), so runs are reproducible. */
   readonly now: IsoDateTime;
   readonly business: BusinessProfile;
-  readonly channel: {
-    readonly id: ChannelId;
-    readonly capabilities: ChannelCapabilities;
-    readonly window: MessagingWindowState;
-  };
+  /** Absent in callers that predate it: the engine then assumes nothing is known. */
+  readonly customer?: CustomerProfile;
+  readonly channel: TurnChannel;
   readonly settings: ResolvedSettings<TSettings>;
   /** Null only when the segment has no playbook yet. */
   readonly playbook: PlaybookSnapshot | null;
@@ -96,6 +124,21 @@ export interface EngineTurnInput<
   /** Customer messages this turn must answer (the debounced batch). Empty for follow-ups. */
   readonly pending: readonly ConversationTurn[];
 }
+
+/** Why a contact is not a lead. The first four mirror `scoring.auto_disqualify` in settings. */
+export const NOT_A_FIT_CATEGORIES = [
+  "spam",
+  "solicitation",
+  "job_seeker",
+  "wrong_number",
+  "service_not_offered",
+  "outside_service_area",
+  "other",
+] as const;
+export type NotAFitCategory = (typeof NOT_A_FIT_CATEGORIES)[number];
+
+export const END_DISPOSITIONS = ["completed", "stop_replying"] as const;
+export type EndDisposition = (typeof END_DISPOSITIONS)[number];
 
 const FollowUpDelay = z.object({
   /** ISO 8601 duration from now, for example "PT2H" or "P1D". */
@@ -148,10 +191,18 @@ export const EngineAction = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("mark_not_a_fit"),
     reason: z.string().min(1),
+    /** Why the contact is not a lead, as a closed list lead routing (C5) can act on. */
+    category: z.enum(NOT_A_FIT_CATEGORIES).optional(),
   }),
   z.object({
     type: z.literal("end_conversation"),
     reason: z.string().min(1),
+    /**
+     * "completed": the conversation reached its natural end; the bot answers if the customer
+     * writes again. "stop_replying": the bot stays silent from now on (spam, abuse after a
+     * warning) until a person reopens the conversation. Default: "completed".
+     */
+    disposition: z.enum(END_DISPOSITIONS).optional(),
   }),
 ]);
 export type EngineAction = z.infer<typeof EngineAction>;
@@ -178,9 +229,21 @@ export interface ActionOutcome {
 export interface ToolExecutionContext {
   readonly trace: TraceContext;
   readonly mode: "live" | "dry_run";
-  /** Model tool-call id: the idempotency key for the action. */
+  /**
+   * Model tool-call id: the idempotency key for the action within one attempt of a turn. A
+   * turn that is retried calls the model again and gets new ids, so a handler whose effect
+   * must happen once per conversation (an emergency alert, a booking) also checks its own
+   * stored state.
+   */
   readonly toolCallId: string;
   readonly now: IsoDateTime;
+  /**
+   * The settings snapshot the turn runs under. Handlers decide with these values, not with a
+   * fresh read, so the reply and the action follow the same rules (`settings.version`).
+   */
+  readonly settings: ResolvedSettings;
+  readonly channel: TurnChannel;
+  readonly business: BusinessProfile;
 }
 
 /** Executes actions on behalf of the engine. The pipeline supplies the implementation. */
@@ -266,6 +329,21 @@ export interface EngineTurnResult {
   readonly settingsVersion: string;
   /** Totals over every model call of the turn. */
   readonly usage: ModelCallRecord["usage"];
+  /** How the turn went, for the turn record, tests and the evaluation harness. */
+  readonly diagnostics?: EngineTurnDiagnostics;
+}
+
+export interface EngineTurnDiagnostics {
+  readonly modelCalls: number;
+  readonly toolRounds: number;
+  /** Output-guard rules a draft broke, for example "too_long" or "price_not_allowed". */
+  readonly guardViolations: readonly string[];
+  /** Times the model was asked to write the reply again because of the guard. */
+  readonly rewrites: number;
+  /** True when the reply was written by code, not the model (after-hours message, fallback). */
+  readonly deterministicReply: boolean;
+  /** Short machine-readable notes, for example "after_hours:auto_reply". Never customer text. */
+  readonly notes: readonly string[];
 }
 
 export interface ConversationEngine {

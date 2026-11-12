@@ -12,6 +12,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@repo/ai": "workspace:*",
     "@repo/channel-test": "workspace:*",
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",

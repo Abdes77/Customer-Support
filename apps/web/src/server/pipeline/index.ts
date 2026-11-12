@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 
+import { createModelClientFromEnv, type ModelMode, modelModeFromEnv } from "@repo/ai";
 import { createTestChannelAdapter, type TestChannelAdapter } from "@repo/channel-test";
 import { ConfigError, logger as rootLogger, type Logger } from "@repo/core";
 import { type DeploymentInfo, deploymentInfo, type Env, getEnv } from "@repo/core/env";
@@ -21,8 +22,9 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
 
 /**
  * The infrastructure composition root (ARCHITECTURE §6): which channel adapters this
- * deployment has, which database, and which job runner. `@repo/pipeline` wires the domain
- * (engine, action handlers, loaders); this file plugs it into the infrastructure.
+ * deployment has, which database, which job runner and which model endpoint (the Claude API,
+ * or the offline stand-in on a developer machine without a key). `@repo/pipeline` wires the
+ * domain (engine, action handlers, loaders); this file plugs it into the infrastructure.
  *
  * Later chunks register here: their channel adapters (C8 to C11) in `adapters` and their job
  * definitions (C11 to C14, C17) next to the pipeline's in `jobs`. Domain parts (engine, action
@@ -31,6 +33,8 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
   readonly mode: JobsMode;
+  /** Which model writes the replies: the Claude API, the offline stand-in, or nothing. */
+  readonly modelMode: ModelMode;
   /** Every durable function of the app. */
   readonly jobs: readonly JobDefinition[];
   /** Set when jobs run on Inngest (Cloud or the dev server); /api/inngest serves them. */
@@ -98,16 +102,20 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     inngest !== null ? createInngestEventSender(inngest) : (runner ?? unconfiguredSender());
 
   // The engine, action handlers, knowledge and loaders come from the pipeline's domain
-  // composition (packages/pipeline/src/composition), where C4 to C13 register theirs.
-  const pipeline = createPipeline({ db, adapters, events, logger });
+  // composition (packages/pipeline/src/composition), where C4 to C13 register theirs. The
+  // model client is infrastructure: it is chosen here, from this deployment's environment.
+  const modelMode = modelModeFromEnv(env, deployment);
+  const model = createModelClientFromEnv({ env, deployment, logger });
+  const pipeline = createPipeline({ db, adapters, events, logger, model });
   const jobs = [...pipeline.jobs()];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
     jobs: mode,
+    model: modelMode,
     channels: adapters.channels(),
     testChannel: testChannel !== null,
   });
-  return { pipeline, mode, jobs, inngest, runner, testChannel };
+  return { pipeline, mode, modelMode, jobs, inngest, runner, testChannel };
 }
 
 // One per process, kept on globalThis so a hot reload of the dev server does not start a

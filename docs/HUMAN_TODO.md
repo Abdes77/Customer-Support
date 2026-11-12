@@ -27,9 +27,32 @@ Format of an entry:
   (HTTP 400) for organizations or workspaces without 30-day data retention, so check the
   workspace's retention setting before creating the key.
 - **Where:** https://platform.claude.com, Settings, API keys (and Settings, Data retention).
-- **Variable:** `ANTHROPIC_API_KEY`.
-- **Live check:** none exists yet. C4 adds the command that runs a live conversation and
-  shows prompt-cache reads; C7 adds `pnpm eval`.
+- **Variable:** `ANTHROPIC_API_KEY` (in `.env.local` locally, in the Vercel project for
+  production). Leave `AI_MODEL_MODE` unset: with a key the bot uses the Claude API.
+- **Live check that was skipped (C4):** the conversation engine has never talked to the
+  real model. Everything in `pnpm verify` runs against a mocked model whose answers were
+  written by hand. With the key set, run:
+
+  ```
+  pnpm --filter @repo/ai live:conversations
+  ```
+
+  It plays nine scripted customers (roofing, HVAC, electrical and remodeling leads; a gas
+  smell at night; a prompt injection; an angry customer; off-topic questions; spam) against
+  the API in dry-run mode: nothing is sent to anyone and nothing is written to a database.
+  It prints each transcript, the tool calls and the token counts of every model call, and
+  fails when a conversation does not behave as specified or when a model call after the
+  first of a conversation reads nothing from the prompt cache. Expect a few cents per
+  conversation. Read the transcripts once: they are the first real look at how the bot
+  sounds. A single conversation: `pnpm --filter @repo/ai live:conversations emergency`.
+  - If every request fails with a 400 that mentions data retention, the workspace does not
+    have 30-day retention (see above).
+  - If requests fail with a 400 about `strict` or structured outputs, the organization uses
+    customer-managed encryption keys: run with `--no-strict` and tell a developer, who sets
+    `strictTools: false` where the engine is created (`packages/pipeline/src/composition`).
+  - If the first call of a conversation is slow, that is the one-time compilation of the
+    tool schemas; later calls reuse it for 24 hours.
+  C7 adds `pnpm eval`, the full quality check.
 
 ### 3. Supabase project (C1)
 
@@ -150,7 +173,9 @@ Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` a
 demo users; their password is in `packages/db/src/seed/demo.ts`.
 
 Without Inngest variables, jobs run inside the dev server process: sign in as the demo admin
-and chat with a business at http://localhost:3000/dev/chat. To use the real Inngest engine
+and chat with a business at http://localhost:3000/dev/chat. Without `ANTHROPIC_API_KEY` the
+replies come from a built-in rule-based stand-in, not from Claude (the page says so); set the
+key to talk to the real bot, or `AI_MODEL_MODE=offline` to force the stand-in. To use the real Inngest engine
 locally instead, start its dev server (`npx inngest-cli@latest dev -u
 http://localhost:3000/api/inngest`, or with Docker: `docker run --network host
 inngest/inngest inngest dev -u http://127.0.0.1:3000/api/inngest`) and set `INNGEST_DEV=1`
@@ -174,6 +199,18 @@ already listed and described in `.env.example`.
 | Vercel project | Hosting (root directory `apps/web`, Node.js 22, pnpm) | all of the above | C18 |
 
 ## Unverified against live services
+
+- **Claude API (C4).** The request the engine sends follows the API reference bundled with
+  the build tools (cached 2026-11-03) and the live pages for prompt caching, effort, tool
+  use, strict tool use and refusals and fallback on platform.claude.com, read on
+  2026-11-11. No request has been sent: there was no key in the build VM. Not yet seen live:
+  that `claude-fable-5-2` accepts the request as built (ten strict tools, three cached
+  system blocks, a `role: "system"` message after the customer's turn, `fallbacks:
+  "default"` with the beta header `server-side-fallback-2026-07-01`); cache reads from the
+  second call on; how the model actually writes with this prompt; photo analysis with real
+  images; the prices in `packages/ai/src/model/pricing.ts`, which are list prices from the
+  cached reference. The live check in entry 2 covers all but the last two; send a photo in
+  the test chat (`/dev/chat` cannot upload yet; the widget in C8 can) for the photo path.
 
 - Nothing in C0 calls a vendor. The Claude API rules in `docs/ARCHITECTURE.md` §5 come from
   the API reference bundled with the build tools (cached 2026-11-03), not from a live request;

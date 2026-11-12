@@ -1,3 +1,4 @@
+import { estimateCostMicroUsd } from "@repo/ai";
 import type { Logger, ModelCallRecord, ModelCallSink } from "@repo/core";
 import { type Database, modelCalls } from "@repo/db";
 
@@ -38,6 +39,8 @@ export function createModelCallSink(options: {
               outputTokens: call.usage.outputTokens,
               cacheReadInputTokens: call.usage.cacheReadInputTokens,
               cacheCreationInputTokens: call.usage.cacheCreationInputTokens,
+              // An estimate from list prices, for the spend caps of C17.
+              costMicroUsd: estimateCostMicroUsd(call.model, call.usage),
               requestId: call.requestId,
               request: call.request,
               response: call.response,

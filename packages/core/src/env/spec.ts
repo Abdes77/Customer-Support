@@ -252,6 +252,15 @@ export const ENV_SPEC = {
     secret: false,
     required: "optional",
   },
+  AI_MODEL_MODE: {
+    schema: z.enum(["live", "offline"]),
+    group: "anthropic",
+    description:
+      "Which model answers. live: the Claude API (needs ANTHROPIC_API_KEY). offline: a built-in rule-based stand-in for local development and end-to-end tests; refused on Vercel. Default: live when the key is set, otherwise offline on a developer machine.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
 
   // --- inngest ---------------------------------------------------------------------------
   INNGEST_EVENT_KEY: {

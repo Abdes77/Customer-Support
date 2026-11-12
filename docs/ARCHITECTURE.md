@@ -185,6 +185,40 @@ pipeline entry point, `ingest(parsed)`, which performs steps 4 to 6.
   which production and the evaluation harness share; channel adapters and job definitions
   in `apps/web/src/server/pipeline`.
 
+### As built (C4)
+
+- **The engine is `createEngine()` in `packages/ai`**, registered in
+  `createDomainComposition()`. `generate` hands it the turn (now also the customer's known
+  contact details, the business's contact data and the stored analysis of each photo) and
+  gets back drafts and executed actions. Its deadline is the turn lease minus one minute;
+  one model call gets at most 90 seconds.
+- **A turn inside the engine:** work out the situation in code (office hours, first reply,
+  what kind of message is due, channel limits, open lead fields) → core facts and a look-up
+  → build the request (§5) → tool loop (at most `model.max_tool_rounds` rounds, then one
+  call with `tool_choice: none`) → output guard (one rewrite by the model, then repairs in
+  code) → drafts. Nothing is due (`takeover_released` without a check-in, a follow-up with
+  no bot message) → `no_reply` without a model call.
+- **Outcomes.** `refusal` → `refused` (the pipeline starts a takeover). `max_tokens` → one
+  retry with twice the room, then `failed`. A retryable API error (429, 5xx, timeout, the
+  turn's own deadline) is thrown, so the job retries the `generate` step; an error no retry
+  can fix (400, a missing key) → `failed` (dead letter and alert). After an emergency was
+  escalated, none of these stops the reply: the safety instructions go out from code.
+- **Handlers registered by C4** (`packages/pipeline/src/composition/handlers.ts`):
+  `request_photo` (at most `photos.max_requests` per conversation, counted from the stored
+  turns), `analyze_photos` (a separate model call with the images under
+  `model.photo_analysis.*`; the description is stored in `attachments.analysis` and shown
+  in later turns' history), `end_conversation` (a mark in `conversations.metadata.ended`).
+  The guard `conversation_ended` keeps the bot silent after `stop_replying` and lets the
+  customer's next message reopen a conversation that had simply ended.
+- **Knowledge until C6:** `createKnowledgeRetriever()` in the pipeline reads
+  `knowledge_items` (all active facts in a stable order; full-text search for look-ups).
+  The engine keeps the categories of `knowledge.core_categories` in the cached business
+  section. A segment without a playbook gets a built-in placeholder (no prices in it).
+- **Without a key.** On a developer machine without `ANTHROPIC_API_KEY` (or with
+  `AI_MODEL_MODE=offline`) the same engine runs on a rule-based offline model, so the dev
+  chat and browser tests have a bot to talk to. A hosted deployment without a key never
+  uses it: turns fail with a configuration error and are dead-lettered.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -392,12 +426,47 @@ after it; at most four breakpoints)
 | Segment playbook | The playbook version in force | The playbook is edited | 2 |
 | Business block | Profile, core knowledge facts, settings rendered as instructions | Knowledge or settings are edited | 3 |
 | Conversation | History as plain text turns | Every turn | 4 (last history block) |
-| Turn context | Current time, hours state, lead state, routing decision, retrieved facts, window state, then the pending customer messages | Every request | none: always last |
+| Newest messages and turn context | The pending customer messages (`user`), then the turn context as a `role: "system"` message: current time, channel limits, hours state, lead state, routing decision, retrieved facts, what the turn is for | Every request | none: always last |
 
 Nothing volatile (clock, ids, counters) may appear above the turn context. Everything in
 blocks 1 to 3 is rendered deterministically (sorted keys, stable order). Log
 `cache_read_input_tokens` on every call; a test asserts that a second identical request
 reads from the cache.
+
+**As built (C4), in `packages/ai`:**
+
+- `src/model`: the `ModelClient` port (`call(request)`), the Anthropic SDK client
+  (`client.beta.messages`, non-streaming up to 20,000 output tokens and streamed above), the
+  scripted client for tests (`@repo/ai/testing`), the offline client, and `callModel()`,
+  which writes the `ModelCallRecord` (request and response in full unless
+  `data.store_model_io` is off, image bytes never) and one log line with tokens, cache reads
+  and latency. Effort is always sent (except to the few models from before the parameter).
+- `src/prompt`: the core prompt as a versioned file (`core/reply-v1.ts`, never edited after
+  release; `prompt-versions.test.ts` pins its hash), the playbook and business sections
+  rendered from data and settings, the history, the turn context. `PROMPT_VERSION` is
+  `<core version>.r<RENDER_VERSION>`; `render.test.ts` pins a fingerprint of a whole sample
+  request, so any change to what the model receives needs a new render version
+  (`pnpm --filter @repo/ai prompt:fingerprint --print` shows the request).
+- The business section is the same for every channel and every clock: channel limits, the
+  opening message and the AI disclosure of a first reply are in the turn context.
+- A model without `role: "system"` messages inside the conversation (the list is in
+  `supportsMidConversationSystem`) gets the turn context as the last block of the user
+  turn; customer text cannot imitate it because its angle brackets are neutralized.
+- The model's final text is the reply. Markers in it (`<next_message/>`, `<quick_replies>`,
+  `<subject>`, `<no_reply/>`, `<after_hours_message/>`) are parsed and never sent.
+- `src/tools`: ten strict tools, one per `EngineAction`; inputs are parsed with Zod (ranges
+  and formats strict mode cannot express) and then checked against the settings: lead
+  field keys and enumerated values against the catalogue (`leadFieldCatalogue`), emergency
+  classes against `emergency.classes`. Tool calls of one response run in order, and their
+  results go back in one message.
+- `src/guard`: the output guard. Model-fixable findings (too long, too many messages or
+  questions, a banned phrase, a dollar figure that is in no allowed source, quoted
+  instructions) cost one rewrite; then code removes markup, links outside the allow-list,
+  what is left of the findings, and adds the mandatory texts (safety instructions first,
+  AI disclosure and opening message in a first reply). A reply that cannot be repaired is
+  replaced by a fixed message and the conversation is handed to a person.
+- `src/dry-run`: `dryRunTurn()` and `createDryRunConversation()` for the evaluation
+  harness; `placeholderRouting()` stands in for lead routing until C5.
 
 **History** is rebuilt from the database each turn as plain text: consecutive messages by the
 same author merge into one turn, photos appear as their stored analysis text, and thinking
@@ -503,6 +572,17 @@ optional `sendTyping`, `markRead`, `fetchAttachment`.
 - An `ActionOutcome` is returned to the model as the tool result. `rejected` means settings or
   state forbid the action and the reply must adapt; the model is never the authority on what
   is allowed.
+- Finalized by C4: a handler's `ToolExecutionContext` carries the turn's settings snapshot,
+  the channel and the business, so an action is decided under the same `settings.version`
+  as the reply. `toolCallId` identifies an action within one attempt of a turn; a retried
+  turn asks the model again and gets new ids, so a handler whose effect must happen once
+  (an alert, a booking) also checks its own stored state. Optional additions: `customer`
+  on the input, `analysis` on an attachment, `contact` on the business, a `category` on
+  `mark_not_a_fit`, a `disposition` on `end_conversation`, `diagnostics` on the result.
+- The lead fields a conversation can record are derived from the settings by
+  `leadFieldCatalogue()` in `@repo/ai` (criteria, their details, contact details, custom
+  criteria, observable signals). The engine only passes on fields with a known key and, for
+  enumerated criteria, a canonical value; lead scoring (C5) can rely on that.
 
 ### Settings resolver (`contracts/settings.ts`, owner C2)
 

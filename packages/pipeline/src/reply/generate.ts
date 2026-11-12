@@ -15,6 +15,7 @@ import {
   and,
   attachments,
   type BusinessContext,
+  contacts,
   conversations,
   conversationTurns,
   desc,
@@ -187,6 +188,7 @@ async function buildTurnInput(
     .returning({
       id: conversations.id,
       channel: conversations.channel,
+      contactId: conversations.contactId,
       handled: conversations.handledThroughSeq,
       lastInboundAt: conversations.lastInboundAt,
     });
@@ -263,6 +265,7 @@ async function buildTurnInput(
             status: attachments.status,
             bucket: attachments.storageBucket,
             path: attachments.storagePath,
+            analysis: attachments.analysis,
           })
           .from(attachments)
           .where(inArray(attachments.messageId, ids))
@@ -278,9 +281,18 @@ async function buildTurnInput(
         row.status === "stored" && row.bucket !== null && row.path !== null
           ? { bucket: row.bucket, path: row.path }
           : null,
+      analysis: row.analysis,
     });
     byMessage.set(row.messageId, list);
   }
+
+  // What the channel or an earlier conversation already told us about the customer, so the
+  // bot does not ask for it again.
+  const [contact] = await ctx.tx
+    .select({ name: contacts.displayName, phone: contacts.phone, email: contacts.email })
+    .from(contacts)
+    .where(eq(contacts.id, conversation.contactId))
+    .limit(1);
 
   const maxCharacters = values["limits.max_inbound_characters"];
   const toTurn = (row: (typeof pendingRows)[number]): ConversationTurn => ({
@@ -307,6 +319,11 @@ async function buildTurnInput(
     trigger: "inbound_message",
     now: now.toISOString(),
     business,
+    customer: {
+      name: contact?.name ?? null,
+      phone: contact?.phone ?? null,
+      email: contact?.email ?? null,
+    },
     channel: {
       id: conversation.channel,
       capabilities,

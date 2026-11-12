@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { PROMPT_VERSION } from "@repo/ai";
 import { type MemoryTestTransport, signTestWebhook } from "@repo/channel-test";
 import { ensureTestConnection } from "@repo/channel-test/server";
 import { createLogger } from "@repo/core";
@@ -79,7 +80,7 @@ function signedRequest(body: unknown, secret = SECRET): Request {
 const params = (channel: string) => ({ params: Promise.resolve({ channel }) });
 
 describe("POST /api/webhooks/[channel]", () => {
-  it("round-trips a test-channel conversation through the webhook, the jobs and the stub engine", async () => {
+  it("round-trips a test-channel conversation through the webhook, the jobs and the engine", async () => {
     const handle = createWebhookHandler(() => server.pipeline);
     const response = await handle(
       signedRequest({
@@ -105,21 +106,31 @@ describe("POST /api/webhooks/[channel]", () => {
       .from(messages)
       .where(eq(messages.businessId, businessId as never))
       .orderBy(messages.sequence);
-    expect(rows.map((row) => [row.direction, row.author, row.status, row.text])).toEqual([
-      ["inbound", "customer", "received", "Is my furnace safe to run?"],
-      ["outbound", "bot", "sent", "You said: Is my furnace safe to run?"],
+    // Without ANTHROPIC_API_KEY on a developer machine the offline stand-in writes the reply,
+    // through the real engine: prompt, tools, output guard.
+    expect(server.modelMode).toBe("offline");
+    expect(rows.map((row) => [row.direction, row.author, row.status])).toEqual([
+      ["inbound", "customer", "received"],
+      ["outbound", "bot", "sent"],
     ]);
+    expect(rows[1]?.text).toBe(
+      "I'm Alex, the virtual assistant for Evergreen. Thanks for reaching out to Evergreen! What's the ZIP code of the property? How soon are you hoping to have this done?",
+    );
     const transport = server.testChannel!.adapter.transport as MemoryTestTransport;
-    expect(transport.textsFor(rows[0]!.conversationId)).toEqual([
-      "You said: Is my furnace safe to run?",
-    ]);
+    expect(transport.textsFor(rows[0]!.conversationId)).toEqual([rows[1]?.text]);
     const turns = await t.admin
       .select()
       .from(conversationTurns)
       .where(eq(conversationTurns.conversationId, rows[0]!.conversationId));
     expect(turns.map((turn) => [turn.status, turn.promptVersion])).toEqual([
-      ["replied", "echo-stub-1"],
+      ["replied", PROMPT_VERSION],
     ]);
+    // What the customer said was saved to the lead; until C5 the action is recorded only.
+    expect(
+      (turns[0]?.actions as { action: { type: string }; outcome: { status: string } }[]).map(
+        (entry) => [entry.action.type, entry.outcome.status],
+      ),
+    ).toEqual([["update_lead_fields", "deferred"]]);
   });
 
   it("refuses a bad signature with 401 and an unknown channel with 404", async () => {
@@ -181,6 +192,8 @@ describe("composition", () => {
       logger: quiet,
     });
     expect(bare.mode).toBe("unconfigured");
+    // No key on a hosted deployment: never the offline stand-in.
+    expect(bare.modelMode).toBe("unconfigured");
     expect(bare.testChannel).toBeNull();
     expect(bare.inngest).toBeNull();
     expect(bare.runner).toBeNull();

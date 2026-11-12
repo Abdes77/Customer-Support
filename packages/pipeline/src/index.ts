@@ -13,7 +13,11 @@
  * Server only.
  */
 export { createPipeline, type Pipeline } from "./pipeline";
-export { createDomainComposition, type DomainComposition } from "./composition";
+export {
+  createDomainComposition,
+  type DomainComposition,
+  type DomainCompositionOptions,
+} from "./composition";
 export {
   DEFAULT_PIPELINE_OPTIONS,
   type PipelineContext,
@@ -32,7 +36,15 @@ export {
   defaultActionOutcome,
 } from "./actions";
 export { createEchoEngine, ECHO_PROMPT_VERSION } from "./echo-engine";
-export { emptyKnowledgeRetriever } from "./ports/knowledge";
+export { createKnowledgeRetriever, emptyKnowledgeRetriever } from "./ports/knowledge";
+export { endedConversationGuard } from "./composition/guards";
+export {
+  analyzePhotosHandler,
+  endConversationHandler,
+  engineActionHandlers,
+  type EngineHandlerDeps,
+  requestPhotoHandler,
+} from "./composition/handlers";
 export { defaultLeadLoader, defaultPlaybookLoader, loadBusinessProfile } from "./ports/loaders";
 export { createModelCallSink } from "./ports/model-calls";
 export { type IngestResult, isReplyableKind } from "./ingest/ingest";

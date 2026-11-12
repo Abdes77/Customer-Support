@@ -121,6 +121,23 @@ describe("tool runtime", () => {
     mode: "live",
     toolCallId: "toolu_1",
     now: "2026-11-11T18:00:00.000Z",
+    settings: settingsWith({}),
+    channel: {
+      id: "test",
+      capabilities: CHANNEL_CAPABILITIES.test,
+      window: { open: true, closesAt: null },
+    },
+    business: {
+      id: "9a1c3e5f-2b4d-4f6a-8c0e-1d3f5a7b9c03" as never,
+      agencyId: "3f2b8c1e-7d4a-4b6f-8e21-5c9a7d1e2f02" as never,
+      name: "Summit Roofing",
+      segment: {
+        id: "5d1c3e5f-2b4d-4f6a-8c0e-1d3f5a7b9c04" as never,
+        slug: "roofing",
+        name: "Roofing",
+      },
+      timezone: "America/Denver",
+    },
   };
 
   it("records unhandled actions as deferred and refuses scheduling until C12", async () => {

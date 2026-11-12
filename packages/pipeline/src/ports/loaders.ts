@@ -34,6 +34,12 @@ export async function loadBusinessProfile(ctx: BusinessContext): Promise<Busines
       agencyId: businesses.agencyId,
       name: businesses.name,
       timezone: businesses.timezone,
+      phone: businesses.phone,
+      email: businesses.email,
+      websiteUrl: businesses.websiteUrl,
+      city: businesses.city,
+      state: businesses.state,
+      postalCode: businesses.postalCode,
       segmentId: segments.id,
       segmentSlug: segments.slug,
       segmentName: segments.name,
@@ -49,6 +55,14 @@ export async function loadBusinessProfile(ctx: BusinessContext): Promise<Busines
     name: row.name,
     timezone: row.timezone,
     segment: { id: row.segmentId, slug: row.segmentSlug, name: row.segmentName },
+    contact: {
+      phone: row.phone,
+      email: row.email,
+      websiteUrl: row.websiteUrl,
+      city: row.city,
+      state: row.state,
+      postalCode: row.postalCode,
+    },
   };
 }
 

@@ -24,15 +24,15 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 | `pnpm --filter @repo/<name> test` | Tests of one package (also `typecheck`, `lint`) |
 | `pnpm format` | Fix formatting with Prettier |
 | `pnpm check:boundaries` | Check package dependencies against `tooling/boundaries.mjs` |
-| `pnpm env:example` | Regenerate `.env.example` from `packages/core/src/env/spec.ts` |
-| `pnpm settings:docs` | Regenerate `docs/SETTINGS.md` from the registry in `packages/settings` |
+| `pnpm env:example` / `pnpm settings:docs` | Regenerate `.env.example` (from `packages/core/src/env/spec.ts`) / `docs/SETTINGS.md` (from the registry) |
 | `pnpm services:up` | Start local PostgreSQL 16, create `hsrb_dev` and `hsrb_test` |
 | `pnpm db:migrate` / `db:seed` / `db:reset` | Apply migrations (the only supported way); load demo data; wipe a local database |
 | `pnpm db:generate` | Write a migration after changing `packages/db/src/schema` |
 | `pnpm db:doctor` | Check a database: roles, migrations, RLS, privileges, encryption key |
 | `pnpm db:create-admin --slug <agency> --email <user>` | Make a user agency_admin (first-time setup) |
-| `pnpm dev` | Run the Next.js app at http://localhost:3000 (jobs in-process without Inngest; test chat at `/dev/chat`) |
+| `pnpm dev` | Run the Next.js app at http://localhost:3000 (jobs in-process without Inngest, offline model without a key; test chat at `/dev/chat`) |
 | `pnpm --filter @repo/pipeline live:roundtrip` | Live webhook → jobs → reply check against a running app (HUMAN_TODO 7) |
+| `pnpm --filter @repo/ai live:conversations` / `prompt:fingerprint --print` | Scripted customers against the Claude API (needs a key, HUMAN_TODO 2) / show the prompt as the model gets it |
 
 ## Layout
 
@@ -69,11 +69,11 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 - Jobs: `JobDefinition`s from `@repo/jobs` (ARCHITECTURE §4), registered in
   `apps/web/src/server/pipeline`; payloads carry ids only; handlers are idempotent; side
   effects sit in their own step. Pipeline tests: `src/testing/harness.ts` in `packages/pipeline`.
-- Model calls go through the client in `packages/ai` and follow ARCHITECTURE §5 (no
-  `thinking`, `temperature` or forced `tool_choice`; check `stop_reason`; keep the cached
-  prefix stable).
-- Tests sit next to the source as `*.test.ts`. Vendor calls are tested with fixtures and an
-  injected `fetch`; anything needing a real account goes to `docs/HUMAN_TODO.md` with the
-  command for the live check.
+- Model calls go through `callModel` in `packages/ai` (ARCHITECTURE §5: no `thinking`,
+  `temperature` or forced `tool_choice`; check `stop_reason`; keep the cached prefix stable).
+  A prompt change needs a new version: the tests in `packages/ai/src/prompt` say which.
+- Tests sit next to the source as `*.test.ts`. Vendor calls use fixtures and an injected
+  `fetch`, the model `createScriptedModelClient` from `@repo/ai/testing`; anything needing a
+  real account goes to `docs/HUMAN_TODO.md` with the command for the live check.
 - Dependencies: one version each, in the `catalog:` of `pnpm-workspace.yaml`.
 - Ambiguity: choose the most reasonable option and add one line to `docs/DECISIONS.md`.

@@ -13,6 +13,7 @@
     "live:roundtrip": "tsx scripts/live-roundtrip.ts"
   },
   "dependencies": {
+    "@repo/ai": "workspace:*",
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/jobs": "workspace:*",

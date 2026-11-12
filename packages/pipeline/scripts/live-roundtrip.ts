@@ -5,7 +5,7 @@
  * HTTP, delivers the first one again, and waits for the reply:
  *
  *   - the duplicate must be acknowledged as a duplicate (I2);
- *   - the three messages must get exactly one reply that answers all three (I3);
+ *   - the three messages must get exactly one reply, from one turn that covers all three (I3);
  *   - the reply must be stored as sent, after the customer's messages (I4).
  *
  * Usage (variables from the shell or the root .env.local):
@@ -134,8 +134,11 @@ async function main(): Promise<void> {
     if (replies.length !== 1) problems.push(`expected 1 reply, found ${replies.length}`);
     if (replies[0]?.status !== "sent")
       problems.push(`the reply is ${replies[0]?.status ?? "missing"}, not sent`);
-    if (!texts.every((text) => replies[0]?.text?.includes(text)))
-      problems.push("the reply does not answer all three messages");
+    // One turn answered all three messages. (The engine writes its own words, so the reply
+    // is not compared with the customer's text.)
+    const answering = turns.filter((turn) => turn.status === "replied");
+    if (answering.length !== 1 || answering[0]?.pending !== 3)
+      problems.push("the three messages were not answered by one turn");
     if ((replies[0]?.sequence ?? 0) < Math.max(...customer.map((row) => row.sequence)))
       problems.push("the reply is out of order");
     if (problems.length > 0) throw new Error(problems.join("; "));
