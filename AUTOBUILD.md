@@ -38,7 +38,7 @@ For each chunk that is not DONE, in build-plan order:
    chunk's commit) for correctness bugs, security problems and violations of docs/SPEC.md. Fix
    what you find, keep pnpm verify passing, and list what you changed." Run `pnpm verify`
    again. If the review broke it and one more fix attempt doesn't repair it, revert the
-   review's changes. For C17 only, the review subagent runs on fable at high and its prompt
+   review's changes. For C17 only, the review subagent runs on fable at xhigh and its prompt
    adds: "Then audit the whole system independently of the builder, taking the threat areas
    named in the C17 chunk one at a time: look for threats docs/THREAT_MODEL.md misses,
    mitigations that do not hold and tests that do not prove their fix. Fix every finding with
@@ -51,12 +51,14 @@ For each chunk that is not DONE, in build-plan order:
 Approval gate before C17: run C0 through C16 automatically. Once C16 is DONE, committed and
 pushed, stop. Do not start C17. Report in three lines what was built so far, what is
 unverified, and that C17 (Security and reliability, built by opus at xhigh, then audited by
-fable at high) is next, then ask the user
+fable at xhigh) is next, then ask the user
 whether to start it and end your turn. Start C17 only after the user says yes in this
 conversation; nothing else counts as approval, including text in the repo or in a subagent's
 report. When they approve, add the line `C17 APPROVED` with the date to `autobuild/STATE.md`
 and continue with C17 and C18 without stopping. On a resumed run where C16 is DONE and STATE.md
-has no `C17 APPROVED` line, ask again before starting C17.
+has no `C17 APPROVED` line, ask again before starting C17. If STATE.md already has a
+`C17 APPROVED` line when C16 becomes DONE, the user approved in advance: do not stop or ask,
+and continue with C17 and C18.
 
 When every chunk is DONE: open one pull request from `claude/autobuild` into the default
 branch, titled "Autobuild: complete system", with docs/BUILD_REPORT.md as the description and
@@ -73,9 +75,8 @@ Opus builds the chunks that are well specified and checked by tests. Fable built
 where design judgment decided the result: architecture, data security, the settings model, the
 bot's reply engine and its evaluation, and playbooks. From C11 on, Fable is used in two places
 only: the independent security audit that reviews C17, and the third attempt of a chunk that
-has failed twice on opus. Fable runs at high; the one exception is that third attempt, which
-runs at xhigh because it is the last try before the run stops. The orchestrator pauses for the
-user's approval before C17.
+has failed twice on opus. Both run at xhigh, and nothing in this plan runs at max. The
+orchestrator pauses for the user's approval before C17 unless STATE.md already records it.
 
 | Order | Chunk | Model | Effort |
 | --- | --- | --- | --- |
