@@ -12,8 +12,10 @@ import {
   contactIdentities,
   contacts,
   conversations,
+  conversationTurns,
   desc,
   eq,
+  gt,
   isNull,
   messages,
   sql,
@@ -103,6 +105,47 @@ function stringArray(value: unknown): string[] {
 }
 
 /**
+ * Whether a bot message may still reach a customer who opted out (C13). Never a message the
+ * bot starts itself (a nudge, a reminder, a check-in), except the one confirmation of the
+ * opt-out. A reply to what the customer wrote may go when its turn escalated an emergency
+ * (the safety instructions always go out), or when the turn started after the opt-out: it was
+ * written under the opt-out rules, which the registered send gate checks once more against
+ * the business's `follow_up.opt_out_scope`. A reply written before the opt-out stays back.
+ */
+async function mayReachOptedOut(
+  ctx: BusinessContext,
+  message: {
+    readonly id: string;
+    readonly conversationId: ConversationId;
+    readonly payload: unknown;
+  },
+  optedOutAt: Date,
+): Promise<boolean> {
+  const purpose = asRecord(message.payload)["purpose"];
+  if (purpose === "opt_out_confirmation") return true;
+  if (typeof purpose === "string") return false;
+  const [turn] = await ctx.tx
+    .select({
+      trigger: conversationTurns.trigger,
+      startedAt: conversationTurns.startedAt,
+      actions: conversationTurns.actions,
+    })
+    .from(conversationTurns)
+    .where(
+      and(
+        eq(conversationTurns.conversationId, message.conversationId),
+        sql`${conversationTurns.replyMessageIds} @> ${JSON.stringify([message.id])}::jsonb`,
+      ),
+    )
+    .limit(1);
+  if (turn?.trigger !== "inbound_message") return false;
+  const emergency = turn.actions.some(
+    (entry) => asRecord(asRecord(entry)["action"])["type"] === "escalate_emergency",
+  );
+  return emergency || turn.startedAt.getTime() >= optedOutAt.getTime();
+}
+
+/**
  * Step "prepare" of a send: the checks that decide whether the message may leave now, and
  * the provider messages it becomes. Bot messages are withheld (marked `superseded`) while a
  * person holds the conversation (invariant I5) or after the customer opted out; a closed
@@ -122,6 +165,7 @@ export async function prepareSend(
       kind: messages.kind,
       text: messages.text,
       payload: messages.payload,
+      sequence: messages.sequence,
       conversationId: messages.conversationId,
       connectionId: messages.channelConnectionId,
     })
@@ -160,7 +204,7 @@ export async function prepareSend(
 
   if (message.author === "bot") {
     const [lock] = await ctx.tx
-      .select({ id: takeoverLocks.id })
+      .select({ id: takeoverLocks.id, exemptThroughSeq: takeoverLocks.exemptThroughSeq })
       .from(takeoverLocks)
       .where(
         and(
@@ -169,13 +213,41 @@ export async function prepareSend(
         ),
       )
       .limit(1);
-    if (lock !== undefined) return withhold("takeover");
+    // A lock the bot itself started by handing over (C13) lets the messages of that turn out
+    // ("a member of the team will pick up here"); everything after them waits for the person.
+    // Once the person has written in the conversation (a manual reply after the bot's message,
+    // which was held, for example, by quiet hours), the bot's message is stale and stays back.
+    let exempt =
+      lock?.exemptThroughSeq !== null &&
+      lock?.exemptThroughSeq !== undefined &&
+      message.sequence <= lock.exemptThroughSeq;
+    if (exempt) {
+      const [person] = await ctx.tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, message.conversationId),
+            eq(messages.direction, "outbound"),
+            eq(messages.author, "human_agent"),
+            gt(messages.sequence, message.sequence),
+          ),
+        )
+        .limit(1);
+      exempt = person === undefined;
+    }
+    if (lock !== undefined && !exempt) return withhold("takeover");
     const [contact] = await ctx.tx
       .select({ optedOutAt: contacts.optedOutAt, isBlocked: contacts.isBlocked })
       .from(contacts)
       .where(eq(contacts.id, conversation.contactId))
       .limit(1);
-    if (contact?.optedOutAt != null) return withhold("opted_out");
+    if (
+      contact?.optedOutAt != null &&
+      !(await mayReachOptedOut(ctx, message, contact.optedOutAt))
+    ) {
+      return withhold("opted_out");
+    }
     if (contact?.isBlocked === true) return withhold("blocked");
   }
 

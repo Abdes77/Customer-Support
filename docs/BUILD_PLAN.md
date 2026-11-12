@@ -265,6 +265,15 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   handlers; subscribers to `lead.*` for alerts; the takeover lock API used by C16; follow-up
   turns triggered through the pipeline (`trigger: "follow_up"`), never by calling a channel
   adapter directly.
+- **Delivered, for C14, C15, C16 and C17:** `@repo/handoff` (alerts, the emergency chain and
+  its acknowledgements, takeover, opt-out, follow-ups, the quiet-hours gate; `/testing` with
+  fakes of Twilio and the WhatsApp Cloud API); the pipeline's `conversation.turn_requested`
+  and `pipeline-requested-turn`, `inboundObservers`, `sendGates`, `enqueueHumanMessage` and
+  `takeover_locks.exempt_through_seq`; `getHandoff()` in `apps/web/src/server/handoff` for
+  C16's inbox (takeover, release, manual reply, typing activity, opt-out, escalations,
+  follow-ups, test alert) and C15's alert contacts step (emergency readiness);
+  the routes `/api/handoff/twilio/{sms|voice|status}` and `/api/handoff/ack/{token}`.
+  ARCHITECTURE §2 "As built (C13)" has the rest.
 
 ### C14 · CRM and webhook connectors
 
@@ -352,4 +361,4 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 | `update_lead_fields`, `mark_not_a_fit` | C5 `packages/leads` | recorded as `deferred` |
 | `request_photo`, `analyze_photos`, `end_conversation` | C4 `packages/ai` with the pipeline | — |
 | `offer_times`, `book_meeting`, `cancel_meeting` | C12 `packages/scheduling` (registered) | `rejected`, so the bot says the team will be in touch |
-| `schedule_follow_up`, `escalate_emergency`, `handoff_to_human` | C13 `packages/handoff` | recorded as `deferred` |
+| `schedule_follow_up`, `escalate_emergency`, `handoff_to_human` | C13 `packages/handoff` (registered) | recorded as `deferred` |

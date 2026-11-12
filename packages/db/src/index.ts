@@ -32,6 +32,7 @@ export type {
 } from "./context";
 export type { Transaction } from "./internal/client";
 export type {
+  AlertRef,
   ApiKeyRef,
   BusinessRef,
   ChannelConnectionRef,

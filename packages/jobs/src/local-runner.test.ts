@@ -10,6 +10,7 @@ const conversationA = "5d7f9b1c-3e5a-4c7e-9a1b-2c4e6f8a0b04" as ConversationId;
 const conversationB = "6e8a0c2d-4f6b-4d8f-8b2c-3d5f7a9b1c05" as ConversationId;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+let sampleId = "";
 
 function runner(definitions: JobDefinition[], debouncePeriodMs?: number) {
   const local = createLocalJobRunner({
@@ -39,6 +40,34 @@ describe("local job runner", () => {
     await local.send([event]);
     await local.idle();
     expect(seen).toEqual([event.data.messageId]);
+  });
+
+  it("does not wait in idle() for a run in a long durable sleep, but does for a short one", async () => {
+    const seen: string[] = [];
+    const local = createLocalJobRunner({ retryDelayMs: () => 5, idleIgnoresSleepsOverMs: 200 });
+    local.register([
+      defineEventJob({
+        id: "test-sleepy",
+        name: "Sleepy",
+        retries: 0,
+        trigger: { event: "message.received" },
+        handler: async ({ event, step }) => {
+          seen.push("before");
+          // Long: a nudge hours away. The run is dormant; idle() resolves.
+          await step.sleep("long", event.data.messageId === sampleId ? 60_000 : 50);
+          seen.push("after");
+        },
+      }),
+    ]);
+    const long = sampleReceivedEvent();
+    sampleId = long.data.messageId;
+    await local.send([long]);
+    await local.idle();
+    expect(seen).toEqual(["before"]);
+    // Short: idle() waits for it.
+    await local.send([sampleReceivedEvent()]);
+    await local.idle();
+    expect(seen).toEqual(["before", "before", "after"]);
   });
 
   it("debounces by key and runs with the latest event", async () => {

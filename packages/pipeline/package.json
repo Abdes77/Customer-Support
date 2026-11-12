@@ -19,6 +19,7 @@
     "@repo/jobs": "workspace:*",
     "@repo/knowledge": "workspace:*",
     "@repo/leads": "workspace:*",
+    "@repo/handoff": "workspace:*",
     "@repo/scheduling": "workspace:*",
     "@repo/settings": "workspace:*",
     "zod": "catalog:"

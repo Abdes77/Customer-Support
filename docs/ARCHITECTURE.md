@@ -127,7 +127,9 @@ pipeline entry point, `ingest(parsed)`, which performs steps 4 to 6.
    atomically before generating and releases it after its outbound messages are stored. A run
    that cannot get the lease sleeps and retries; a lease has an expiry so a crashed run cannot
    block the conversation.
-10. **Guards.** Stop without replying when a human has taken over, the contact opted out, the
+10. **Guards.** Stop without replying when a human has taken over, the contact opted out (C13:
+    a follow-up, a check-in or a lone opt-out word; what an opted-out customer writes still
+    gets a turn that may answer only an emergency, by `follow_up.opt_out_scope`), the
     conversation is closed, or a rate limit or spend cap is hit (C17). Messages are still
     stored and visible in the inbox.
 11. **Prepare.** Download attachments into private storage, resolve settings (one snapshot per
@@ -674,6 +676,76 @@ APIs and Calendly fixtures), the routes `/api/oauth/calendar/{google|microsoft|c
   (`{ businessId, token }`), and the inbox route `/inbox/<conversation id>` that calendar
   events link to.
 
+### As built (C13)
+
+Handoff: `packages/handoff` (alerts, the emergency chain, takeover, opt-out, follow-ups; `/testing`
+for a fake of Twilio's REST API, a fake of the WhatsApp Cloud API and recording transports),
+the routes `/api/handoff/twilio/{sms|voice|status}` and `/api/handoff/ack/{token}` in
+`apps/web`. Built from Twilio's docs read on 2026-11-12.
+
+- **In the pipeline** (`handoffDomainParts`, registered in `createDomainComposition()`):
+  handlers for `escalate_emergency` (records the escalation in the generate step, emits
+  `handoff.escalation_started`; `deferred` when it cannot write, so `lead.emergency` starts
+  it), `handoff_to_human` and `schedule_follow_up`; a turn observer (a handoff starts a `rule`
+  takeover at commit with `exempt_through_seq` = the turn's last reply; a replied turn plans
+  the next nudge; a silent turn for an opted-out customer writes the in-app
+  `opted_out_customer_wrote` warning and emits `handoff.attention_needed`); an inbound
+  observer (opt-out and opt-in words, the customer's message cancels the contact's follow-ups
+  and keeps a takeover awake); the `opt_out` guard (skips a batch of nothing but opt-out
+  words; its `restrict` limits an opted-out customer's turn to an emergency answer by
+  `follow_up.opt_out_scope`); the opt-out send gate, then the quiet-hours gate (DECISIONS
+  212, 232). An opt-out never silences an emergency.
+- **New pipeline extension points** (C13, additive): `conversation.turn_requested` and the job
+  `pipeline-requested-turn` (follow-ups and check-ins are turns of the pipeline);
+  `PipelineDeps.inboundObservers` and `sendGates` (defaults from the domain composition);
+  `takeover_locks.exempt_through_seq` and the purpose `opt_out_confirmation` in `prepare`;
+  `enqueueHumanMessage`; `TurnGuard.restrict` (asked in the generate step) and
+  `EngineTurnInput.restriction` (`emergency_only`: the engine sends nothing unless it
+  escalated an emergency). The claim skips only follow-ups and check-ins of an opted-out
+  contact; `prepare` lets a reply reach one only when its turn escalated an emergency or
+  started after the opt-out (the opt-out gate applies the scope).
+- **Alerts** (`src/alerts`): recipients from `alerts.recipients` + `alerts.agency_recipients`,
+  one row per recipient and channel in `alerts` (dedupe key; the three events of one lead
+  decision share one), text written by code (`renderLeadAlert`: customer values plain and
+  inert, the conversation link only), delivered under the row's lock through
+  `AlertTransports` (Twilio SMS and calls, SMTP, the agency's WhatsApp template). A refusal is
+  recorded and the next recipient goes on.
+- **Emergency chain** (`src/emergency`): `escalations` row per chain (one active per
+  conversation; chain and policy snapshotted; step deadlines stored), `handoff-emergency-chain`
+  runs `planSteps` (alert → wait → call → short wait → next person; rounds; then the agency's
+  fallback contacts; then `exhausted` with a critical in-app alert). Acknowledgement: the
+  link's page (GET shows, POST acknowledges), a text reply with the alert's code from the
+  alerted number, keypress 1 on the call (Twilio-signed callback with the call's secret), or a
+  signed-in person; one conditional update records who, how and when (DECISIONS 216, 217).
+- **Takeover** (`src/takeover`): start, touch, release (manual or idle, only if the lock and
+  its activity did not change); `handoff-takeover-release` sleeps until last activity +
+  `handoff.auto_release_minutes`; `handoff.on_release` = check-in requests a
+  `takeover_released` turn.
+- **Follow-ups** (`src/follow-ups`): `scheduled_jobs` rows of kind `follow_up`, one active per
+  conversation, versioned by row; `handoff-follow-up` sleeps until due, re-checks every
+  blocker by sequence numbers, moves the time out of quiet hours (customer's zone,
+  `hours.customer_time_zone` with an area-code table) and into business hours when needed,
+  drops what the channel's window would refuse, then emits `conversation.turn_requested`.
+- **Jobs:** `handoff-alert-{qualified,meeting-requested,handoff,disqualified,send-failed,attention}`,
+  `handoff-emergency-start` (`lead.emergency`), `handoff-emergency-chain`,
+  `handoff-takeover-release`, `handoff-follow-up`, `handoff-sweep` (every five minutes).
+- **For C14:** nothing; `lead.*` are unchanged. **For C15:** alert contacts and the chain are
+  settings (`alerts.*`, `emergency.escalation_chain`, `emergency.fallback_contacts`); the
+  contact page can call `sendTestAlert`, and the onboarding wizard's alert contacts step must
+  show `readiness(tenant)` (both chains start empty; `ready: false` means an emergency reaches
+  nobody by phone). **For C16:** `getHandoff()` in
+  `apps/web/src/server/handoff`: `takeoverState`, `takeOver`, `release`, `sendManualReply`
+  (starts a takeover), `noteActivity` (call it while a person types a reply, so the idle
+  release waits), `setOptOut`, `listEscalations`, `acknowledgeEscalation`,
+  `listFollowUps`, `cancelFollowUps`, `sendTestAlert`; alerts are rows of `alerts`
+  (`channel` "in_app" for the panel's own). Alerts link to `/inbox/<conversation id>`.
+  **For C17:** the ack and Twilio routes are public (token and signature); the sweeper's
+  resume and the in-app alerts of an exhausted, failed or contact-less chain
+  (`emergency_unacknowledged`, `emergency_chain_failed`, `emergency_unassigned`,
+  `emergency_not_ready`) and the error logs `emergency.chain_exhausted`,
+  `emergency.no_contacts`, `emergency.chain_failed` are the alerting hooks; the readiness
+  check can report `emergencyReadiness()` per business.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -820,9 +892,13 @@ Rules for every function:
 | `pipeline-sweeper` | cron, every minute | re-emits un-enqueued messages, flags stuck turns | C3, C17 |
 | `leads-outbox` | cron, every minute | sends lead events a failed turn left in the outbox | C5 |
 | `leads-*` subscribers | `lead.*` | idempotent per `eventId` | C12–C14, C16 |
-| `handoff-followup` | scheduled by action or cadence | `sleepUntil`, cancelled by `message.received`, respects quiet hours and windows | C13 |
-| `handoff-emergency-chain` | `lead.emergency` | alert, wait for acknowledgement, call, next contact | C13 |
-| `handoff-takeover-release` | `conversation.takeover_started` | sleeps for the idle timeout, cancelled by manual release | C13 |
+| `pipeline-requested-turn` | `conversation.turn_requested` | limit 1 per conversation, turn lease; a follow-up or check-in turn (C13) | C3, C13 |
+| `handoff-follow-up` | `handoff.follow_up_planned` (a plan row) | `sleepUntil`; a reply, opt-out, booking or newer plan cancels the row; quiet hours, business hours and windows | C13 |
+| `handoff-emergency-start` | `lead.emergency` | starts the chain if the action could not; emergency alerts to recipients | C13 |
+| `handoff-emergency-chain` | `handoff.escalation_started` | limit 1 per escalation; alert, wait for acknowledgement, call, next contact | C13 |
+| `handoff-takeover-release` | `conversation.takeover_started` | sleeps until last activity + idle time; a release or new activity makes it wait or stop | C13 |
+| `handoff-alert-*` | `lead.*`, `message.send_failed`, `handoff.attention_needed` | one alert per recipient and channel (dedupe key); hold overnight per settings | C13 |
+| `handoff-sweep` | cron, every five minutes | resumes overdue chains, follow-ups and idle releases | C13 |
 | `whatsapp-template-sync` | cron, every six hours | one step per connected number; webhooks keep statuses current in between | C9 |
 | `email-sync` | `email.sync_requested` | debounce and limit 1 per inbox; reads from the stored cursor, batches of 25 | C11 |
 | `email-poll` | cron, every minute | IMAP inboxes, and Gmail/Graph ones without push or not read for 15 minutes | C11 |
@@ -850,7 +926,8 @@ Event names reserved so far are the keys of `EVENT_CATALOG`: `message.received`,
 `message.send_requested`, `message.send_failed`, `conversation.takeover_started`,
 `conversation.takeover_released`, `lead.qualified`, `lead.meeting_requested`, `lead.handoff`,
 `lead.disqualified`, `lead.emergency`, `playbook.generation_requested`,
-`knowledge.import_requested`, `email.sync_requested` (C11), `scheduling.booking_changed` (C12). A chunk that needs a new cross-package event adds its
+`knowledge.import_requested`, `email.sync_requested` (C11), `scheduling.booking_changed` (C12),
+`conversation.turn_requested`, `handoff.escalation_started` and `handoff.follow_up_planned` (C13). A chunk that needs a new cross-package event adds its
 schema under `packages/core/src/events` and registers it in the catalogue.
 
 Vercel limits one function invocation, so one Inngest step must finish within the route's

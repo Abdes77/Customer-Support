@@ -770,6 +770,65 @@ describe("outside office hours", () => {
   });
 });
 
+describe("a customer who opted out (C13)", () => {
+  const restriction = { kind: "emergency_only", reason: "opted_out" } as const;
+
+  it("sends nothing but tells the model why, unless it is an emergency", async () => {
+    const { result, requests } = await run(
+      [scriptedResponse([text("Happy to help! What size is the roof?")])],
+      { restriction, pending: ["How much is a new roof?"] },
+    );
+    expect(lastText(requests[0]?.messages.at(-1))).toContain(
+      "Opt-out rule for this turn: the customer opted out of automated messages from the business. Unless the newest messages describe an emergency, write only <no_reply/>",
+    );
+    expect(requests[0]?.hints).toMatchObject({ reply: { emergencyOnly: true } });
+    expect(result).toMatchObject({
+      outcome: "no_reply",
+      replies: [],
+      diagnostics: { notes: ["emergency_only:opted_out"] },
+    });
+  });
+
+  it("answers an emergency in full: escalation and safety instructions first", async () => {
+    const { result, executed } = await run(
+      [
+        scriptedResponse([
+          toolUse("escalate_emergency", {
+            emergency_class: "gas_leak",
+            summary: "Gas smell in the kitchen.",
+          }),
+        ]),
+        scriptedResponse([text("I've alerted the team. What's the address?")]),
+      ],
+      { restriction, pending: ["I smell gas in the kitchen"] },
+    );
+    expect(executed.map((entry) => entry.action.type)).toEqual(["escalate_emergency"]);
+    expect(result.outcome).toBe("replied");
+    expect(result.replies[0]?.text.startsWith(GAS_INSTRUCTIONS)).toBe(true);
+  });
+
+  it("does not turn a refusal into a takeover, and ignores the after-hours rules", async () => {
+    const refused = await run([scriptedRefusal()], { restriction });
+    expect(refused.result.outcome).toBe("no_reply");
+    const night = await run([scriptedResponse([text("Hello!")])], {
+      restriction,
+      now: "2026-11-11T08:00:00.000Z",
+      settings: { "hours.after_hours_mode": "auto_reply" },
+    });
+    expect(night.result).toMatchObject({ outcome: "no_reply", replies: [] });
+    expect(night.executed).toEqual([]);
+    expect(lastText(night.requests[0]?.messages.at(-1))).not.toContain("After-hours rule");
+  });
+
+  it("leaves a turn without a restriction as it was", async () => {
+    const { result, requests } = await run([scriptedResponse([text("Sure, what size?")])], {
+      restriction: null,
+    });
+    expect(result.outcome).toBe("replied");
+    expect(lastText(requests[0]?.messages.at(-1))).not.toContain("Opt-out rule");
+  });
+});
+
 describe("turns without a new message", () => {
   const history = [
     testTurn("customer", "My roof leaks over the kitchen.", "2026-11-10T15:00:00.000Z"),

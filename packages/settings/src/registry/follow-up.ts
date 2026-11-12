@@ -88,9 +88,19 @@ export const followUpSettings = defineCategory("follow_up", {
     field: f.boolean(),
     default: false,
   }),
+  "follow_up.opt_out_scope": setting({
+    label: "What an opt-out stops",
+    help: 'Which messages stop for a customer who sent an opt-out word, until they send an opt-back-in word. Nudges, reminders and check-ins stop either way, and a customer who reports an emergency always gets the safety instructions and the emergency alerts. With "every automated message" the bot does not answer anything else they write, and the team is alerted instead.',
+    field: f.select([
+      ["all_automated", "Every automated message, including the bot's answers"],
+      ["proactive_only", "Only messages the bot starts (the bot still answers them)"],
+    ]),
+    default: "all_automated",
+    scopes: GLOBAL_AND_BUSINESS,
+  }),
   "follow_up.opt_out_keywords": setting({
     label: "Opt-out words",
-    help: "A message that consists of one of these words stops every unprompted message to that customer, on every channel of the business.",
+    help: 'A message that consists of one of these words opts the customer out, on every channel of the business. "What an opt-out stops" decides which messages stop.',
     field: f.stringList({ itemLabel: "word", minItems: 1, maxItems: 40, maxLength: 40 }),
     default: ["stop", "unsubscribe", "cancel", "quit", "end", "opt out", "remove me"],
     scopes: GLOBAL_AND_BUSINESS,

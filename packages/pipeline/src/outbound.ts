@@ -1,4 +1,4 @@
-import type { ConversationId, TraceId } from "@repo/core";
+import type { ConversationId, TraceId, UserId } from "@repo/core";
 import { type BusinessContext, conversations, eq, messages, sql } from "@repo/db";
 import { type AnyJobEvent, jobEvent } from "@repo/jobs";
 
@@ -20,8 +20,63 @@ export async function enqueueBotMessage(
     readonly conversationId: string;
     readonly text: string;
     readonly traceId: string;
-    /** Why the message exists, kept in its payload ("reminder"). */
+    /**
+     * Why the message exists, kept in its payload ("reminder"). `opt_out_confirmation` (C13)
+     * is the one message that still goes to a customer who just opted out.
+     */
     readonly purpose: string;
+  },
+): Promise<{ readonly messageId: string; readonly events: readonly AnyJobEvent[] } | null> {
+  return enqueueOutbound(ctx, {
+    ...input,
+    author: "bot",
+    authorUserId: null,
+    payload: { purpose: input.purpose },
+  });
+}
+
+/**
+ * Stores a reply a person wrote in the admin panel (C13's takeover service, for C16's inbox)
+ * as the conversation's next outbound message with author `human_agent`, and returns the
+ * `message.send_requested` event. The send function sends it through the conversation's
+ * channel like any reply (a person's messages are never withheld for a takeover or gated by
+ * quiet hours; WhatsApp's staff template and Meta's human-agent tag apply outside the
+ * window). The customer messages so far count as handled: the person answered them.
+ */
+export async function enqueueHumanMessage(
+  ctx: BusinessContext,
+  input: {
+    readonly conversationId: string;
+    readonly text: string;
+    readonly traceId: string;
+    readonly userId: string;
+  },
+): Promise<{ readonly messageId: string; readonly events: readonly AnyJobEvent[] } | null> {
+  const queued = await enqueueOutbound(ctx, {
+    ...input,
+    author: "human_agent",
+    authorUserId: input.userId as UserId,
+    payload: { source: "admin_panel" },
+  });
+  if (queued === null) return null;
+  await ctx.tx
+    .update(conversations)
+    .set({
+      handledThroughSeq: sql`greatest(${conversations.handledThroughSeq}, (select coalesce(max(m.sequence), 0) from messages m where m.conversation_id = ${input.conversationId}::uuid and m.direction = 'inbound'))`,
+    })
+    .where(eq(conversations.id, input.conversationId as ConversationId));
+  return queued;
+}
+
+async function enqueueOutbound(
+  ctx: BusinessContext,
+  input: {
+    readonly conversationId: string;
+    readonly text: string;
+    readonly traceId: string;
+    readonly author: "bot" | "human_agent";
+    readonly authorUserId: UserId | null;
+    readonly payload: Record<string, unknown>;
   },
 ): Promise<{ readonly messageId: string; readonly events: readonly AnyJobEvent[] } | null> {
   const text = input.text.trim();
@@ -50,10 +105,11 @@ export async function enqueueBotMessage(
       conversationId: conversation.id,
       channelConnectionId: conversation.connectionId,
       direction: "outbound",
-      author: "bot",
+      author: input.author,
+      authorUserId: input.authorUserId,
       kind: "text",
       text,
-      payload: { purpose: input.purpose },
+      payload: input.payload,
       sequence: counter!.sequence,
       status: "queued",
       traceId: input.traceId as TraceId,

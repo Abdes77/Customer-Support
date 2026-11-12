@@ -145,6 +145,13 @@ export type AlertStatus = (typeof ALERT_STATUSES)[number];
 export const ESCALATION_STATUSES = ["active", "acknowledged", "exhausted", "cancelled"] as const;
 export type EscalationStatus = (typeof ESCALATION_STATUSES)[number];
 
+/**
+ * How an emergency was acknowledged (C13): the link in an alert, a text-message reply with the
+ * alert's code, a keypress on the escalation call, or a signed-in person in the admin panel.
+ */
+export const ESCALATION_ACK_CHANNELS = ["link", "sms", "voice", "admin_panel"] as const;
+export type EscalationAckChannel = (typeof ESCALATION_ACK_CHANNELS)[number];
+
 export const DEAD_LETTER_STATUSES = ["open", "retried", "resolved", "ignored"] as const;
 export type DeadLetterStatus = (typeof DEAD_LETTER_STATUSES)[number];
 

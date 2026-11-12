@@ -12,9 +12,11 @@ import type {
 import { hashApiKey, looksLikeApiKey } from "./api-keys";
 import type { Connection } from "./internal/client";
 import {
+  alerts,
   apiKeys,
   businesses,
   channelConnections,
+  escalations,
   integrationConnections,
   users,
 } from "./schema/tables";
@@ -53,6 +55,11 @@ export interface IntegrationConnectionRef extends TenantRef {
   readonly provider: string;
   readonly status: ConnectionStatus;
   readonly businessStatus: BusinessStatus;
+}
+
+/** An alert found by an acknowledgement link or a provider callback (C13). */
+export interface AlertRef extends TenantRef {
+  readonly alertId: string;
 }
 
 export interface ApiKeyRef {
@@ -105,6 +112,21 @@ export interface Directory {
     provider: string,
     webhookKey: string,
   ): Promise<IntegrationConnectionRef | null>;
+
+  /**
+   * The tenant of an alert (C13), for the requests that name one without a session: the
+   * acknowledgement link of an emergency alert, Twilio's callbacks for a text message or a
+   * call. The caller still checks the request (the link's secret against the stored hash,
+   * Twilio's signature) inside the tenant before it trusts or changes anything.
+   */
+  findAlert(alertId: string): Promise<AlertRef | null>;
+
+  /**
+   * Emergency alerts sent to this number whose chain is still active (C13): a reply to the
+   * text message (with the alert's code) acknowledges the emergency. Matched by the exact
+   * recipient number; the caller checks the code inside each tenant.
+   */
+  findActiveEmergencyAlertsByRecipient(recipient: string): Promise<AlertRef[]>;
 
   /** The agency of a business, for callers that hold only a business id. */
   findBusiness(businessId: BusinessId): Promise<BusinessRef | null>;
@@ -218,6 +240,40 @@ export function createDirectory(connection: Connection): Directory {
         )
         .limit(1);
       return rows[0] ?? null;
+    },
+
+    async findAlert(alertId) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(alertId)) {
+        return null;
+      }
+      const rows = await db
+        .select({ alertId: alerts.id, agencyId: alerts.agencyId, businessId: alerts.businessId })
+        .from(alerts)
+        .where(eq(alerts.id, alertId))
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    async findActiveEmergencyAlertsByRecipient(recipient) {
+      if (recipient.length === 0) return [];
+      return db
+        .select({ alertId: alerts.id, agencyId: alerts.agencyId, businessId: alerts.businessId })
+        .from(alerts)
+        .innerJoin(
+          escalations,
+          and(
+            eq(escalations.id, alerts.escalationId),
+            eq(escalations.businessId, alerts.businessId),
+          ),
+        )
+        .where(
+          and(
+            eq(alerts.recipient, recipient),
+            sql`${alerts.ackCodeHash} is not null`,
+            eq(escalations.status, "active"),
+          ),
+        )
+        .limit(20);
     },
 
     async findBusiness(businessId) {

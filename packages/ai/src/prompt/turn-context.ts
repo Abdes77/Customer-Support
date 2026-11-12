@@ -61,6 +61,11 @@ function afterHoursLine(situation: TurnSituation): string | null {
   }
 }
 
+function restrictionLine(situation: TurnSituation): string | null {
+  if (situation.emergencyOnly === null) return null;
+  return "Opt-out rule for this turn: the customer opted out of automated messages from the business. Unless the newest messages describe an emergency, write only <no_reply/>; the team sees the message and follows up. If they describe an emergency, follow the emergency rules in full. Do not offer times, book or ask questions otherwise. You may still save lead fields the messages contain.";
+}
+
 /** Customer-controlled values are cut to these lengths before they enter the turn context. */
 const MAX_NAME_CHARACTERS = 80;
 const MAX_LEAD_KEY_CHARACTERS = 60;
@@ -198,6 +203,7 @@ export function renderTurnContext({ input, situation, facts }: TurnContextInput)
       : "Messaging window: closed. A reply may be delivered late or as a template; keep it self-contained.",
     officeLine(situation),
     afterHoursLine(situation),
+    restrictionLine(situation),
     customerLine(input),
     ...progressLines(situation),
     ...leadLines(input, situation),

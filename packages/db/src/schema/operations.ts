@@ -3,11 +3,13 @@ import {
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
   pgTable,
   text,
+  unique,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -42,6 +44,7 @@ import {
   ALERT_STATUSES,
   AUDIT_ACTOR_TYPES,
   DEAD_LETTER_STATUSES,
+  ESCALATION_ACK_CHANNELS,
   ESCALATION_STATUSES,
   SCHEDULED_JOB_STATUSES,
 } from "./vocab";
@@ -92,6 +95,66 @@ export const scheduledJobs = pgTable(
   ],
 );
 
+/**
+ * The state of one emergency escalation chain (C13): who was tried and who acknowledged.
+ * At most one chain is active per conversation. `chain` is the snapshot of the contacts (the
+ * business's escalation chain, then the agency's fallback contacts) and `policy` the timing
+ * from the settings when the chain started, so a settings change never reshuffles a running
+ * chain. `next_action_at` is when the chain job means to act next (the service's clock): the
+ * sweeper resumes a chain that went quiet past it. An acknowledgement is recorded once, with
+ * who (`acknowledged_by`, `acknowledged_user_id`), how (`acknowledged_via`) and when.
+ */
+export const escalations = pgTable(
+  "escalations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ...tenantColumns(),
+    conversationId: uuid("conversation_id").$type<ConversationId>(),
+    leadId: uuid("lead_id").$type<LeadId>(),
+    /** Emergency class key from the emergency settings, for example "gas_leak". */
+    emergencyClass: text("emergency_class").notNull(),
+    summary: text("summary"),
+    status: text("status", { enum: ESCALATION_STATUSES }).notNull().default("active"),
+    currentStep: integer("current_step").notNull().default(0),
+    /** Snapshot of the escalation contacts from settings when the chain started. */
+    chain: jsonb("chain").$type<unknown[]>().notNull().default([]),
+    /** Timing of the chain from settings when it started (acknowledge minutes, calls, rounds). */
+    policy: jsonb("policy").$type<Record<string, unknown>>().notNull().default({}),
+    traceId: uuid("trace_id").$type<TraceId>(),
+    nextActionAt: timestamptz("next_action_at"),
+    startedAt: timestamptz("started_at").notNull().defaultNow(),
+    acknowledgedAt: timestamptz("acknowledged_at"),
+    acknowledgedBy: text("acknowledged_by"),
+    acknowledgedVia: text("acknowledged_via", { enum: ESCALATION_ACK_CHANNELS }),
+    acknowledgedUserId: uuid("acknowledged_user_id")
+      .$type<UserId>()
+      .references(() => users.id, { onDelete: "set null" }),
+    endedAt: timestamptz("ended_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    tenantFk("escalations", t),
+    conversationFk("escalations", t),
+    leadFk("escalations", t),
+    unique("escalations_id_business_key").on(t.id, t.businessId),
+    uniqueIndex("escalations_active_conversation_key")
+      .on(t.conversationId)
+      .where(sql`${t.status} = 'active'`),
+    index("escalations_business_status_idx").on(t.businessId, t.status),
+    index("escalations_conversation_idx").on(t.conversationId),
+    index("escalations_next_action_idx")
+      .on(t.nextActionAt)
+      .where(sql`${t.status} = 'active'`),
+    check("escalations_status_check", oneOf(t.status, ESCALATION_STATUSES)),
+    check(
+      "escalations_acknowledged_via_check",
+      sql`${t.acknowledgedVia} is null or ${oneOf(t.acknowledgedVia, ESCALATION_ACK_CHANNELS)}`,
+    ),
+    ...businessPolicies("escalations"),
+  ],
+);
+
 /** One alert sent (or to be sent) to a person at the business or the agency (C13, C17). */
 export const alerts = pgTable(
   "alerts",
@@ -118,6 +181,15 @@ export const alerts = pgTable(
     acknowledgedAt: timestamptz("acknowledged_at"),
     /** Who acknowledged: a user id, a phone number or a name. */
     acknowledgedBy: text("acknowledged_by"),
+    /** The emergency escalation this alert belongs to (C13), if any. */
+    escalationId: uuid("escalation_id"),
+    /**
+     * SHA-256 of the secret in this alert's acknowledgement link (C13). The link carries the
+     * alert id and the secret; the secret itself is never stored.
+     */
+    ackTokenHash: text("ack_token_hash"),
+    /** SHA-256 of the alert id and the code a text-message alert asks to reply with (C13). */
+    ackCodeHash: text("ack_code_hash"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -125,45 +197,22 @@ export const alerts = pgTable(
     tenantFk("alerts", t),
     conversationFk("alerts", t),
     leadFk("alerts", t),
+    foreignKey({
+      name: "alerts_escalation_fk",
+      columns: [t.escalationId, t.businessId],
+      foreignColumns: [escalations.id, escalations.businessId],
+    }).onDelete("cascade"),
     uniqueIndex("alerts_dedupe_key").on(t.businessId, t.dedupeKey),
+    index("alerts_escalation_idx").on(t.escalationId),
+    // Replies to an emergency text message are matched by the sender's number (C13).
+    index("alerts_ack_recipient_idx")
+      .on(t.recipient)
+      .where(sql`${t.ackCodeHash} is not null`),
     index("alerts_business_created_idx").on(t.businessId, t.createdAt),
     index("alerts_status_idx").on(t.status, t.createdAt),
     check("alerts_severity_check", oneOf(t.severity, ALERT_SEVERITIES)),
     check("alerts_status_check", oneOf(t.status, ALERT_STATUSES)),
     ...businessPolicies("alerts"),
-  ],
-);
-
-/** The state of one emergency escalation chain (C13): who was tried and who acknowledged. */
-export const escalations = pgTable(
-  "escalations",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    ...tenantColumns(),
-    conversationId: uuid("conversation_id").$type<ConversationId>(),
-    leadId: uuid("lead_id").$type<LeadId>(),
-    /** Emergency class key from the emergency settings, for example "gas_leak". */
-    emergencyClass: text("emergency_class").notNull(),
-    summary: text("summary"),
-    status: text("status", { enum: ESCALATION_STATUSES }).notNull().default("active"),
-    currentStep: integer("current_step").notNull().default(0),
-    /** Snapshot of the escalation contacts from settings when the chain started. */
-    chain: jsonb("chain").$type<unknown[]>().notNull().default([]),
-    startedAt: timestamptz("started_at").notNull().defaultNow(),
-    acknowledgedAt: timestamptz("acknowledged_at"),
-    acknowledgedBy: text("acknowledged_by"),
-    endedAt: timestamptz("ended_at"),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (t) => [
-    tenantFk("escalations", t),
-    conversationFk("escalations", t),
-    leadFk("escalations", t),
-    index("escalations_business_status_idx").on(t.businessId, t.status),
-    index("escalations_conversation_idx").on(t.conversationId),
-    check("escalations_status_check", oneOf(t.status, ESCALATION_STATUSES)),
-    ...businessPolicies("escalations"),
   ],
 );
 

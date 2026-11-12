@@ -31,6 +31,13 @@ import { replyableInbound } from "./claim";
 import type { GenerateResult } from "./generate";
 
 type ReceivedData = EventPayload<"message.received">;
+/**
+ * What the commit needs to know about a turn's origin. `messageId` is the customer message
+ * that started it, null for a requested turn (C13: follow-ups, check-ins).
+ */
+type CommitData = Pick<ReceivedData, "agencyId" | "businessId" | "conversationId" | "traceId"> & {
+  readonly messageId: ReceivedData["messageId"] | null;
+};
 
 export interface CommitResult {
   readonly status: TurnStatus;
@@ -63,7 +70,8 @@ function outboundValues(draft: ReplyDraft, subjectFallback: string | null) {
 
 function sendEvents(
   ctx: BusinessContext,
-  data: ReceivedData,
+  data: CommitData,
+  claim: ClaimedTurn,
   traceId: string,
   messageIds: readonly string[],
 ): AnyJobEvent[] {
@@ -74,7 +82,7 @@ function sendEvents(
       businessId: ctx.tenant.businessId,
       conversationId: data.conversationId,
       messageId: messageId as MessageId,
-      channel: data.channel,
+      channel: claim.channel,
     }),
   );
 }
@@ -88,7 +96,7 @@ function sendEvents(
 export async function commitTurn(
   ctx: BusinessContext,
   p: PipelineContext,
-  data: ReceivedData,
+  data: CommitData,
   claim: ClaimedTurn,
   generated: GenerateResult,
 ): Promise<CommitResult> {
@@ -141,6 +149,7 @@ export async function commitTurn(
         ...sendEvents(
           ctx,
           data,
+          claim,
           turn.traceId,
           queued.map((row) => row.id),
         ),
@@ -174,7 +183,8 @@ export async function commitTurn(
   if (drafts.length > 0) {
     // Stale check: a newer customer message arrived while the engine was writing. Keep the
     // drafts but do not send them; the newer run answers everything. At most one supersede
-    // in a row, so a customer who keeps typing still gets an answer.
+    // in a row, so a customer who keeps typing still gets an answer. A follow-up or check-in
+    // (C13) always gives way: the customer's message makes it pointless.
     const [newer] = await ctx.tx
       .select({ id: messages.id })
       .from(messages)
@@ -196,7 +206,10 @@ export async function commitTurn(
         ),
       )
       .limit(1);
-    if (newer !== undefined && previous?.status !== "superseded") {
+    if (
+      newer !== undefined &&
+      (previous?.status !== "superseded" || turn.trigger !== "inbound_message")
+    ) {
       status = "superseded";
       advance = false;
       messageStatus = "superseded";
@@ -239,7 +252,9 @@ export async function commitTurn(
       .returning({ id: messages.id });
     messageIds.push(row!.id);
   }
-  if (status === "replied") events.push(...sendEvents(ctx, data, turn.traceId, messageIds));
+  if (status === "replied") {
+    events.push(...sendEvents(ctx, data, claim, turn.traceId, messageIds));
+  }
 
   if (status === "refused") {
     const event = await startRuleTakeover(
@@ -253,8 +268,8 @@ export async function commitTurn(
   }
   if (status === "failed") {
     await recordDeadLetter(ctx, {
-      source: "pipeline-reply",
-      eventName: "message.received",
+      source: data.messageId === null ? "pipeline-requested-turn" : "pipeline-reply",
+      eventName: data.messageId === null ? "conversation.turn_requested" : "message.received",
       eventId: null,
       traceId: turn.traceId,
       conversationId: data.conversationId,
@@ -391,7 +406,7 @@ export async function releaseLease(
  */
 export async function startRuleTakeover(
   ctx: BusinessContext,
-  data: Pick<ReceivedData, "conversationId">,
+  data: Pick<CommitData, "conversationId">,
   traceId: string,
   reason: string,
   now: Date,

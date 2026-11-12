@@ -170,6 +170,7 @@ function replyText(hints: ReplyHints, routing: string | null, saved: ReadonlySet
   if (hints.emergency !== null) {
     return `${hints.emergency.instructions}\n\nI've let the team at ${business} know. What's the best phone number to reach you, and what's the address?`;
   }
+  if (hints.emergencyOnly) return "<no_reply/>";
   if (hints.afterHours === "send_message") return "<after_hours_message/>";
   if (hints.afterHours === "stay_silent") return "<no_reply/>";
   if (routing === "disqualify") {

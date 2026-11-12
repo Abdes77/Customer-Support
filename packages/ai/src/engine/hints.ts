@@ -24,6 +24,8 @@ export interface ReplyHints {
   /** The routing outcome in force at the start of the turn. */
   readonly routing: string | null;
   readonly afterHours: AfterHoursDirective;
+  /** Nothing may be sent unless this is an emergency (an opted-out customer). */
+  readonly emergencyOnly: boolean;
   readonly questionsPerMessage: number;
   readonly contactLaterTimeframe: string;
   readonly unanalyzedPhotos: readonly string[];
@@ -57,6 +59,7 @@ export function replyHints(
         hint === undefined ? null : { key: hint.key, instructions: hint.safety_instructions },
       routing: input.lead.routing?.outcome ?? null,
       afterHours: situation.afterHours,
+      emergencyOnly: situation.emergencyOnly !== null,
       questionsPerMessage: values["qualification.questions_per_message"],
       contactLaterTimeframe: values["routing.contact_later_timeframe"],
       unanalyzedPhotos: situation.unanalyzedPhotos,

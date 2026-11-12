@@ -345,6 +345,12 @@ export const takeoverLocks = pgTable(
       .$type<UserId>()
       .references(() => users.id, { onDelete: "set null" }),
     releaseReason: text("release_reason", { enum: TAKEOVER_RELEASE_REASONS }),
+    /**
+     * Bot messages of the conversation up to this sequence still go out under the lock (C13):
+     * the bot's own handoff message ("a member of the team will pick up here"), stored in the
+     * turn that handed over. Null: every bot message is withheld while the lock is active.
+     */
+    exemptThroughSeq: integer("exempt_through_seq"),
     createdAt: createdAt(),
   },
   (t) => [

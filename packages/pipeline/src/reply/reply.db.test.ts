@@ -280,7 +280,7 @@ describe("guards", () => {
     await h.deliver(tenant, [message("stop texting me")]);
     await h.idle();
     const turns = await turnsOf(conversation!.id);
-    expect(turns.at(-1)?.skipReason).toBe("opted_out");
+    expect(turns.at(-1)?.skipReason).toBe("opt_out:opted_out");
     expect(h.transport.textsFor(conversation!.id)).toEqual(["You said: first"]);
 
     const paused = await h.newTenant();

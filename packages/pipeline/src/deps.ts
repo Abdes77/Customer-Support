@@ -12,9 +12,11 @@ import {
   type KnowledgeRetriever,
   type LeadSnapshot,
   type Logger,
+  type MessageId,
   type ModelCallSink,
   type OutboundMessage,
   type PlaybookSnapshot,
+  type TurnRestriction,
   type TurnTrigger,
   type WindowFallbackResolver,
 } from "@repo/core";
@@ -48,6 +50,12 @@ export interface TurnFacts {
 export interface TurnGuard {
   readonly name: string;
   check(ctx: BusinessContext, facts: TurnFacts): Promise<string | null>;
+  /**
+   * Optional: instead of stopping the turn, limits what it may send (C13: a customer who
+   * opted out is answered only about an emergency). Asked in the generate step, right before
+   * the engine runs; the first restriction any guard returns goes into the engine's input.
+   */
+  restrict?(ctx: BusinessContext, facts: TurnFacts): Promise<TurnRestriction | null>;
 }
 
 /** A turn as it was committed, for `TurnObserver`s. */
@@ -73,6 +81,63 @@ export interface TurnObserver {
   readonly name: string;
   committed(ctx: BusinessContext, turn: CommittedTurn): Promise<readonly AnyJobEvent[]>;
   emitted?(tenant: BusinessTenant, events: readonly AnyJobEvent[], now: Date): Promise<void>;
+}
+
+/** A customer message as it was just stored, for `InboundObserver`s. */
+export interface StoredInboundFacts {
+  readonly messageId: MessageId;
+  readonly conversationId: ConversationId;
+  readonly contactId: ContactId;
+  readonly channel: ChannelId;
+  /** `NormalizedInboundMessage.kind` ("text", "image", "interactive_reply", "reaction"...). */
+  readonly kind: string;
+  /** The text the customer wrote; for a button or list reply, the option's title. */
+  readonly text: string | null;
+  readonly traceId: string;
+  readonly now: Date;
+}
+
+/**
+ * Something that happens when a new customer message is stored (C13: an opt-out or opt-in
+ * keyword is recorded, planned follow-ups stop because the customer replied, a takeover's
+ * idle time starts again). It runs inside the transaction that stores the message, under a
+ * savepoint, before `message.received` is emitted, so the reply turn always sees its effect;
+ * if it throws, its writes are undone, the error is logged and the message is still stored.
+ * The events it returns are emitted with `message.received`. It never runs for a duplicate
+ * delivery.
+ */
+export interface InboundObserver {
+  readonly name: string;
+  stored(ctx: BusinessContext, message: StoredInboundFacts): Promise<readonly AnyJobEvent[]>;
+}
+
+/** What a `SendGate` decides about an outbound message about to be sent. */
+export type SendGateVerdict =
+  | { readonly kind: "send" }
+  /** Wait until then (the send job sleeps; later messages of the conversation may pass it). */
+  | { readonly kind: "hold"; readonly until: string; readonly reason: string }
+  /** Never send it: the message is marked `superseded` with the reason as its error code. */
+  | { readonly kind: "withhold"; readonly reason: string };
+
+/**
+ * A rule about when a bot message may leave (C13: quiet hours). The send job asks every gate
+ * after it claimed the message and before it waits for the earlier messages; a hold makes the
+ * job sleep and ask again, a withhold ends the message. A person's messages are never gated.
+ * Runs inside a transaction of the business; `payload` is the message's stored payload.
+ */
+export interface SendGate {
+  readonly name: string;
+  check(
+    ctx: BusinessContext,
+    message: {
+      readonly messageId: MessageId;
+      readonly conversationId: ConversationId;
+      readonly channel: ChannelId;
+      readonly sequence: number;
+      readonly payload: Readonly<Record<string, unknown>>;
+      readonly now: Date;
+    },
+  ): Promise<SendGateVerdict>;
 }
 
 /** Loads the parts of the engine input that other chunks own (C5 lead, C6 playbook). */
@@ -222,6 +287,10 @@ export interface PipelineDeps {
    */
   readonly channelGuards?: readonly TurnGuard[];
   readonly observers?: readonly TurnObserver[];
+  /** What happens when a customer message is stored (C13). Default: the domain composition's. */
+  readonly inboundObservers?: readonly InboundObserver[];
+  /** When bot messages may leave (C13: quiet hours). Default: the domain composition's. */
+  readonly sendGates?: readonly SendGate[];
   readonly loaders?: Partial<TurnLoaders>;
   /*
    * Channel-specific parts, registered by the infrastructure root (apps/web) next to the
@@ -259,6 +328,8 @@ export interface PipelineContext {
   readonly modelCalls: ModelCallSink | null;
   readonly guards: readonly TurnGuard[];
   readonly observers: readonly TurnObserver[];
+  readonly inboundObservers: readonly InboundObserver[];
+  readonly sendGates: readonly SendGate[];
   readonly loaders: TurnLoaders;
   readonly windowFallbacks: readonly WindowFallbackResolver[];
   readonly providerEvents: readonly ProviderEventHandler[];
@@ -281,6 +352,7 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
     leaseSeconds: options.leaseSeconds,
     storage,
     events: deps.events,
+    ...(deps.clock === undefined ? {} : { clock: deps.clock }),
     ...(deps.model === undefined ? {} : { model: deps.model }),
     ...(deps.scheduling === undefined ? {} : { scheduling: deps.scheduling }),
   });
@@ -294,6 +366,8 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
     modelCalls: deps.modelCalls ?? null,
     guards: [...(deps.guards ?? domain.guards), ...(deps.channelGuards ?? [])],
     observers: deps.observers ?? domain.observers,
+    inboundObservers: deps.inboundObservers ?? domain.inboundObservers,
+    sendGates: deps.sendGates ?? domain.sendGates,
     loaders: {
       playbook: deps.loaders?.playbook ?? domain.loaders.playbook,
       lead: deps.loaders?.lead ?? domain.loaders.lead,

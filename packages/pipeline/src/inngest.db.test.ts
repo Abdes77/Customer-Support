@@ -23,13 +23,14 @@ afterAll(async () => {
 });
 
 describe("pipeline functions on Inngest", () => {
-  it("serves reply, send and sweeper with their debounce, concurrency and retries", () => {
+  it("serves reply, requested turns, send and sweeper with their debounce, concurrency and retries", () => {
     const functions = toInngestFunctions(createInngestClient({ isDev: true }), h.pipeline.jobs());
     const options = functions.map(
       (fn) => (fn as unknown as { opts: Record<string, unknown> }).opts,
     );
     expect(options.map((opts) => opts["id"])).toEqual([
       "pipeline-reply",
+      "pipeline-requested-turn",
       "pipeline-send",
       "pipeline-sweeper",
     ]);
@@ -39,10 +40,14 @@ describe("pipeline functions on Inngest", () => {
       concurrency: [{ key: "event.data.conversationId", limit: 1 }],
     });
     expect(options[1]).toMatchObject({
+      triggers: [{ event: "conversation.turn_requested" }],
+      concurrency: [{ key: "event.data.conversationId", limit: 1 }],
+    });
+    expect(options[2]).toMatchObject({
       triggers: [{ event: "message.send_requested" }],
       concurrency: [{ key: "event.data.conversationId", limit: 1 }],
     });
-    expect(options[2]).toMatchObject({ triggers: [{ cron: "* * * * *" }] });
+    expect(options[3]).toMatchObject({ triggers: [{ cron: "* * * * *" }] });
   });
 
   it("round-trips a test-channel message: webhook, reply function, send function", async () => {
@@ -51,7 +56,7 @@ describe("pipeline functions on Inngest", () => {
     expect(response.status).toBe(200);
     const received = h.events.named("message.received").at(-1)!;
 
-    const [reply, send] = toInngestFunctions(
+    const [reply, , send] = toInngestFunctions(
       createInngestClient({ isDev: true }),
       h.pipeline.jobs(),
     );

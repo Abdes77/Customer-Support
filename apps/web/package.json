@@ -22,6 +22,7 @@
     "@repo/channel-widget": "workspace:*",
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/handoff": "workspace:*",
     "@repo/jobs": "workspace:*",
     "@repo/knowledge": "workspace:*",
     "@repo/leads": "workspace:*",

@@ -28,7 +28,7 @@ import {
 import { isObjectPath, tenantPrefix } from "@repo/db/storage";
 import { type AnyJobEvent, jobEvent } from "@repo/jobs";
 
-import type { PipelineContext } from "../deps";
+import type { InboundObserver, PipelineContext } from "../deps";
 import { receivedEventId } from "../event-ids";
 import { applySignals, applyStatuses } from "./signals";
 
@@ -53,6 +53,8 @@ export interface StoredInbound {
   readonly replyable: boolean;
   /** Set once `message.received` was emitted (or the message needs no turn). */
   readonly enqueued: boolean;
+  /** What the inbound observers want sent with the message (C13). Empty for duplicates. */
+  readonly observerEvents?: readonly AnyJobEvent[];
 }
 
 export interface IngestResult {
@@ -117,7 +119,7 @@ export async function ingest(p: PipelineContext, input: ParsedWebhook): Promise<
     }
     const result = await p.db
       .forBusiness(ref.businessId, { agencyId: ref.agencyId })
-      .run((ctx) => storeInbound(ctx, ref, message, p.clock()));
+      .run((ctx) => storeInbound(ctx, ref, message, p.clock(), p));
     stored.push({ ...result, ref });
   }
 
@@ -135,9 +137,12 @@ export async function ingest(p: PipelineContext, input: ParsedWebhook): Promise<
       receivedAt: row.receivedAt,
     } satisfies EventPayload<"message.received">),
   );
-  if (events.length > 0) {
-    await p.events.send(events);
-    await markEnqueued(p, toEmit);
+  // What the inbound observers asked for (C13: an opt-out confirmation to send). A lost one
+  // is not lost for good: a queued message is re-emitted by the sweeper.
+  const observed = stored.flatMap((row) => row.observerEvents ?? []);
+  if (events.length > 0 || observed.length > 0) {
+    await p.events.send([...events, ...observed]);
+    if (toEmit.length > 0) await markEnqueued(p, toEmit);
   }
 
   const statusCount = await applyStatuses(p, parsed.statuses, lookup);
@@ -244,6 +249,7 @@ export async function storeInbound(
   ref: ChannelConnectionRef,
   message: NormalizedInboundMessage,
   now: Date,
+  p?: Pick<PipelineContext, "inboundObservers" | "logger">,
 ): Promise<StoredInbound> {
   const existing = await findStored(ctx, ref, message.externalMessageId);
   if (existing !== undefined) return duplicateOf(existing, message.channel);
@@ -344,6 +350,20 @@ export async function storeInbound(
     );
   }
 
+  const observerEvents =
+    p === undefined || p.inboundObservers.length === 0
+      ? []
+      : await observeInbound(ctx, p, {
+          messageId: row.id,
+          conversationId,
+          contactId,
+          channel: message.channel,
+          kind: message.kind,
+          text: message.text ?? message.interactiveReply?.title ?? null,
+          traceId,
+          now,
+        });
+
   return {
     messageId: row.id,
     conversationId,
@@ -353,7 +373,36 @@ export async function storeInbound(
     duplicate: false,
     replyable,
     enqueued: !replyable,
+    observerEvents,
   };
+}
+
+/**
+ * Runs the inbound observers (C13) inside the transaction that stored the message, each under
+ * its own savepoint: one that fails is rolled back and logged (never with the message text),
+ * and the message is still stored.
+ */
+async function observeInbound(
+  ctx: BusinessContext,
+  p: Pick<PipelineContext, "inboundObservers" | "logger">,
+  facts: Parameters<InboundObserver["stored"]>[1],
+): Promise<AnyJobEvent[]> {
+  const events: AnyJobEvent[] = [];
+  for (const observer of p.inboundObservers) {
+    try {
+      const produced = await ctx.tx.transaction((tx) => observer.stored({ ...ctx, tx }, facts));
+      events.push(...produced);
+    } catch (error) {
+      p.logger.error("ingest.observer_failed", {
+        observer: observer.name,
+        businessId: ctx.tenant.businessId,
+        conversationId: facts.conversationId,
+        messageId: facts.messageId,
+        error: error instanceof Error ? { name: error.name } : { name: "Error" },
+      });
+    }
+  }
+  return events;
 }
 
 async function upsertContact(

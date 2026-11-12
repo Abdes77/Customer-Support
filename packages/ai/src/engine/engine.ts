@@ -349,6 +349,9 @@ export function createEngine(options: EngineOptions): ConversationEngine {
         if (response.stopReason === "refusal") {
           state.notes.push(`refusal:${response.stopDetails?.category ?? "unspecified"}`);
           if (state.emergencies.length > 0) return emergencyReply();
+          // Nothing would have been sent anyway; a refusal must not hand the conversation to a
+          // takeover that would keep a later emergency from being answered.
+          if (situation.emergencyOnly !== null) return finish("no_reply", []);
           return finish("refused", []);
         }
         if (response.stopReason === "max_tokens") {
@@ -400,6 +403,12 @@ export function createEngine(options: EngineOptions): ConversationEngine {
 
         // The model has written its answer.
         const emergency = state.emergencies.length > 0;
+        if (situation.emergencyOnly !== null && !emergency) {
+          // An opted-out customer (C13): only an emergency is answered; the team is told.
+          deterministicReply = true;
+          state.notes.push(`emergency_only:${situation.emergencyOnly}`);
+          return finish("no_reply", []);
+        }
         if (situation.afterHours !== "none" && !emergency) return await afterHoursResult();
 
         const parsed = parseReply(responseText(response.content));

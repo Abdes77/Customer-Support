@@ -5,7 +5,7 @@ import type { JobDefinition } from "@repo/jobs";
 import { type PipelineContext, type PipelineDeps, resolveDeps } from "./deps";
 import { ingest, type IngestResult } from "./ingest/ingest";
 import { handleWebhook, type WebhookResponse } from "./ingest/webhook";
-import { replyJob } from "./reply/job";
+import { replyJob, requestedTurnJob } from "./reply/job";
 import { sendJob } from "./send/job";
 import { sweepBusiness, sweeperJob, type SweepResult } from "./sweeper";
 
@@ -14,7 +14,10 @@ export interface Pipeline {
   handleWebhook(channel: string, request: WebhookRequest): Promise<WebhookResponse>;
   /** Stores normalized messages and emits their events (email, widget and tests call it). */
   ingest(parsed: ParsedWebhook): Promise<IngestResult>;
-  /** The durable functions: reply, send and sweeper. Register them with a job runner. */
+  /**
+   * The durable functions: reply, requested turns (follow-ups and check-ins), send and
+   * sweeper. Register them with a job runner.
+   */
   jobs(): JobDefinition[];
   /** One business's sweep, for tests and the dev tools. */
   sweep(business: BusinessRef): Promise<SweepResult>;
@@ -34,7 +37,12 @@ export function createPipeline(deps: PipelineDeps): Pipeline {
     context,
     handleWebhook: (channel, request) => handleWebhook(context, channel, request),
     ingest: (parsed) => ingest(context, parsed),
-    jobs: () => [replyJob(context), sendJob(context), sweeperJob(context)],
+    jobs: () => [
+      replyJob(context),
+      requestedTurnJob(context),
+      sendJob(context),
+      sweeperJob(context),
+    ],
     sweep: (business) => sweepBusiness(context, business),
   };
 }

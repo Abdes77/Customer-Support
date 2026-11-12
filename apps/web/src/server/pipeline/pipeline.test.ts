@@ -213,6 +213,8 @@ describe("composition", () => {
     expect(withInngest.inngest).not.toBeNull();
     expect(withInngest.jobs.map((job) => job.id)).toEqual([
       "pipeline-reply",
+      // C13: follow-ups and check-ins are turns of the pipeline too.
+      "pipeline-requested-turn",
       "pipeline-send",
       "pipeline-sweeper",
       // C6: playbook generation and the website crawl.
@@ -228,6 +230,18 @@ describe("composition", () => {
       "scheduling-reminders",
       "scheduling-meeting-requested",
       "scheduling-reminder-sweep",
+      // C13: alerts, the emergency chain, the idle takeover release, follow-ups, the sweeper.
+      "handoff-alert-qualified",
+      "handoff-alert-meeting-requested",
+      "handoff-alert-handoff",
+      "handoff-alert-disqualified",
+      "handoff-alert-send-failed",
+      "handoff-alert-attention",
+      "handoff-emergency-start",
+      "handoff-emergency-chain",
+      "handoff-takeover-release",
+      "handoff-follow-up",
+      "handoff-sweep",
     ]);
     // Every definition converts to an Inngest function that /api/inngest can serve.
     expect(inngestFunctions(withInngest)).toHaveLength(withInngest.jobs.length);

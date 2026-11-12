@@ -10,6 +10,7 @@ import {
   type Logger,
   type TraceId,
   type TurnAttachment,
+  type TurnRestriction,
 } from "@repo/core";
 import {
   and,
@@ -32,13 +33,17 @@ import {
 import { loadSettings } from "@repo/settings/server";
 
 import { createToolRuntime } from "../actions";
-import type { PipelineContext } from "../deps";
+import type { PipelineContext, TurnFacts } from "../deps";
 import { loadBusinessProfile } from "../ports/loaders";
 import { createModelCallSink } from "../ports/model-calls";
 import { messagingWindow } from "../send/window";
 import type { ClaimedTurn } from "./claim";
 
-type ReceivedData = EventPayload<"message.received">;
+/** The tenant and conversation of a turn, whatever started it (a message, a request). */
+type TurnScope = Pick<
+  EventPayload<"message.received">,
+  "agencyId" | "businessId" | "conversationId"
+>;
 
 export type GenerateResult =
   | { readonly kind: "abandoned"; readonly reason: string }
@@ -99,7 +104,7 @@ type Prepared =
  */
 export async function generateTurn(
   p: PipelineContext,
-  data: ReceivedData,
+  data: TurnScope,
   claim: ClaimedTurn,
   logger: Logger,
 ): Promise<GenerateResult> {
@@ -163,7 +168,7 @@ function subjectOf(payload: Record<string, unknown>): string | null {
 async function buildTurnInput(
   ctx: BusinessContext,
   p: PipelineContext,
-  data: ReceivedData,
+  data: TurnScope,
   claim: ClaimedTurn,
 ): Promise<Prepared> {
   const [turn] = await ctx.tx
@@ -308,6 +313,23 @@ async function buildTurnInput(
     subject: subjectOf(row.payload),
   });
 
+  // What the guards allow this turn to send (C13: an opted-out customer, emergencies only).
+  const facts: TurnFacts = {
+    tenant: ctx.tenant,
+    conversationId: conversation.id,
+    contactId: conversation.contactId,
+    channel: conversation.channel,
+    trigger: claim.trigger,
+    settings,
+    now,
+  };
+  let restriction: TurnRestriction | null = null;
+  for (const guard of p.guards) {
+    if (guard.restrict === undefined) continue;
+    restriction = await guard.restrict(ctx, facts);
+    if (restriction !== null) break;
+  }
+
   const input: EngineTurnInput = {
     trace: {
       traceId: claim.traceId as TraceId,
@@ -316,7 +338,7 @@ async function buildTurnInput(
       conversationId: data.conversationId,
     },
     mode: "live",
-    trigger: "inbound_message",
+    trigger: claim.trigger,
     now: now.toISOString(),
     business,
     customer: {
@@ -334,6 +356,7 @@ async function buildTurnInput(
     lead: await p.loaders.lead(ctx, conversation.id),
     history: historyRows.map(toTurn),
     pending: pendingRows.map(toTurn),
+    restriction,
   };
   return { kind: "ready", input };
 }

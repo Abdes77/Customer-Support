@@ -71,6 +71,16 @@ import {
   toInngestFunctions,
 } from "@repo/jobs";
 import {
+  type AlertTransports,
+  alertTransportsFromEnv,
+  createHandoffJobs,
+  createHandoffService,
+  createTwilioWebhookHandlers,
+  type HandoffDeps,
+  type HandoffService,
+  type TwilioWebhookHandlers,
+} from "@repo/handoff";
+import {
   createKnowledgeJobs,
   createKnowledgeServices,
   type KnowledgeServices,
@@ -80,6 +90,7 @@ import {
   createAdapterRegistry,
   createPipeline,
   enqueueBotMessage,
+  enqueueHumanMessage,
   type Pipeline,
 } from "@repo/pipeline";
 import {
@@ -117,7 +128,12 @@ import {
  * `scheduling-reminder-sweep`, the calendar connection services (`scheduling`) behind the
  * calendar OAuth routes, the Calendly token route and the admin panel, and the Calendly
  * webhook handler. The scheduling action handlers are domain parts: the pipeline's
- * composition registers them, with this deployment's OAuth apps and `fetch`.
+ * composition registers them, with this deployment's OAuth apps and `fetch`. Handoff (C13):
+ * the alert subscribers, the emergency start and chain, the idle takeover release, the
+ * follow-ups and the sweeper (`handoff-*`), with this deployment's alert transports (Twilio,
+ * SMTP, the agency's WhatsApp number); the admin panel's service (`handoff.service`) and the
+ * handlers of Twilio's callbacks (`handoff.twilio`). Its action handlers, observers, guard and
+ * send gate are domain parts registered by the pipeline's composition.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -157,6 +173,17 @@ export interface ServerPipeline {
   readonly email: ServerEmail;
   /** Calendars and Calendly (C12). Google, Outlook and Calendly OAuth need their apps. */
   readonly scheduling: ServerScheduling;
+  /** Takeover, emergencies, alerts and follow-ups (C13). */
+  readonly handoff: ServerHandoff;
+}
+
+export interface ServerHandoff {
+  /** What the admin panel calls (C15, C16), after checking the person's role. */
+  readonly service: HandoffService;
+  /** Twilio's callbacks: replies to alert texts, keypresses, delivery statuses. */
+  readonly twilio: TwilioWebhookHandlers;
+  /** The package's own dependencies, for the acknowledgement page. */
+  readonly deps: HandoffDeps;
 }
 
 export interface ServerScheduling {
@@ -195,6 +222,10 @@ export interface ServerPipelineOptions {
   readonly emailJobs?: EmailJobOptions;
   /** Tests inject fakes of Google Calendar, Microsoft Graph, Calendly and their OAuth. */
   readonly schedulingFetch?: SchedulingFetch;
+  /** Tests inject recording alert transports (Twilio, SMTP, WhatsApp). */
+  readonly alertTransports?: AlertTransports;
+  /** Tests inject a clock for handoff's timing. */
+  readonly clock?: () => Date;
 }
 
 /**
@@ -483,6 +514,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     channelGuards: [...(metaPagesDeps === null ? [] : [metaChannelGuard]), emailChannelGuard],
     // Scheduling (C12): the handlers in the domain composition call the calendars with this.
     scheduling: schedulingConfig,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
   const schedulingDeps: SchedulingDeps = {
     db,
@@ -519,6 +551,18 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     ...schedulingDeps,
     outbound: { enqueue: enqueueBotMessage },
   });
+  // Handoff (C13): alerts by text message, call, email and WhatsApp; the messages it puts in a
+  // conversation (an opt-out confirmation, a person's reply) go through the pipeline.
+  const handoffDeps: HandoffDeps = {
+    db,
+    logger: logger.child({ component: "handoff" }),
+    events,
+    appUrl,
+    transports: options.alertTransports ?? alertTransportsFromEnv({ env }),
+    outbound: { enqueueBot: enqueueBotMessage, enqueueHuman: enqueueHumanMessage },
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
+  };
+  const handoffJobs = createHandoffJobs(handoffDeps);
   const jobs = [
     ...pipeline.jobs(),
     ...knowledgeJobs,
@@ -526,6 +570,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     ...whatsappJobs,
     ...emailJobs,
     ...schedulingJobs,
+    ...handoffJobs,
   ];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
@@ -544,6 +589,12 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
       google: schedulingConfig.google !== null,
       microsoft: schedulingConfig.microsoft !== null,
       calendlyOAuth: schedulingConfig.calendly.app !== null,
+    },
+    alerts: {
+      sms: handoffDeps.transports.sms !== null,
+      voice: handoffDeps.transports.voice !== null,
+      email: handoffDeps.transports.email !== null,
+      whatsapp: handoffDeps.transports.whatsapp !== null,
     },
   });
   return {
@@ -567,6 +618,14 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     scheduling: {
       connections: createSchedulingConnectionService(schedulingDeps),
       calendlyWebhook: createCalendlyWebhookHandler(schedulingDeps),
+    },
+    handoff: {
+      service: createHandoffService(handoffDeps),
+      twilio: createTwilioWebhookHandlers({
+        ...handoffDeps,
+        authToken: env.TWILIO_AUTH_TOKEN ?? null,
+      }),
+      deps: handoffDeps,
     },
   };
 }

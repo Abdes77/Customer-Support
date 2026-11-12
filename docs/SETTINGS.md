@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-348 settings in 22 categories.
+349 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -145,7 +145,7 @@ placeholder a setting does not list is a validation error.
 | [Conversation flow](#conversation) | 16 | Reply timing, conversation limits and how unusual messages are handled. |
 | [Emergencies](#emergency) | 14 | Which situations are emergencies, what the bot says and who is alerted. |
 | [Hours](#hours) | 8 | Business hours, holidays, after-hours behaviour and quiet hours. |
-| [Follow-ups](#follow_up) | 18 | Nudges to customers who stopped replying. |
+| [Follow-ups](#follow_up) | 19 | Nudges to customers who stopped replying. |
 | [Handoff and human takeover](#handoff) | 10 | When a person takes over a conversation and when the bot resumes. |
 | [Alerts](#alerts) | 9 | Who is told about leads, and how. |
 | [Scheduling](#scheduling) | 32 | Calendars, meeting slots, booking rules and reminders. |
@@ -981,7 +981,8 @@ Nudges to customers who stopped replying.
 | `follow_up.guidance` | **How to nudge.** How the bot writes a nudge. Every nudge is written fresh from the conversation; no two are alike. | text (several lines), up to 800 characters | see below | all |  |
 | `follow_up.last_nudge_says_so` | **Announce the last nudge.** The final nudge says that it is the last message and how to get back in touch. | yes / no | `true` | all |  |
 | `follow_up.after_outcome` | **Nudge after a "we'll contact you".** Whether a customer who was told the team will be in touch, and then asked something the bot answered, is still nudged when they go quiet. | yes / no | `false` | all |  |
-| `follow_up.opt_out_keywords` | **Opt-out words.** A message that consists of one of these words stops every unprompted message to that customer, on every channel of the business. | list (up to 40) of: text, up to 40 characters | `["stop","unsubscribe","cancel","quit","end","opt out","remove me"]` | global, business |  |
+| `follow_up.opt_out_scope` | **What an opt-out stops.** Which messages stop for a customer who sent an opt-out word, until they send an opt-back-in word. Nudges, reminders and check-ins stop either way, and a customer who reports an emergency always gets the safety instructions and the emergency alerts. With "every automated message" the bot does not answer anything else they write, and the team is alerted instead. | one of: `all_automated`, `proactive_only` | `"all_automated"` | global, business |  |
+| `follow_up.opt_out_keywords` | **Opt-out words.** A message that consists of one of these words opts the customer out, on every channel of the business. "What an opt-out stops" decides which messages stop. | list (up to 40) of: text, up to 40 characters | `["stop","unsubscribe","cancel","quit","end","opt out","remove me"]` | global, business |  |
 | `follow_up.opt_in_keywords` | **Opt-back-in words.** A message that consists of one of these words lifts an earlier opt-out. | list (up to 40) of: text, up to 40 characters | `["start","unstop","subscribe"]` | global, business |  |
 | `follow_up.opt_out_confirmation` | **Opt-out confirmation.** The one message a customer gets after opting out. | text, up to 300 characters | see below | all |  |
 

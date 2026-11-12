@@ -584,6 +584,24 @@ export const ENV_SPEC = {
     secret: true,
     required: "feature",
   },
+  ALERT_WHATSAPP_TEMPLATE: {
+    schema: z.string().regex(/^[a-z0-9_]{1,512}$/),
+    group: "alerts",
+    description:
+      'Name of the approved template the alert WhatsApp number sends (utility category, body with one parameter, for example "New alert: {{1}}").',
+    example: "staff_alert",
+    secret: false,
+    required: "feature",
+  },
+  ALERT_WHATSAPP_TEMPLATE_LANGUAGE: {
+    schema: z.string().regex(/^[a-z]{2,3}(_[A-Z]{2})?$/),
+    group: "alerts",
+    description: "Language code of the alert template.",
+    example: "en_US",
+    secret: false,
+    required: "optional",
+    default: "en_US",
+  },
 
   // --- calendly --------------------------------------------------------------------------
   CALENDLY_CLIENT_ID: {

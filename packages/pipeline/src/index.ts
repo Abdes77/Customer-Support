@@ -24,7 +24,11 @@ export {
   type PipelineDeps,
   type PipelineOptions,
   type AttachmentEnricher,
+  type InboundObserver,
   type OutboundComposer,
+  type SendGate,
+  type SendGateVerdict,
+  type StoredInboundFacts,
   type ProviderEventHandler,
   type SendThrottle,
   type TurnFacts,
@@ -50,12 +54,12 @@ export {
   requestPhotoHandler,
 } from "./composition/handlers";
 export { defaultLeadLoader, loadBusinessProfile } from "./ports/loaders";
-export { enqueueBotMessage } from "./outbound";
+export { enqueueBotMessage, enqueueHumanMessage } from "./outbound";
 export { createModelCallSink } from "./ports/model-calls";
 export { type IngestResult, isReplyableKind } from "./ingest/ingest";
 export { type WebhookResponse } from "./ingest/webhook";
 export { aggregateStatus, nextOutboundStatus } from "./send/deliveries";
-export { REPLY_FUNCTION_ID, type ReplyRunOutcome } from "./reply/job";
+export { REPLY_FUNCTION_ID, REQUESTED_TURN_FUNCTION_ID, type ReplyRunOutcome } from "./reply/job";
 export { SEND_FUNCTION_ID } from "./send/job";
 export { SWEEPER_FUNCTION_ID, type SweepResult } from "./sweeper";
 export { splitText } from "./send/split";

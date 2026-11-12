@@ -216,6 +216,16 @@ export async function createEvalSandbox(options: EvalSandboxOptions): Promise<Ev
             const handler = composition.actions.find("cancel_meeting");
             return handler?.type === "cancel_meeting" ? handler.handle(action, dryRun) : null;
           }
+          // C13: emergencies switched off are refused (nobody is alerted), and so are
+          // follow-ups; in a dry run nothing is recorded or sent.
+          case "escalate_emergency": {
+            const handler = composition.actions.find("escalate_emergency");
+            return handler?.type === "escalate_emergency" ? handler.handle(action, dryRun) : null;
+          }
+          case "schedule_follow_up": {
+            const handler = composition.actions.find("schedule_follow_up");
+            return handler?.type === "schedule_follow_up" ? handler.handle(action, dryRun) : null;
+          }
           default:
             return null;
         }

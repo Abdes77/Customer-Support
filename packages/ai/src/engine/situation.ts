@@ -1,4 +1,9 @@
-import type { ConversationTurn, EngineTurnInput, KnowledgeFact } from "@repo/core";
+import type {
+  ConversationTurn,
+  EngineTurnInput,
+  KnowledgeFact,
+  TurnRestrictionReason,
+} from "@repo/core";
 import { type AppSettings, channelSetting, type ModelTask } from "@repo/settings";
 
 import { businessHoursState, type HoursState } from "../hours";
@@ -59,6 +64,12 @@ export interface TurnSituation {
   readonly firstReply: boolean;
   readonly limits: ReplyLimits;
   readonly afterHours: AfterHoursDirective;
+  /**
+   * Set when nothing may be sent unless the newest messages describe an emergency (C13: the
+   * customer opted out of automated messages), with the reason. The after-hours rules do not
+   * apply to such a turn.
+   */
+  readonly emergencyOnly: TurnRestrictionReason | null;
   /** The after-hours message with its placeholders filled in. */
   readonly afterHoursMessage: string;
   /** The sentence the first reply must contain (`persona.ai_disclosure` is "upfront"). */
@@ -172,6 +183,8 @@ export function describeSituation(input: EngineTurnInput, values: AppSettings): 
   const quick = channel.capabilities.quickReplies;
   const max = channelSetting(values, "follow_up.max_nudges", channel.id);
   const nudgeNumber = Math.max(1, facts.botRoundsSinceCustomer);
+  const emergencyOnly =
+    input.restriction?.kind === "emergency_only" ? input.restriction.reason : null;
 
   return {
     values,
@@ -193,9 +206,10 @@ export function describeSituation(input: EngineTurnInput, values: AppSettings): 
           : { maxOptions: quick.maxOptions, maxTitleLength: quick.maxTitleLength },
     },
     afterHours:
-      purpose === "reply" || purpose === "backlog"
+      emergencyOnly === null && (purpose === "reply" || purpose === "backlog")
         ? closedDirective(values, hours, input.history)
         : "none",
+    emergencyOnly,
     afterHoursMessage,
     disclosure:
       firstReply && values["persona.ai_disclosure"] === "upfront"

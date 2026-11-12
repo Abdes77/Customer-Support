@@ -131,7 +131,25 @@ Format of an entry:
     wording. Some US states require bots to identify themselves;
   - `follow_up.opt_out_keywords`, `follow_up.opt_out_confirmation` and `hours.quiet_hours`
     (default 21:00 to 08:00), which bear on TCPA and carrier rules for text messages;
-  - `data.*`: how long conversations, photos and model records are kept.
+  - `data.*`: how long conversations, photos and model records are kept;
+  - (C13) `emergency.escalation_chain` and `emergency.fallback_contacts` start **empty**: an
+    emergency then alerts nobody by phone (a critical alert appears in the admin panel only).
+    Fill at least the agency's fallback contacts before going live (entry 16). Until then
+    `getHandoff().readiness()` answers `ready: false` (for C15's wizard) and the admin panel
+    gets a critical "emergencies reach nobody" alert once a day per active business. An
+    opt-out word (alone, or with "please", "now", "texting me" around it) is recorded with
+    its time, channel and word and confirmed once (under a takeover the confirmation is not
+    sent by the bot; the person holding the conversation sees the word). From then on
+    nudges, reminders and check-ins never reach that customer, and an emergency always
+    does: a customer who opted out and reports a gas smell, fire, sparking, flooding or no
+    heat gets the safety instructions, and the escalation chain and emergency alerts run as
+    for anyone. Everything else they write is decided by `follow_up.opt_out_scope`:
+    "all_automated" (the default) gives them no answer from the bot, and the team sees the
+    message unread in the inbox, gets an in-app warning and a "needs a person" alert (once
+    per conversation and day); "proactive_only" lets the bot answer as usual. **Choose the
+    default of `follow_up.opt_out_scope` with your compliance adviser** (TCPA, carrier and
+    Meta rules for the channels you use), and check that `follow_up.opt_out_confirmation`
+    ("You won't get any more messages from us") still says the truth for the scope you pick.
 - **Where:** `docs/SETTINGS.md` lists each default; change them agency-wide on the settings
   screen (C15) at the global scope, or in `packages/settings/src/registry`.
 - **Variable:** none.
@@ -728,6 +746,96 @@ Format of an entry:
      returning the first event instead of a second one (live check 1 shows both).
   4. That Calendly answers 403 "already canceled" for a second cancellation.
 
+### 16. Alerts, the emergency chain, takeover and follow-ups: Twilio, alert email, WhatsApp (C13)
+
+- **What:** alerts, the emergency escalation chain, human takeover, opt-out and follow-ups
+  are built and tested without any vendor account: `pnpm verify` runs them against a fake of
+  Twilio's REST API, a fake of the WhatsApp Cloud API, recording transports, the real
+  database, the real jobs (with a moved clock) and the real routes. Twilio's docs were read on
+  2026-11-12 (Messages and Calls resources, TwiML `<Gather>`, webhook security; the signature
+  check is tested against Twilio's own worked example). Nothing reached Twilio, an SMTP
+  server or Meta. Needed:
+  1. **Twilio** (SMS and calls to the business's people): an account, an SMS- and
+     voice-capable US number, and **A2P 10DLC registration** of that number (brand and
+     campaign, category "account notifications"; US carriers block unregistered application
+     texts). A trial account can only reach verified numbers. In the number's settings set
+     "A message comes in" to `POST <APP_URL>/api/handoff/twilio/sms` (replies with an
+     alert's code acknowledge an emergency). Calls and status callbacks need no console
+     setting: each request names its own callback URLs (only when `APP_URL` is https).
+     Optional: a Messaging Service (`TWILIO_MESSAGING_SERVICE_SID`) with the number in it.
+  2. **Alert email**: any SMTP server that may send as `ALERT_EMAIL_FROM` (Postmark, SES,
+     Google Workspace relay...), with SPF/DKIM for that domain so alerts do not land in spam.
+  3. **WhatsApp alerts** (optional): the agency's own WhatsApp Business number on the Cloud
+     API (Meta app of entry 12, a system user token with `whatsapp_business_messaging`), and
+     an approved **utility** template, for example name `staff_alert`, language `en_US`,
+     body `New alert: {{1}}` (one parameter; the code sends the alert text as one line).
+  4. Per business, in the settings: `alerts.recipients` (people, channels, events),
+     `emergency.escalation_chain` (in order; each needs a mobile number), the agency-wide
+     `alerts.agency_recipients` and `emergency.fallback_contacts`, and the timing
+     (`emergency.acknowledge_minutes`, `emergency.call_unacknowledged`, `emergency.rounds`,
+     `handoff.auto_release_minutes`, `follow_up.*`, `hours.quiet_hours`). Both chains are
+     **empty by default**: until someone is entered, an emergency only raises a critical alert
+     in the admin panel and alerts the recipients of `alerts.recipients` /
+     `alerts.agency_recipients` who get emergency alerts (also empty by default) (entry 6).
+     Check each business with `getHandoff().readiness(tenant)` (C15's alert contacts step
+     shows it): `ready: true` means someone can be texted or called.
+- **Where:** Twilio console; the SMTP provider; Meta Business Manager (WhatsApp Manager for
+  the template); Vercel environment variables; the settings screen (C15).
+- **Variables:** `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (also checks Twilio's webhook
+  signatures), `TWILIO_FROM_NUMBER`, `TWILIO_MESSAGING_SERVICE_SID` (optional);
+  `ALERT_SMTP_URL`, `ALERT_EMAIL_FROM`; `ALERT_WHATSAPP_PHONE_NUMBER_ID`,
+  `ALERT_WHATSAPP_ACCESS_TOKEN`, `ALERT_WHATSAPP_TEMPLATE`, `ALERT_WHATSAPP_TEMPLATE_LANGUAGE`
+  (default `en_US`); `APP_URL` (public https, for the links in alerts and Twilio's callbacks).
+  A missing transport is not an error: its alerts are recorded as `not_configured` and the
+  emergency chain moves on to the next person.
+- **Live checks that were skipped:**
+  1. Each transport with the app's own clients:
+     `pnpm --filter @repo/handoff live:alerts --phone +1<your mobile> --sms --call --whatsapp
+     --email you@example.com`. Expect a text, a call that reads the escalation message (and,
+     with a public `APP_URL`, asks to press 1, then says "not acknowledged": the test has no
+     real secret), a WhatsApp message from the agency number and an email.
+  2. An emergency end to end: run the app where Twilio can reach it (a preview deployment,
+     or `pnpm dev` behind `cloudflared tunnel --url http://localhost:3000` with `APP_URL` set
+     to the tunnel), put yourself first in a test business's `emergency.escalation_chain`
+     (text message) and a colleague second, and write "I smell gas in the kitchen" in
+     `/dev/chat`. Expect the reply to start with the safety instructions; a text within
+     seconds with a six-digit code and a link; after `emergency.acknowledge_minutes` a call
+     ("press 1"); then the colleague's alert. Then repeat and acknowledge each way: reply with
+     the code (expect "Thank you. The emergency is acknowledged"), open the link (the page
+     acknowledges nothing until its button is pressed), press 1 on the call. Each time the
+     chain stops and the admin panel shows who acknowledged, how and when.
+  3. Delivery statuses: after live check 2, the `alerts` rows of the texts and calls move to
+     `delivered` (or `failed` with Twilio's error code) through `/api/handoff/twilio/status`.
+  4. A lead alert: qualify yourself in `/dev/chat` with `alerts.recipients` set to your phone
+     and email. Expect one alert per channel (not one per lead event) with the conversation
+     link (sign-in required), and with `alerts.hold_overnight` on, a qualified lead at night
+     alerted in the morning.
+  5. Takeover and follow-ups with a real channel (WhatsApp test number of entry 12): reply
+     from the WhatsApp Business app or take over in the admin panel (C16) and check the bot
+     stays silent, comes back after `handoff.auto_release_minutes` of silence, and that a
+     customer who goes quiet gets the nudges of `follow_up.delays_minutes.whatsapp`, outside
+     quiet hours, as the follow-up template once the 24 hours have passed (set
+     `channels.whatsapp.follow_up_template`). Send "STOP": one confirmation, then nothing.
+- **Unverified details (check them in the live checks):**
+  1. That Twilio signs voice callbacks over the URL without an explicit port and status
+     callbacks over the exact URL we gave (both forms are accepted).
+  2. That a reply to an alert text reaches the number's "A message comes in" webhook with
+     `From` in E.164, as the escalation chain stored it (settings normalize US numbers).
+  3. US carrier filtering of the alert texts (they carry a link to the app's domain; register
+     the domain in the 10DLC campaign's sample messages).
+  4. The WhatsApp alert template's approval with a single-parameter body (Meta may ask for
+     more fixed text around the parameter).
+  5. Replays: Twilio's webhook security page (re-read 2026-11-12) describes the signature
+     only; a request carries no timestamp or nonce, so a captured signed request can be
+     replayed. What a replay can do is bounded in code: an acknowledgement only ever acts on
+     the one alert (and active chain) it names, and a status callback only moves an alert
+     forward. Nothing to check live; keep `TWILIO_AUTH_TOKEN` secret and rotate it if leaked.
+  6. That Twilio requests the `<Gather>` action URL with its query string (`alert`, `t`)
+     intact and signs it as given. The `<Gather>` page says the action URL must be absolute
+     for a call created with inline `Twiml` (it is) and that the action is requested only
+     when a key was pressed; it does not say whether the query string is kept. Live check 2
+     (press 1) settles it: "The emergency is acknowledged" means it is.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -754,8 +862,6 @@ already listed and described in `.env.example`.
 | Account | Needed for | Variables (group in `.env.example`) | Entry added by |
 | --- | --- | --- | --- |
 | Meta developer app, business verification, App Review | WhatsApp, Instagram, Messenger | Meta | C9, C10, C18 |
-| Twilio account and number | Alert SMS, escalation calls | Twilio | C13 |
-| SMTP sender for alerts | Alert email | Alert delivery | C13 |
 | HubSpot, GoHighLevel, Jobber, Housecall Pro, ServiceTitan developer accounts | CRM connectors | CRM connectors | C14 |
 | Sentry project | Error tracking | Observability | C17 |
 | Vercel project | Hosting (root directory `apps/web`, Node.js 22, pnpm) | all of the above | C18 |
@@ -818,6 +924,12 @@ already listed and described in `.env.example`.
 - **Calendars and Calendly (C12).** Built from Google's, Microsoft's and Calendly's docs
   read on 2026-11-12, tested against fakes of their APIs and OAuth endpoints; no request
   reached them (entry 15).
+- **Alerts, the emergency chain and acknowledgements (C13).** Built from Twilio's docs read
+  on 2026-11-12 (the signature check matches Twilio's worked example), tested against a fake
+  of Twilio's REST API, a fake of the WhatsApp Cloud API and recording transports; no text,
+  call, email or WhatsApp message was sent (entry 16). The US area-code table behind
+  `hours.customer_time_zone` = "phone_area_code" was compiled from the numbering plan's
+  assignments by state, without a vendor lookup; numbers that moved keep their old zone.
 - **Supabase (C1).** The schema, the row-level security and both access paths are tested on
   plain PostgreSQL 16 with a compatibility bootstrap that creates Supabase's roles and
   `auth.uid()`. Not yet seen on a real project: the `postgres` role switching to

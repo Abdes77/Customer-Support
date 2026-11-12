@@ -14,6 +14,7 @@ import {
   type PlaybookSnapshot,
   type SegmentId,
   type TraceId,
+  type TurnRestriction,
   type TurnTrigger,
 } from "@repo/core";
 import { type AppResolvedSettings, type AppSettings, settingsWith } from "@repo/settings";
@@ -281,6 +282,8 @@ export interface TestInputOptions {
   readonly trigger?: TurnTrigger;
   readonly customer?: CustomerProfile;
   readonly mode?: "live" | "dry_run";
+  /** What limits the turn (C13: an opted-out customer). Default: nothing. */
+  readonly restriction?: TurnRestriction | null;
 }
 
 let messageCounter = 0;
@@ -340,5 +343,6 @@ export function testInput(options: TestInputOptions = {}): EngineTurnInput {
     pending: (options.pending ?? ["My roof is leaking."]).map((entry) =>
       typeof entry === "string" ? testTurn("customer", entry, now) : entry,
     ),
+    ...(options.restriction === undefined ? {} : { restriction: options.restriction }),
   };
 }

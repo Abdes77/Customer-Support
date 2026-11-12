@@ -84,6 +84,26 @@ const samples: { [TName in keyof typeof EVENT_CATALOG]: unknown } = {
     version: 2,
     change: "moved",
   },
+  "conversation.turn_requested": {
+    ...pipelineBase,
+    trigger: "follow_up",
+    requestId: "follow-up-5e7a9c1e-3a5c-4e7a-9c1e-6a8c0e2a4c14",
+  },
+  "handoff.escalation_started": {
+    traceId: ids.traceId,
+    agencyId: ids.agencyId,
+    businessId: ids.businessId,
+    escalationId: "6f8b0d2f-4b6d-4f8b-a0d2-7b9d1f3b5d15",
+  },
+  "handoff.follow_up_planned": {
+    ...pipelineBase,
+    followUpId: "7a9c1e3a-5c7e-4a9c-b1e3-8c0e2a4c6e16",
+  },
+  "handoff.attention_needed": {
+    ...pipelineBase,
+    reason: "opted_out_customer_wrote",
+    day: "2026-11-10",
+  },
 };
 
 describe("event catalogue", () => {

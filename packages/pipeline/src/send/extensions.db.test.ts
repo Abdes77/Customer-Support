@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { ConversationId, MessageId, TraceId } from "@repo/core";
-import { conversations, deadLetters, eq, messages, sql } from "@repo/db";
+import { conversations, deadLetters, eq, messages, sql, takeoverLocks } from "@repo/db";
 import { jobEvent } from "@repo/jobs";
 
 import type { OutboundComposer, SendThrottle } from "../deps";
@@ -140,5 +140,66 @@ describe("send throttle", () => {
     expect(
       await h.t.admin.select().from(deadLetters).where(eq(deadLetters.messageId, id)),
     ).toHaveLength(1);
+  });
+});
+
+describe("takeover exemption (C13 review)", () => {
+  async function lockWithExemption(
+    tenant: TestTenant,
+    conversationId: ConversationId,
+    throughSeq: number,
+  ) {
+    await h.t.admin.insert(takeoverLocks).values({
+      ...tenant.tenant,
+      conversationId,
+      source: "rule",
+      reason: "The bot handed the conversation to a person.",
+      startedAt: new Date(),
+      lastActivityAt: new Date(),
+      exemptThroughSeq: throughSeq,
+    });
+  }
+
+  it("lets the bot's handoff message out, unless the person has written after it", async () => {
+    const tenant = await h.newTenant();
+    const conversationId = await conversationFor(tenant);
+    const handoff = await queue(tenant, conversationId, "A member of the team will pick up here.");
+    const [row] = await h.t.admin.select().from(messages).where(eq(messages.id, handoff));
+    await lockWithExemption(tenant, conversationId, row!.sequence);
+    await h.events.send([sendEvent(tenant, conversationId, handoff)]);
+    await h.idle();
+    // (The harness's composer signs every text.)
+    expect(
+      h.transport
+        .textsFor(conversationId)
+        .some((text) => text.startsWith("A member of the team will pick up here.")),
+    ).toBe(true);
+
+    // Another conversation: the handoff message was held, and the person replied first.
+    const other = await h.newTenant();
+    const second = await conversationFor(other);
+    const stale = await queue(other, second, "A member of the team will pick up here.");
+    const [staleRow] = await h.t.admin.select().from(messages).where(eq(messages.id, stale));
+    await lockWithExemption(other, second, staleRow!.sequence);
+    const [counter] = await h.t.admin
+      .update(conversations)
+      .set({ messageSeq: sql`${conversations.messageSeq} + 1` })
+      .where(eq(conversations.id, second))
+      .returning({ sequence: conversations.messageSeq });
+    await h.t.admin.insert(messages).values({
+      ...other.tenant,
+      conversationId: second,
+      channelConnectionId: other.connectionId as never,
+      direction: "outbound",
+      author: "human_agent",
+      kind: "text",
+      text: "Hi, this is Sam from the office.",
+      sequence: counter!.sequence,
+      status: "sent",
+    });
+    await h.events.send([sendEvent(other, second, stale)]);
+    await h.idle();
+    const [after] = await h.t.admin.select().from(messages).where(eq(messages.id, stale));
+    expect(after).toMatchObject({ status: "superseded", errorCode: "takeover" });
   });
 });

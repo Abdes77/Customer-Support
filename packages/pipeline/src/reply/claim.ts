@@ -6,6 +6,7 @@ import type {
   ContactId,
   ConversationId,
   EventPayload,
+  TurnTrigger,
 } from "@repo/core";
 import {
   and,
@@ -36,6 +37,7 @@ import { loadSettings } from "@repo/settings/server";
 import type { PipelineContext, TurnFacts } from "../deps";
 
 type ReceivedData = EventPayload<"message.received">;
+type RequestedData = EventPayload<"conversation.turn_requested">;
 
 /** Inbound messages that ask for an answer (reactions do not). */
 export const replyableInbound = and(
@@ -65,6 +67,8 @@ export interface ClaimedTurn {
   readonly kind: "claimed";
   readonly turnId: string;
   readonly traceId: string;
+  /** What started the turn: a customer message, or a requested follow-up or check-in (C13). */
+  readonly trigger: TurnTrigger;
   readonly throughSeq: number;
   readonly channel: ChannelId;
   readonly connectionId: ChannelConnectionId;
@@ -279,7 +283,7 @@ export async function claimTurn(
     .where(eq(conversations.id, conversation.id));
 
   const settings = await loadSettings(ctx, ctx.tenant, { logger: p.logger });
-  const reason = await guardReason(ctx, p, conversation, settings, now);
+  const reason = await guardReason(ctx, p, conversation, settings, now, "inbound_message");
   if (reason !== null) {
     await finishSkipped(ctx, plan.turnId, conversation.id, throughSeq, reason, now);
     p.logger.info("turn.skipped", {
@@ -300,15 +304,13 @@ async function claimedTurn(
   traceId: string,
   knownThroughSeq?: number,
 ): Promise<ClaimedTurn> {
-  let throughSeq = knownThroughSeq;
-  if (throughSeq === undefined) {
-    const [turn] = await ctx.tx
-      .select({ throughSeq: conversationTurns.throughSeq })
-      .from(conversationTurns)
-      .where(eq(conversationTurns.id, turnId))
-      .limit(1);
-    throughSeq = turn?.throughSeq ?? 0;
-  }
+  const [turn] = await ctx.tx
+    .select({ throughSeq: conversationTurns.throughSeq, trigger: conversationTurns.trigger })
+    .from(conversationTurns)
+    .where(eq(conversationTurns.id, turnId))
+    .limit(1);
+  const throughSeq = knownThroughSeq ?? turn?.throughSeq ?? 0;
+  const trigger: TurnTrigger = turn?.trigger ?? "inbound_message";
   const pendingRows = await ctx.tx
     .select({ id: messages.id, externalMessageId: messages.externalMessageId })
     .from(messages)
@@ -339,6 +341,7 @@ async function claimedTurn(
     kind: "claimed",
     turnId,
     traceId,
+    trigger,
     throughSeq,
     channel: conversation.channel,
     connectionId: conversation.connectionId,
@@ -358,6 +361,7 @@ async function guardReason(
   conversation: ConversationState,
   settings: AppResolvedSettings,
   now: Date,
+  trigger: TurnTrigger,
 ): Promise<string | null> {
   if (conversation.status !== "open") return "conversation_closed";
 
@@ -373,7 +377,10 @@ async function guardReason(
     .from(contacts)
     .where(eq(contacts.id, conversation.contactId))
     .limit(1);
-  if (contact?.optedOutAt != null) return "opted_out";
+  // A turn the bot starts itself (a follow-up, a check-in) never reaches a customer who opted
+  // out. A turn for what the customer wrote runs: the registered opt-out rules (C13) decide
+  // what it may send (an emergency is always answered), and the send step checks again.
+  if (contact?.optedOutAt != null && trigger !== "inbound_message") return "opted_out";
   if (contact?.isBlocked === true) return "blocked";
 
   const [business] = await ctx.tx
@@ -422,7 +429,7 @@ async function guardReason(
     conversationId: conversation.id,
     contactId: conversation.contactId,
     channel: conversation.channel,
-    trigger: "inbound_message",
+    trigger,
     settings,
     now,
   };
@@ -431,6 +438,114 @@ async function guardReason(
     if (reason !== null) return `${guard.name}:${reason}`;
   }
   return null;
+}
+
+/**
+ * Step "claim" of a requested turn (C13: a follow-up, or a check-in after a takeover ended):
+ * the same lease, turn row and guards as a reply turn, with no customer message to answer.
+ * Unanswered customer messages are the reply run's to answer, so the request gives way to
+ * them. Safe to repeat, like `claimTurn`.
+ */
+export async function claimRequestedTurn(
+  ctx: BusinessContext,
+  p: PipelineContext,
+  data: RequestedData,
+  turnId: string,
+  runId: string,
+): Promise<ClaimResult> {
+  const now = p.clock();
+  const conversation = await lockConversation(ctx, data.conversationId);
+  if (conversation === undefined) return { kind: "done", reason: "not_found" };
+
+  if (conversation.leaseOwner === turnId) {
+    const [turn] = await ctx.tx
+      .select({ status: conversationTurns.status })
+      .from(conversationTurns)
+      .where(eq(conversationTurns.id, turnId))
+      .limit(1);
+    if (turn?.status !== "running") return { kind: "done", reason: "already_finished" };
+    return claimedTurn(ctx, conversation, turnId, data.traceId);
+  }
+  const [earlier] = await ctx.tx
+    .select({ id: conversationTurns.id })
+    .from(conversationTurns)
+    .where(eq(conversationTurns.id, turnId))
+    .limit(1);
+  if (earlier !== undefined) return { kind: "done", reason: "already_finished" };
+
+  const [unanswered] = await ctx.tx
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversation.id),
+        replyableInbound,
+        gt(messages.sequence, conversation.handled),
+      ),
+    )
+    .limit(1);
+  if (unanswered !== undefined) return { kind: "done", reason: "pending_messages" };
+
+  if (conversation.leaseOwner !== null) {
+    if (conversation.leaseExpiresAt !== null && conversation.leaseExpiresAt > now) {
+      return { kind: "busy" };
+    }
+    await ctx.tx
+      .update(conversationTurns)
+      .set({
+        status: "failed",
+        errorCode: "lease_expired",
+        errorMessage: "The turn lease expired before the turn finished.",
+        completedAt: now,
+      })
+      .where(
+        and(
+          eq(conversationTurns.id, conversation.leaseOwner),
+          eq(conversationTurns.status, "running"),
+        ),
+      );
+  }
+
+  const throughSeq = conversation.handled;
+  const [last] = await ctx.tx
+    .select({ ordinal: max(conversationTurns.ordinal) })
+    .from(conversationTurns)
+    .where(eq(conversationTurns.conversationId, conversation.id));
+  await ctx.tx.insert(conversationTurns).values({
+    id: turnId,
+    ...ctx.tenant,
+    conversationId: conversation.id,
+    ordinal: (last?.ordinal ?? 0) + 1,
+    trigger: data.trigger,
+    status: "running",
+    runId,
+    traceId: data.traceId,
+    throughSeq,
+    pendingCount: 0,
+    startedAt: now,
+  });
+  await ctx.tx
+    .update(conversations)
+    .set({
+      turnLeaseOwner: turnId,
+      turnLeaseExpiresAt: new Date(now.getTime() + p.options.leaseSeconds * 1000),
+    })
+    .where(eq(conversations.id, conversation.id));
+
+  const settings = await loadSettings(ctx, ctx.tenant, { logger: p.logger });
+  const reason = await guardReason(ctx, p, conversation, settings, now, data.trigger);
+  if (reason !== null) {
+    await finishSkipped(ctx, turnId, conversation.id, throughSeq, reason, now);
+    p.logger.info("turn.skipped", {
+      traceId: data.traceId,
+      businessId: ctx.tenant.businessId,
+      conversationId: conversation.id,
+      trigger: data.trigger,
+      reason,
+    });
+    return { kind: "skipped", turnId, reason };
+  }
+  return claimedTurn(ctx, conversation, turnId, data.traceId, throughSeq);
 }
 
 /** A guard stopped the turn: the pending messages count as handled and the lease is free. */

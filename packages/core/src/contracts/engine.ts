@@ -123,6 +123,24 @@ export interface EngineTurnInput<
   readonly history: readonly ConversationTurn[];
   /** Customer messages this turn must answer (the debounced batch). Empty for follow-ups. */
   readonly pending: readonly ConversationTurn[];
+  /**
+   * What limits this turn's answer, if anything (C13: a customer who opted out of automated
+   * messages gets an answer only when they report an emergency). Absent or null: nothing.
+   */
+  readonly restriction?: TurnRestriction | null;
+}
+
+export const TURN_RESTRICTION_REASONS = ["opted_out"] as const;
+export type TurnRestrictionReason = (typeof TURN_RESTRICTION_REASONS)[number];
+
+/**
+ * A limit on what a turn may send. "emergency_only": nothing is sent unless the newest
+ * messages describe an emergency; then the emergency rules apply in full (safety
+ * instructions first, the escalation).
+ */
+export interface TurnRestriction {
+  readonly kind: "emergency_only";
+  readonly reason: TurnRestrictionReason;
 }
 
 /** Why a contact is not a lead. The first four mirror `scoring.auto_disqualify` in settings. */

@@ -1,12 +1,14 @@
 import type { z } from "zod";
 
 import { EMAIL_EVENTS } from "./email-events";
+import { HANDOFF_EVENTS } from "./handoff-events";
 import { KNOWLEDGE_EVENTS } from "./knowledge-events";
 import { LEAD_EVENTS } from "./lead-events";
 import { PIPELINE_EVENTS } from "./pipeline-events";
 import { SCHEDULING_EVENTS } from "./scheduling-events";
 
 export * from "./email-events";
+export * from "./handoff-events";
 export * from "./knowledge-events";
 export * from "./lead-events";
 export * from "./pipeline-events";
@@ -23,6 +25,7 @@ export const EVENT_CATALOG = {
   ...KNOWLEDGE_EVENTS,
   ...EMAIL_EVENTS,
   ...SCHEDULING_EVENTS,
+  ...HANDOFF_EVENTS,
 } as const satisfies Record<string, z.ZodType>;
 
 export type EventName = keyof typeof EVENT_CATALOG;

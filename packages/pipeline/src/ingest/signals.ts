@@ -221,10 +221,13 @@ async function recordHumanReply(
     .from(takeoverLocks)
     .where(and(eq(takeoverLocks.conversationId, conversationId), isNull(takeoverLocks.releasedAt)))
     .limit(1);
+  // The idle release (C13) counts from when we learned of the reply, on the service's clock,
+  // like every other activity: a late or redelivered webhook must not release it at once.
+  const seen = p.clock();
   if (active !== undefined) {
     await ctx.tx
       .update(takeoverLocks)
-      .set({ lastActivityAt: at })
+      .set({ lastActivityAt: seen })
       .where(eq(takeoverLocks.id, active.id));
     return null;
   }
@@ -236,7 +239,7 @@ async function recordHumanReply(
       source: "provider_inbox",
       reason: "A person replied from the provider's inbox.",
       startedAt: at,
-      lastActivityAt: at,
+      lastActivityAt: seen,
     })
     .onConflictDoNothing()
     .returning({ id: takeoverLocks.id });

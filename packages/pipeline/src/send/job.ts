@@ -29,7 +29,7 @@ import {
 } from "@repo/jobs";
 
 import { loadConnectionContext } from "../connection";
-import type { PipelineContext } from "../deps";
+import type { PipelineContext, SendGateVerdict } from "../deps";
 import { sendFailedEventId } from "../event-ids";
 import { raiseInAppAlert, recordDeadLetter } from "../failures";
 import { applyHeldStatuses, recordParts } from "./deliveries";
@@ -102,11 +102,16 @@ async function claimSend(
   };
 }
 
-/** True while an earlier outbound message of the conversation is still on its way. */
+/**
+ * True while an earlier outbound message of the conversation is still on its way. A message a
+ * send gate holds (C13: quiet hours) does not count until its hold ends, so a person's reply
+ * is not kept behind a bot message that waits for the morning.
+ */
 async function hasPendingPredecessor(
   ctx: BusinessContext,
   data: SendData,
   sequence: number,
+  now: Date,
 ): Promise<boolean> {
   const [earlier] = await ctx.tx
     .select({ id: messages.id })
@@ -117,10 +122,81 @@ async function hasPendingPredecessor(
         eq(messages.direction, "outbound"),
         lt(messages.sequence, sequence),
         inArray(messages.status, ["queued", "sending"]),
+        sql`not coalesce(${messages.payload} ->> 'heldUntil' > ${now.toISOString()}, false)`,
       ),
     )
     .limit(1);
   return earlier !== undefined;
+}
+
+/** How often one message may be held before it is sent anyway. */
+const MAX_GATE_HOLDS = 4;
+
+/**
+ * Asks the send gates (C13: quiet hours) about a claimed bot message. A hold is noted in the
+ * message's payload (`heldUntil`, ISO time) so the messages after it may pass; a withhold
+ * ends the message like a takeover does; letting it go clears the note.
+ */
+async function checkGates(
+  ctx: BusinessContext,
+  p: PipelineContext,
+  data: SendData,
+): Promise<SendGateVerdict> {
+  const [message] = await ctx.tx
+    .select({
+      author: messages.author,
+      status: messages.status,
+      sequence: messages.sequence,
+      payload: messages.payload,
+    })
+    .from(messages)
+    .where(eq(messages.id, data.messageId))
+    .limit(1);
+  if (message?.status !== "sending" || message.author !== "bot") return { kind: "send" };
+  const now = p.clock();
+  let verdict: SendGateVerdict = { kind: "send" };
+  for (const gate of p.sendGates) {
+    verdict = await gate.check(ctx, {
+      messageId: data.messageId,
+      conversationId: data.conversationId,
+      channel: data.channel,
+      sequence: message.sequence,
+      payload: message.payload,
+      now,
+    });
+    if (verdict.kind !== "send") break;
+  }
+  if (verdict.kind === "withhold") {
+    await ctx.tx
+      .update(messages)
+      .set({ status: "superseded", errorCode: verdict.reason.slice(0, 100) })
+      .where(and(eq(messages.id, data.messageId), eq(messages.status, "sending")));
+    p.logger.info("send.withheld", {
+      businessId: data.businessId,
+      conversationId: data.conversationId,
+      messageId: data.messageId,
+      reason: verdict.reason,
+    });
+  } else if (verdict.kind === "hold") {
+    const held = JSON.stringify({ heldUntil: verdict.until, heldBecause: verdict.reason });
+    await ctx.tx
+      .update(messages)
+      .set({ payload: sql`${messages.payload} || ${held}::jsonb` })
+      .where(eq(messages.id, data.messageId));
+    p.logger.info("send.held", {
+      businessId: data.businessId,
+      conversationId: data.conversationId,
+      messageId: data.messageId,
+      until: verdict.until,
+      reason: verdict.reason,
+    });
+  } else if ("heldUntil" in message.payload) {
+    await ctx.tx
+      .update(messages)
+      .set({ payload: sql`${messages.payload} - 'heldUntil' - 'heldBecause'` })
+      .where(eq(messages.id, data.messageId));
+  }
+  return verdict;
 }
 
 /**
@@ -500,10 +576,22 @@ export async function runSend(
   );
   if (claim.kind === "done") return { outcome: claim.reason };
 
+  // When the message may leave (C13: quiet hours). A hold sleeps, then asks again.
+  if (p.sendGates.length > 0) {
+    for (let round = 0; round < MAX_GATE_HOLDS; round += 1) {
+      const verdict = await step.run(`gate-${round}`, () =>
+        scope().run((ctx) => checkGates(ctx, p, data)),
+      );
+      if (verdict.kind === "send") break;
+      if (verdict.kind === "withhold") return { outcome: verdict.reason };
+      await step.sleepUntil(`hold-${round}`, new Date(verdict.until));
+    }
+  }
+
   const waits = p.options.orderWaitsMs;
   for (let attempt = 0; ; attempt += 1) {
     const blocked = await step.run(`order-${attempt}`, () =>
-      scope().run((ctx) => hasPendingPredecessor(ctx, data, claim.sequence)),
+      scope().run((ctx) => hasPendingPredecessor(ctx, data, claim.sequence, p.clock())),
     );
     if (!blocked) break;
     const delay = waits[attempt];

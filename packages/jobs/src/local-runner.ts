@@ -33,6 +33,10 @@ import type { AnyJobEvent, EventSender } from "./events";
  * It is used by tests and by local development when Inngest is not configured. It keeps
  * everything in memory: a process restart loses pending work, so it is never used on a
  * hosted deployment.
+ *
+ * `idle()` does not wait for a run that sleeps (a durable `sleep` or `sleepUntil`) longer than
+ * `idleIgnoresSleepsOverMs` (default 30 s): a nudge hours away, a reminder, an idle release.
+ * Such a run is dormant until it wakes; its timer does not keep the process alive.
  */
 
 export interface LocalRunRecord {
@@ -52,6 +56,8 @@ export interface LocalJobRunnerOptions {
   /** Replaces every debounce period (tests use a short one). */
   readonly debouncePeriodMs?: number;
   readonly now?: () => Date;
+  /** A durable sleep longer than this does not hold `idle()` up. Default 30 s. */
+  readonly idleIgnoresSleepsOverMs?: number;
 }
 
 export interface LocalJobRunner extends EventSender {
@@ -84,8 +90,11 @@ function defaultRetryDelay(attempt: number): number {
   return Math.min(1000 * 2 ** attempt, 30_000);
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+function wait(ms: number, unref = false): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, Math.max(0, ms));
+    if (unref) timer.unref?.();
+  });
 }
 
 function toJson<T>(value: T): T {
@@ -130,6 +139,9 @@ export function createLocalJobRunner(options: LocalJobRunnerOptions = {}): Local
   const history: LocalRunRecord[] = [];
   const idleWaiters: (() => void)[] = [];
   let pending = 0;
+  /** Runs in a long durable sleep: `idle()` does not wait for them. */
+  let dormant = 0;
+  const dormantAfterMs = options.idleIgnoresSleepsOverMs ?? 30_000;
   let cronTimer: ReturnType<typeof setInterval> | null = null;
   let lastCronMinute = -1;
 
@@ -139,7 +151,11 @@ export function createLocalJobRunner(options: LocalJobRunnerOptions = {}): Local
 
   function end(): void {
     pending -= 1;
-    if (pending === 0) {
+    notifyIdle();
+  }
+
+  function notifyIdle(): void {
+    if (pending - dormant === 0) {
       for (const resolve of idleWaiters.splice(0)) resolve();
     }
   }
@@ -192,11 +208,17 @@ export function createLocalJobRunner(options: LocalJobRunnerOptions = {}): Local
     };
   }
 
-  async function pause(slot: Slot, ms: number): Promise<void> {
+  async function pause(slot: Slot, ms: number, durable = false): Promise<void> {
     slot.release();
+    const long = durable && ms > dormantAfterMs;
+    if (long) {
+      dormant += 1;
+      notifyIdle();
+    }
     try {
-      await wait(ms);
+      await wait(ms, long);
     } finally {
+      if (long) dormant -= 1;
       await slot.acquire();
     }
   }
@@ -221,13 +243,13 @@ export function createLocalJobRunner(options: LocalJobRunnerOptions = {}): Local
       async sleep(id, durationMs) {
         claim(id);
         if (memo.has(id)) return;
-        await pause(slot, durationMs);
+        await pause(slot, durationMs, true);
         memo.set(id, null);
       },
       async sleepUntil(id, until) {
         claim(id);
         if (memo.has(id)) return;
-        await pause(slot, until.getTime() - now().getTime());
+        await pause(slot, until.getTime() - now().getTime(), true);
         memo.set(id, null);
       },
     };
@@ -418,7 +440,7 @@ export function createLocalJobRunner(options: LocalJobRunnerOptions = {}): Local
     },
 
     idle() {
-      if (pending === 0) return Promise.resolve();
+      if (pending - dormant === 0) return Promise.resolve();
       return new Promise((resolve) => idleWaiters.push(resolve));
     },
 
