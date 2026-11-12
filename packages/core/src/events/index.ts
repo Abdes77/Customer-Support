@@ -4,11 +4,13 @@ import { EMAIL_EVENTS } from "./email-events";
 import { KNOWLEDGE_EVENTS } from "./knowledge-events";
 import { LEAD_EVENTS } from "./lead-events";
 import { PIPELINE_EVENTS } from "./pipeline-events";
+import { SCHEDULING_EVENTS } from "./scheduling-events";
 
 export * from "./email-events";
 export * from "./knowledge-events";
 export * from "./lead-events";
 export * from "./pipeline-events";
+export * from "./scheduling-events";
 
 /**
  * Every event that crosses a package boundary, by name. A chunk that introduces an event adds
@@ -20,6 +22,7 @@ export const EVENT_CATALOG = {
   ...LEAD_EVENTS,
   ...KNOWLEDGE_EVENTS,
   ...EMAIL_EVENTS,
+  ...SCHEDULING_EVENTS,
 } as const satisfies Record<string, z.ZodType>;
 
 export type EventName = keyof typeof EVENT_CATALOG;

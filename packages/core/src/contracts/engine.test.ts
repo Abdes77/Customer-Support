@@ -35,13 +35,15 @@ describe("EngineAction", () => {
     { type: "handoff_to_human", reason: "asked for the owner", urgency: "normal" },
     { type: "mark_not_a_fit", reason: "outside the service area" },
     { type: "end_conversation", reason: "customer said goodbye" },
+    { type: "cancel_meeting", reason: "the customer found another contractor" },
   ];
 
-  it("covers the ten actions from the spec", () => {
+  it("covers the ten actions from the spec, plus cancelling a meeting (C12)", () => {
     const types = valid.map((action) => action.type).sort();
     const expected: EngineActionType[] = [
       "analyze_photos",
       "book_meeting",
+      "cancel_meeting",
       "end_conversation",
       "escalate_emergency",
       "handoff_to_human",

@@ -243,6 +243,16 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   env, not its code), the engine's prompt, integration pages (C16).
 - **Must deliver:** the `offer_times` and `book_meeting` handlers registered in the pipeline;
   subscribers to `lead.meeting_requested`; reminders as jobs.
+- **Delivered, for C13, C14, C16 and C17:** `@repo/scheduling` (availability, Google and
+  Outlook clients, Calendly, the booking service, `schedulingActionHandlers` for
+  `offer_times`, `book_meeting` and the new `cancel_meeting`, `createSchedulingJobs`,
+  `createSchedulingConnectionService`, `createCalendlyWebhookHandler`; `/testing` with fakes
+  of the vendors); `enqueueBotMessage` in `@repo/pipeline` for code-written messages;
+  `getScheduling()` in `apps/web/src/server/scheduling` and the routes
+  `POST /api/oauth/calendar/{google|microsoft|calendly}` (+ callback),
+  `POST /api/integrations/calendly/token`, `POST /api/webhooks/calendly/{key}` for C16's
+  integration page; the event `scheduling.booking_changed`. ARCHITECTURE §2 "As built
+  (C12)" has the rest.
 
 ### C13 · Handoff, alerts, emergencies and follow-ups
 
@@ -341,5 +351,5 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 | --- | --- | --- |
 | `update_lead_fields`, `mark_not_a_fit` | C5 `packages/leads` | recorded as `deferred` |
 | `request_photo`, `analyze_photos`, `end_conversation` | C4 `packages/ai` with the pipeline | — |
-| `offer_times`, `book_meeting` | C12 `packages/scheduling` | `rejected`, so the bot says the team will be in touch |
+| `offer_times`, `book_meeting`, `cancel_meeting` | C12 `packages/scheduling` (registered) | `rejected`, so the bot says the team will be in touch |
 | `schedule_follow_up`, `escalate_emergency`, `handoff_to_human` | C13 `packages/handoff` | recorded as `deferred` |

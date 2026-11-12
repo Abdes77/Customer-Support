@@ -196,10 +196,29 @@ export async function createEvalSandbox(options: EvalSandboxOptions): Promise<Ev
         return entry;
       },
       async settingsVerdict(action, context) {
-        if (action.type !== "request_photo") return null;
-        const handler = composition.actions.find("request_photo");
-        if (handler?.type !== "request_photo") return null;
-        return handler.handle(action, { ...context, mode: "dry_run" });
+        const dryRun = { ...context, mode: "dry_run" as const };
+        switch (action.type) {
+          case "request_photo": {
+            const handler = composition.actions.find("request_photo");
+            return handler?.type === "request_photo" ? handler.handle(action, dryRun) : null;
+          }
+          // C12: scheduling decides from the settings alone in a dry run (no calendar is
+          // read, nothing is booked): booking switched off, no calendar, Calendly links.
+          case "offer_times": {
+            const handler = composition.actions.find("offer_times");
+            return handler?.type === "offer_times" ? handler.handle(action, dryRun) : null;
+          }
+          case "book_meeting": {
+            const handler = composition.actions.find("book_meeting");
+            return handler?.type === "book_meeting" ? handler.handle(action, dryRun) : null;
+          }
+          case "cancel_meeting": {
+            const handler = composition.actions.find("cancel_meeting");
+            return handler?.type === "cancel_meeting" ? handler.handle(action, dryRun) : null;
+          }
+          default:
+            return null;
+        }
       },
       async turnRowCounts() {
         const counts: Record<string, number> = {};

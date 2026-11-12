@@ -99,7 +99,7 @@ describe("a conversation against the production composition", () => {
     // ... and the profile's settings: prices are never disclosed, so no price fact is core.
     expect(systemText(first)).not.toContain("$149");
     expect(first.model).toBe("claude-fable-5-2");
-    expect(first.tools?.length).toBe(10);
+    expect(first.tools?.length).toBe(11);
 
     // A question about price brings the pricing fact through full-text retrieval, per turn.
     const last = JSON.stringify(model.requests.at(-1)?.messages.at(-1));

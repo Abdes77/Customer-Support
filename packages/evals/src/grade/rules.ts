@@ -305,6 +305,14 @@ export function rulesInForce(scenario: Scenario): RuleInForce[] {
         "routing.disqualify_guidance",
         "routing.disqualify_referral",
         "scheduling.meeting_type",
+        // C12: how a booked meeting is confirmed, moved and cancelled in the conversation.
+        ...(hasCalendar
+          ? ([
+              "scheduling.confirmation_guidance",
+              "scheduling.allow_reschedule",
+              "scheduling.allow_cancel",
+            ] as const)
+          : []),
       ],
       [
         hasCalendar

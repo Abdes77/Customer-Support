@@ -26,6 +26,7 @@
     "@repo/knowledge": "workspace:*",
     "@repo/leads": "workspace:*",
     "@repo/pipeline": "workspace:*",
+    "@repo/scheduling": "workspace:*",
     "@repo/settings": "workspace:*",
     "@repo/widget-embed": "workspace:*",
     "@supabase/ssr": "catalog:",

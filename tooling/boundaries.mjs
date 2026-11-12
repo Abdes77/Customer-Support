@@ -32,7 +32,8 @@ export const ALLOWED_DEPENDENCIES = {
   "@repo/knowledge": DOMAIN_WITH_MODEL,
   "@repo/leads": DOMAIN_WITH_MODEL,
   "@repo/handoff": DOMAIN_WITH_MODEL,
-  "@repo/scheduling": DOMAIN_BASE,
+  // Scheduling reads business hours and holidays through @repo/ai, like the widget (DECISIONS).
+  "@repo/scheduling": DOMAIN_WITH_MODEL,
   "@repo/integrations": DOMAIN_BASE,
   "@repo/channel-test": DOMAIN_BASE,
   // The widget reads business hours through @repo/ai to show its closed notice (DECISIONS).

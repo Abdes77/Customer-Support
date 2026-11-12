@@ -223,6 +223,9 @@ export function describeAction(executed: ExecutedAction): string {
     case "book_meeting":
       what = `booked the meeting slot ${inline(action.slotId)}`;
       break;
+    case "cancel_meeting":
+      what = "cancelled the customer's meeting";
+      break;
     case "schedule_follow_up":
       what = `scheduled a follow-up after ${action.after}`;
       break;

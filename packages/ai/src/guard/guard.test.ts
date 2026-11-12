@@ -325,6 +325,37 @@ describe("finalizeDraft", () => {
     expect(final(draft("Book at www.other.com/book today."), allowed).applied).toEqual([]);
   });
 
+  it("allows only the bot's own Calendly pages when meetings are booked through Calendly (C12)", () => {
+    const calendly = context({
+      settings: {
+        "scheduling.provider": "calendly",
+        "scheduling.calendly_event_type": "https://calendly.com/summit-roofing/estimate",
+      },
+    });
+    const kept = [
+      "Pick a time here: https://calendly.com/d/abcd-1234/estimate?utm_source=hsrb&utm_content=tok_0123456789abcdef",
+      "Move it here: https://calendly.com/reschedulings/0b6e3c3e-1c5a-4b7f-9d55-1f0d2a3b4c5d",
+      "Our page: https://calendly.com/summit-roofing/estimate",
+    ];
+    for (const text of kept) {
+      expect(final(draft(text), calendly).applied).toEqual([]);
+    }
+    for (const text of [
+      "Or here: https://calendly.com/someone-else/30min",
+      "Or here: https://evil.calendly.com/d/abcd-1234/x",
+      "Or here: https://calendly.com/summit-roofing/estimate/../../attacker/30min",
+    ]) {
+      expect(final(draft(text), calendly).applied).toContain("link_removed");
+    }
+    // Without Calendly booking, no Calendly link at all.
+    expect(
+      final(draft("Pick a time: https://calendly.com/d/abcd-1234/estimate"), context()).applied,
+    ).toContain("link_removed");
+    // A business that lists calendly.com itself keeps every Calendly link.
+    const listed = context({ settings: { "guardrails.allowed_link_domains": ["calendly.com"] } });
+    expect(final(draft("Here: https://calendly.com/anyone/30min"), listed).applied).toEqual([]);
+  });
+
   it("cuts a message that is still too long at a sentence end", () => {
     const ctx = context({ settings: { "voice.max_reply_characters.widget": 80 } });
     const result = final(

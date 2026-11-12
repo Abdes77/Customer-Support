@@ -172,7 +172,7 @@ export const schedulingSettings = defineCategory("scheduling", {
   }),
   "scheduling.include_report": setting({
     label: "Lead report in the calendar event",
-    help: "The event description carries the lead report and a link to the conversation.",
+    help: "The event description carries the lead report and a link to the conversation. A guest can read the description, so when the customer is invited it carries only the link.",
     field: f.boolean(),
     default: true,
   }),
@@ -228,6 +228,55 @@ export const schedulingSettings = defineCategory("scheduling", {
     help: "The first reminder asks the customer to confirm they will be there, and offers to reschedule.",
     field: f.boolean(),
     default: true,
+  }),
+  "scheduling.reminder_message": setting({
+    label: "Reminder text",
+    help: "What a reminder says. Sent as written, with the placeholders filled in.",
+    field: f.text({
+      multiline: true,
+      minLength: 1,
+      maxLength: 400,
+      variables: variables("meeting_type", "meeting_time", "business_name", "bot_name"),
+    }),
+    default: "Just a reminder of your {{meeting_type}} with {{business_name}} on {{meeting_time}}.",
+    clientEditable: true,
+  }),
+  "scheduling.reminder_confirm_message": setting({
+    label: "Asking to confirm",
+    help: "Added to the first reminder when reminders ask to confirm.",
+    field: f.text({ multiline: true, minLength: 1, maxLength: 300 }),
+    default:
+      "Could you reply to confirm you'll be there? If something came up, just tell me here and we'll find another time.",
+    clientEditable: true,
+  }),
+  "scheduling.tentative_events": setting({
+    label: "Tentative calendar events",
+    help: "Whether a tentative event in the connected calendar (not yet accepted, or shown as tentative) keeps that time from being offered.",
+    field: f.select([
+      ["busy", "Count as busy"],
+      ["free", "Count as free"],
+    ]),
+    default: "busy",
+  }),
+  "scheduling.all_day_events": setting({
+    label: "All-day calendar events",
+    help: "How all-day events in the connected calendar (a day off, a holiday, a reminder) affect the times offered.",
+    field: f.select([
+      [
+        "as_marked",
+        "As marked in the calendar",
+        "An all-day event blocks its days only when it is marked busy; Google and Outlook mark new all-day events free.",
+      ],
+      ["always_busy", "Always block the day"],
+      ["ignore", "Never block the day"],
+    ]),
+    default: "as_marked",
+  }),
+  "scheduling.unbooked_alert_hours": setting({
+    label: "Alert when no meeting is booked",
+    help: "When a lead should be booked but no meeting is booked this many hours later, the team gets an alert in the admin panel. When no calendar is connected the alert comes at once, so a person books the meeting.",
+    field: f.nullable(f.integer({ min: 1, max: 168, unit: "hours" }), "No alert"),
+    default: 24,
   }),
   "scheduling.calendly_event_type": setting({
     label: "Calendly event type",

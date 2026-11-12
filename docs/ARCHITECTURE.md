@@ -616,6 +616,64 @@ Microsoft's docs read on 2026-11-12.
   comes back to `returnTo?email=connected|cancelled|in_use|failed|...`. A manual reply on
   email is a `text` message: the composer makes it an email without the bot's signature.
 
+### As built (C12)
+
+Scheduling: `packages/scheduling` (availability, Google and Outlook calendar clients,
+Calendly, OAuth, the booking service, handlers, jobs; `/testing` for fakes of the vendors'
+APIs and Calendly fixtures), the routes `/api/oauth/calendar/{google|microsoft|calendly}`
+(+ `/callback`), `/api/integrations/calendly/token` and `/api/webhooks/calendly/{key}` in
+`apps/web`. Built from Google's, Microsoft's and Calendly's docs read on 2026-11-12.
+
+- **Connections.** One `integration_connections` row per calendar account (provider
+  `google_calendar`, `outlook_calendar` or `calendly`; one active per provider and business;
+  connecting again reuses the row); tokens in `integration_connection_secrets`, refreshed
+  under the row lock. `config`: the calendars checked and the one booked into (Google and
+  Outlook; default the primary calendar), or Calendly's user, organization, webhook key and
+  subscription. `scheduling.provider` chooses which one books. `createSchedulingConnectionService`
+  (`getScheduling()` in `apps/web/src/server/scheduling`) is what C16's page calls.
+- **Availability** (`src/availability`, pure): per local date of the business, meeting hours
+  (business or custom, holidays and special hours per `scheduling.skip_holidays`), starts on
+  the step grid built from the wall clock (daylight saving safe), minimum lead time, days
+  ahead, meetings per day, a travel rule by the customer's ZIP code (days and extra minutes),
+  the arrival window, buffers against calendar events (tentative and all-day per settings)
+  and the business's other bookings; offers spread over days and parts of the day, filtered
+  by the customer's words.
+- **Actions** (`schedulingActionHandlers`, registered in `createDomainComposition()`):
+  `offer_times` (real slots with ids and labels in the customer's zone, or with Calendly a
+  single-use link carrying our token), `book_meeting` (re-checks the slot, holds it under a
+  per-business advisory lock; a hold that never finished stops counting 15 minutes after
+  `metadata.heldAt`, by the service's clock; writes the event with the customer's details and the lead
+  report as plain data (the report only when the customer is not a guest of the event),
+  idempotent per booking id; moves the meeting when one exists, holding the new time in
+  `metadata.moveHold` until the calendar has it),
+  `cancel_meeting`. Nothing is done while a takeover lock is active. Each checks the turn's settings, the lead's routing (`book_meeting`
+  only), the details `routing.booking_requires`, `allow_reschedule`/`allow_cancel` and the
+  change cutoff, and answers with instructions the model follows (booking not possible:
+  contact later or hand off, per `routing.booking_unavailable_outcome`). Dry runs get the
+  settings' verdict only. `bookings`: one active (pending or confirmed) per conversation
+  (migration 0011); the lead's status follows (`meeting_booked`).
+- **Calendly webhook:** the key in the URL names one connection; the signature is checked
+  over the raw body with that connection's key within five minutes; the tracking token
+  finds the booking in that business only; created, rescheduled (`old_invitee`) and
+  cancelled invitees update it; replays change nothing, and once a booking has an invitee only
+  its successor (`old_invitee`) changes it. With Calendly as provider, the output guard
+  keeps only Calendly's single-use, reschedule and cancel pages and the business's own page.
+- **Jobs:** `scheduling-reminders` (event `scheduling.booking_changed`, versioned per
+  booking; code-written reminders stored by `enqueueBotMessage` from `@repo/pipeline` and
+  sent by the send function; quiet hours respected), `scheduling-meeting-requested`
+  (`lead.meeting_requested`: alerts when nobody can or did book), `scheduling-reminder-sweep`
+  (hourly).
+- **For C13:** reminders already go through the pipeline's send path (takeover, opt-out,
+  templates); `enqueueBotMessage` is there for any other code-written message. A booking
+  should stop follow-ups (the lead's status is `meeting_booked`, the `bookings` row
+  confirmed). **For C14:** `bookings` rows and `scheduling.booking_changed` carry what a CRM
+  needs to record a booked meeting. **For C16:** `getScheduling()` (`availability`, `list`,
+  `listCalendars`, `setCalendars`, `disconnect`), the OAuth start routes (JSON `{ businessId,
+  returnTo }`, answer `{ authorizationUrl }` plus the flow's cookie, back to
+  `returnTo?calendar=connected|cancelled|failed|...`), `POST /api/integrations/calendly/token`
+  (`{ businessId, token }`), and the inbox route `/inbox/<conversation id>` that calendar
+  events link to.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -772,7 +830,9 @@ Rules for every function:
 | `integrations-sync` | `lead.*` | per connection, idempotency key, backoff | C14 |
 | `knowledge-playbook-generate` | `playbook.generation_requested` | limit 1 per segment; one step per model call; progress on `playbook_generations` | C6 |
 | `knowledge-import` | `knowledge.import_requested` | website crawl; limit 1 per business; one step per page; progress on `import_runs` | C6 |
-| `scheduling-reminders` | booking created | `sleepUntil`, cancelled on reschedule or cancel | C12 |
+| `scheduling-reminders` | `scheduling.booking_changed` | limit 1 per booking; `sleepUntil` per reminder; a later version of the booking makes the run send nothing | C12 |
+| `scheduling-meeting-requested` | `lead.meeting_requested` | alert at once without a calendar, else after `scheduling.unbooked_alert_hours` without a booking | C12 |
+| `scheduling-reminder-sweep` | cron, hourly | re-emits the booking event of confirmed bookings whose reminders were never planned | C12 |
 | `retention-purge` | cron, daily | deletes per the data-retention settings | C17 |
 
 **Definitions and runners (C3).** Functions are declared once as `JobDefinition`s in
@@ -790,7 +850,7 @@ Event names reserved so far are the keys of `EVENT_CATALOG`: `message.received`,
 `message.send_requested`, `message.send_failed`, `conversation.takeover_started`,
 `conversation.takeover_released`, `lead.qualified`, `lead.meeting_requested`, `lead.handoff`,
 `lead.disqualified`, `lead.emergency`, `playbook.generation_requested`,
-`knowledge.import_requested`, `email.sync_requested` (C11). A chunk that needs a new cross-package event adds its
+`knowledge.import_requested`, `email.sync_requested` (C11), `scheduling.booking_changed` (C12). A chunk that needs a new cross-package event adds its
 schema under `packages/core/src/events` and registers it in the catalogue.
 
 Vercel limits one function invocation, so one Inngest step must finish within the route's
@@ -983,8 +1043,9 @@ optional `sendTyping`, `markRead`, `fetchAttachment`.
   `actions` (each `EngineAction` with its `ActionOutcome`), prompt and settings versions,
   token usage.
 - `EngineAction` is the closed list of things the model can do besides writing: update lead
-  fields, request a photo, analyze photos, schedule a follow-up, offer times, book a meeting,
-  escalate an emergency, hand off to a human, mark not a fit, end the conversation. Each
+  fields, request a photo, analyze photos, schedule a follow-up, offer times, book a meeting
+  (which moves an existing one), cancel a meeting (added by C12), escalate an emergency, hand
+  off to a human, mark not a fit, end the conversation. Each
   action type has one `ActionHandler`, implemented by the chunk that owns the behaviour and
   registered in the pipeline. Until its owner exists, an action is recorded with status
   `deferred`.

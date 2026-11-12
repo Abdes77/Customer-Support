@@ -200,6 +200,9 @@ importers:
       '@repo/pipeline':
         specifier: workspace:*
         version: link:../../packages/pipeline
+      '@repo/scheduling':
+        specifier: workspace:*
+        version: link:../../packages/scheduling
       '@repo/settings':
         specifier: workspace:*
         version: link:../../packages/settings
@@ -778,6 +781,9 @@ importers:
       '@repo/leads':
         specifier: workspace:*
         version: link:../leads
+      '@repo/scheduling':
+        specifier: workspace:*
+        version: link:../scheduling
       '@repo/settings':
         specifier: workspace:*
         version: link:../settings
@@ -812,9 +818,24 @@ importers:
 
   packages/scheduling:
     dependencies:
+      '@repo/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@repo/core':
         specifier: workspace:*
         version: link:../core
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/jobs':
+        specifier: workspace:*
+        version: link:../jobs
+      '@repo/settings':
+        specifier: workspace:*
+        version: link:../settings
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -822,6 +843,9 @@ importers:
       eslint:
         specifier: 'catalog:'
         version: 10.14.0(jiti@2.7.0)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

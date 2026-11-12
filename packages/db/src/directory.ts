@@ -1,10 +1,23 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 
-import type { AgencyId, BusinessId, ChannelConnectionId, ChannelId, UserId } from "@repo/core";
+import type {
+  AgencyId,
+  BusinessId,
+  ChannelConnectionId,
+  ChannelId,
+  IntegrationConnectionId,
+  UserId,
+} from "@repo/core";
 
 import { hashApiKey, looksLikeApiKey } from "./api-keys";
 import type { Connection } from "./internal/client";
-import { apiKeys, businesses, channelConnections, users } from "./schema/tables";
+import {
+  apiKeys,
+  businesses,
+  channelConnections,
+  integrationConnections,
+  users,
+} from "./schema/tables";
 import type { BusinessStatus, ConnectionStatus } from "./schema/vocab";
 
 /*
@@ -31,6 +44,13 @@ export interface BusinessRef extends TenantRef {
 export interface ChannelConnectionRef extends TenantRef {
   readonly connectionId: ChannelConnectionId;
   readonly channel: ChannelId;
+  readonly status: ConnectionStatus;
+  readonly businessStatus: BusinessStatus;
+}
+
+export interface IntegrationConnectionRef extends TenantRef {
+  readonly connectionId: IntegrationConnectionId;
+  readonly provider: string;
   readonly status: ConnectionStatus;
   readonly businessStatus: BusinessStatus;
 }
@@ -74,6 +94,17 @@ export interface Directory {
     channel: ChannelId,
     subscriptionId: string,
   ): Promise<ChannelConnectionRef | null>;
+
+  /**
+   * The integration connection whose webhook URL carries this key (C12: Calendly posts to
+   * `/api/webhooks/calendly/{key}`). Matches `config.webhookKey`, which only the connect flow
+   * writes; the index makes it unique per provider. The caller still verifies the request
+   * with that connection's signing key before it trusts anything in it.
+   */
+  findIntegrationConnectionByWebhookKey(
+    provider: string,
+    webhookKey: string,
+  ): Promise<IntegrationConnectionRef | null>;
 
   /** The agency of a business, for callers that hold only a business id. */
   findBusiness(businessId: BusinessId): Promise<BusinessRef | null>;
@@ -160,6 +191,29 @@ export function createDirectory(connection: Connection): Directory {
           and(
             eq(channelConnections.channel, channel),
             sql`(${channelConnections.state} ->> 'subscriptionId') = ${subscriptionId}`,
+          ),
+        )
+        .limit(1);
+      return rows[0] ?? null;
+    },
+
+    async findIntegrationConnectionByWebhookKey(provider, webhookKey) {
+      if (webhookKey.length === 0) return null;
+      const rows = await db
+        .select({
+          connectionId: integrationConnections.id,
+          agencyId: integrationConnections.agencyId,
+          businessId: integrationConnections.businessId,
+          provider: integrationConnections.provider,
+          status: integrationConnections.status,
+          businessStatus: businesses.status,
+        })
+        .from(integrationConnections)
+        .innerJoin(businesses, eq(businesses.id, integrationConnections.businessId))
+        .where(
+          and(
+            eq(integrationConnections.provider, provider),
+            sql`(${integrationConnections.config} ->> 'webhookKey') = ${webhookKey}`,
           ),
         )
         .limit(1);

@@ -35,6 +35,7 @@ export type {
   ApiKeyRef,
   BusinessRef,
   ChannelConnectionRef,
+  IntegrationConnectionRef,
   Directory,
   TenantRef,
 } from "./directory";

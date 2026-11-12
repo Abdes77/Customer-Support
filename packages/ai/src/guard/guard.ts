@@ -2,7 +2,7 @@ import type { EngineTurnInput, ExecutedAction, KnowledgeFact } from "@repo/core"
 import type { AppSettings } from "@repo/settings";
 
 import type { EmergencyClass, TurnSituation } from "../engine/situation";
-import { allowedLinkDomains, fillTemplate } from "../prompt/business-block";
+import { allowedLinkDomains, fillTemplate, linkAllowed } from "../prompt/business-block";
 import type { CorePrompt } from "../prompt/core";
 import {
   effectivePlaybook,
@@ -312,11 +312,6 @@ const URL =
   /(?<![@\w.])(?:https?:\/\/|www\.)[^\s<>()]+|(?<![@\w./-])[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|co|us|biz|info)\b(?:\/[^\s<>()]*)?/gi;
 const EMOJI = /\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*️?/gu;
 
-function hostOfLink(link: string): string {
-  const withoutScheme = link.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
-  return (withoutScheme.split(/[/?#]/)[0] ?? "").toLowerCase().replace(/[.,;:!?]+$/, "");
-}
-
 function tidy(text: string): string {
   return text
     .replaceAll(/[ \t]+([.,;:!?])/g, "$1")
@@ -327,12 +322,13 @@ function tidy(text: string): string {
     .trim();
 }
 
-function removeLinks(text: string, allowed: readonly string[]): { text: string; removed: boolean } {
+function removeLinks(
+  text: string,
+  allowed: (link: string) => boolean,
+): { text: string; removed: boolean } {
   let removed = false;
   const cleaned = text.replaceAll(URL, (link) => {
-    const host = hostOfLink(link);
-    const ok = allowed.some((domain) => host === domain || host.endsWith(`.${domain}`));
-    if (ok) return link;
+    if (allowed(link)) return link;
     removed = true;
     // Punctuation that ends the sentence is not part of the link.
     return /[.,;:!?]+$/.exec(link)?.[0] ?? "";
@@ -387,7 +383,8 @@ export function finalizeDraft(draft: Draft, context: GuardContext): FinalizedDra
   const email = input.channel.capabilities.format === "email";
   const emergency = context.emergencies.length > 0;
   const passages = mandated(context);
-  const domains = allowedLinkDomains(input.business, values);
+  const domainList = allowedLinkDomains(input.business, values);
+  const domains = (link: string) => linkAllowed(link, input.business, values, domainList);
   const allowed = allowedAmounts(context);
 
   let messages = draft.messages.map((message) => {

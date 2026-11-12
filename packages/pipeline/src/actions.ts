@@ -48,7 +48,7 @@ export function createActionHandlerRegistry(
  * what"); everything else is accepted and recorded with the turn as `deferred`.
  */
 export function defaultActionOutcome(type: EngineActionType): ActionOutcome {
-  if (type === "offer_times" || type === "book_meeting") {
+  if (type === "offer_times" || type === "book_meeting" || type === "cancel_meeting") {
     return {
       status: "rejected",
       message:

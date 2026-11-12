@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   type AnyPgColumn,
   boolean,
@@ -64,6 +65,12 @@ export const integrationConnections = pgTable(
     tenantFk("integration_connections", t),
     unique("integration_connections_id_business_key").on(t.id, t.businessId),
     index("integration_connections_business_idx").on(t.businessId, t.provider),
+    // The key in the webhook URL of a connection that receives vendor webhooks (C12: Calendly
+    // posts to /api/webhooks/calendly/{key}). Only the connect flow writes it; it names
+    // exactly one connection, so an inbound event can never land in another business.
+    uniqueIndex("integration_connections_webhook_key")
+      .on(t.provider, sql`(${t.config} ->> 'webhookKey')`)
+      .where(sql`(${t.config} ->> 'webhookKey') is not null`),
     check("integration_connections_status_check", oneOf(t.status, CONNECTION_STATUSES)),
     ...businessPolicies("integration_connections"),
   ],
@@ -190,6 +197,11 @@ export const bookings = pgTable(
     leadFk("bookings", t),
     integrationConnectionFk("bookings", t),
     uniqueIndex("bookings_external_event_key").on(t.integrationConnectionId, t.externalEventId),
+    // C12: at most one active booking (a held or booked time, or a scheduling link that is
+    // out) per conversation, so a repeated or retried tool call can never book twice.
+    uniqueIndex("bookings_active_conversation_key")
+      .on(t.conversationId)
+      .where(sql`${t.conversationId} is not null and ${t.status} in ('pending', 'confirmed')`),
     index("bookings_business_starts_idx").on(t.businessId, t.startsAt),
     index("bookings_lead_idx").on(t.leadId),
     index("bookings_conversation_idx").on(t.conversationId),

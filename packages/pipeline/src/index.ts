@@ -50,6 +50,7 @@ export {
   requestPhotoHandler,
 } from "./composition/handlers";
 export { defaultLeadLoader, loadBusinessProfile } from "./ports/loaders";
+export { enqueueBotMessage } from "./outbound";
 export { createModelCallSink } from "./ports/model-calls";
 export { type IngestResult, isReplyableKind } from "./ingest/ingest";
 export { type WebhookResponse } from "./ingest/webhook";

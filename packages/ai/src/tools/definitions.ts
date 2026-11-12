@@ -50,6 +50,8 @@ const AnalyzePhotos = z.object({
 
 const BookMeeting = z.object({ slot_id: text });
 
+const CancelMeeting = z.object({ reason: text });
+
 const EndConversation = z.object({
   reason: text,
   disposition: z.enum(END_DISPOSITIONS),
@@ -116,12 +118,26 @@ export const ENGINE_TOOLS: readonly EngineTool[] = [
   {
     name: "book_meeting",
     description:
-      "Book the meeting time the customer chose. Call it only with a slot_id that an offer_times result returned in this conversation, and only after the customer clearly picked that time. The result says whether the booking succeeded: confirm a meeting to the customer only when it did, and follow the instruction in the result when it did not.",
+      "Book the meeting time the customer chose. Call it only with a slot_id that an offer_times result returned in this conversation, and only after the customer clearly picked that time. When the customer already has a meeting and wants another time, offer new times and book the one they pick: that moves their meeting. The result says whether the booking succeeded: confirm a meeting to the customer only when it did, and follow the instruction in the result when it did not.",
     inputSchema: object({
       slot_id: { type: "string", description: "The id of the chosen slot, from offer_times." },
     }),
     toAction(input) {
       return { type: "book_meeting", slotId: BookMeeting.parse(input).slot_id };
+    },
+  },
+  {
+    name: "cancel_meeting",
+    description:
+      "Cancel the customer's booked meeting, when they clearly ask to cancel it (not when they only want another time: then offer new times instead). The result says whether it was cancelled: tell the customer only what the result says, and follow its instruction when it was not.",
+    inputSchema: object({
+      reason: {
+        type: "string",
+        description: "Why the customer cancels, in a few words, for the team.",
+      },
+    }),
+    toAction(input) {
+      return { type: "cancel_meeting", reason: CancelMeeting.parse(input).reason };
     },
   },
   {

@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-343 settings in 22 categories.
+348 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -148,7 +148,7 @@ placeholder a setting does not list is a validation error.
 | [Follow-ups](#follow_up) | 18 | Nudges to customers who stopped replying. |
 | [Handoff and human takeover](#handoff) | 10 | When a person takes over a conversation and when the bot resumes. |
 | [Alerts](#alerts) | 9 | Who is told about leads, and how. |
-| [Scheduling](#scheduling) | 27 | Calendars, meeting slots, booking rules and reminders. |
+| [Scheduling](#scheduling) | 32 | Calendars, meeting slots, booking rules and reminders. |
 | [Channels](#channels) | 37 | Options of the website widget, WhatsApp, Instagram, Messenger and email. |
 | [CRM and webhooks](#integrations) | 16 | When leads are pushed to a CRM, field mapping and outgoing webhooks. |
 | [Knowledge](#knowledge) | 7 | How business knowledge is gathered and used in replies. |
@@ -1176,7 +1176,7 @@ Calendars, meeting slots, booking rules and reminders.
 | `scheduling.arrival_window_minutes` | **Arrival window.** For on-site visits: the bot offers a window ("between 9 and 11") of this length instead of an exact time. Empty offers exact times. | whole number, 30 to 480 minutes, or empty (exact times) | `null` | all | yes |
 | `scheduling.travel_rules` | **Travel rules by area.** Limits for parts of the service area: jobs in the listed ZIP codes are visited only on the listed days, with extra travel time added around the meeting. | list (up to 30) of entries, see below | `[]` | business | yes |
 | `scheduling.event_title` | **Calendar event title.** The title of the calendar event the bot creates. | text, up to 200 characters; placeholders: {{meeting_type}}, {{contact_name}}, {{service}}, {{business_name}} | `"{{meeting_type}}: {{contact_name}} ({{service}})"` | all |  |
-| `scheduling.include_report` | **Lead report in the calendar event.** The event description carries the lead report and a link to the conversation. | yes / no | `true` | all |  |
+| `scheduling.include_report` | **Lead report in the calendar event.** The event description carries the lead report and a link to the conversation. A guest can read the description, so when the customer is invited it carries only the link. | yes / no | `true` | all |  |
 | `scheduling.invite_customer` | **Invite the customer.** The customer is added to the calendar event as a guest when their email address is known. | yes / no | `true` | all |  |
 | `scheduling.confirmation_guidance` | **Booking confirmation.** How the bot confirms a booked meeting. Guidance, not a script; the date, the time and the kind of meeting are always stated. | text (several lines), up to 500 characters | see below | all |  |
 | `scheduling.allow_reschedule` | **Rescheduling in the conversation.** Customers can move their meeting by asking the bot. | yes / no | `true` | all |  |
@@ -1185,6 +1185,11 @@ Calendars, meeting slots, booking rules and reminders.
 | `scheduling.reminders` | **Reminders.** The customer is reminded of a booked meeting. | yes / no | `true` | all |  |
 | `scheduling.reminder_minutes_before` | **Remind before the meeting.** One reminder per entry, this many minutes before the meeting. 1440 is a day. | list (up to 4) of: whole number, 10 to 20160 minutes | `[1440,120]` | all |  |
 | `scheduling.reminder_asks_confirmation` | **Reminders ask to confirm.** The first reminder asks the customer to confirm they will be there, and offers to reschedule. | yes / no | `true` | all |  |
+| `scheduling.reminder_message` | **Reminder text.** What a reminder says. Sent as written, with the placeholders filled in. | text (several lines), up to 400 characters; placeholders: {{meeting_type}}, {{meeting_time}}, {{business_name}}, {{bot_name}} | see below | all | yes |
+| `scheduling.reminder_confirm_message` | **Asking to confirm.** Added to the first reminder when reminders ask to confirm. | text (several lines), up to 300 characters | see below | all | yes |
+| `scheduling.tentative_events` | **Tentative calendar events.** Whether a tentative event in the connected calendar (not yet accepted, or shown as tentative) keeps that time from being offered. | one of: `busy`, `free` | `"busy"` | all |  |
+| `scheduling.all_day_events` | **All-day calendar events.** How all-day events in the connected calendar (a day off, a holiday, a reminder) affect the times offered. | one of: `as_marked`, `always_busy`, `ignore` | `"as_marked"` | all |  |
+| `scheduling.unbooked_alert_hours` | **Alert when no meeting is booked.** When a lead should be booked but no meeting is booked this many hours later, the team gets an alert in the admin panel. When no calendar is connected the alert comes at once, so a person books the meeting. | whole number, 1 to 168 hours, or empty (no alert) | `24` | all |  |
 | `scheduling.calendly_event_type` | **Calendly event type.** The address of the Calendly event type that scheduling links are created for, for example https://calendly.com/summit-roofing/estimate. | web address, or empty (not set) | `null` | business |  |
 
 <details><summary><code>scheduling.meeting_type</code></summary>
@@ -1243,6 +1248,30 @@ Default:
 
 ```json
 "Confirm the day, date and time in the customer's words, say what happens at the meeting and who is coming, and mention that they can reschedule right here if something comes up."
+```
+
+</details>
+
+<details><summary><code>scheduling.reminder_message</code></summary>
+
+Structure:
+
+- text (several lines), up to 400 characters; placeholders: {{meeting_type}}, {{meeting_time}}, {{business_name}}, {{bot_name}}
+
+Default:
+
+```json
+"Just a reminder of your {{meeting_type}} with {{business_name}} on {{meeting_time}}."
+```
+
+</details>
+
+<details><summary><code>scheduling.reminder_confirm_message</code></summary>
+
+Default:
+
+```json
+"Could you reply to confirm you'll be there? If something came up, just tell me here and we'll find another time."
 ```
 
 </details>

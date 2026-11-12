@@ -174,8 +174,16 @@ export const EngineAction = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("book_meeting"),
-    /** Slot id returned by a previous "offer_times" action. */
+    /**
+     * Slot id returned by a previous "offer_times" action. When the customer already has a
+     * meeting, booking another slot moves it (rescheduling, C12).
+     */
     slotId: z.string().min(1),
+  }),
+  z.object({
+    /** The customer cancels their booked meeting (C12; added after C4, additive). */
+    type: z.literal("cancel_meeting"),
+    reason: z.string().min(1),
   }),
   z.object({
     type: z.literal("escalate_emergency"),

@@ -242,6 +242,12 @@ export function createMemoryToolRuntime(options: MemoryToolRuntimeOptions): Tool
         state.lead = { ...state.lead, status: "meeting_booked" };
         return done(`Booked: ${slot.label}.`, { slot });
       }
+      case "cancel_meeting":
+        if (state.lead.status !== "meeting_booked") {
+          return no("The customer has no booked meeting to cancel.");
+        }
+        state.lead = { ...state.lead, status: "meeting_requested" };
+        return done("The meeting is cancelled.", { cancelled: true });
       case "end_conversation":
         state.ended = action.disposition ?? "completed";
         return done(null);

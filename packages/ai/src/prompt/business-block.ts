@@ -416,13 +416,69 @@ function hostOf(url: string | null | undefined): string | null {
   }
 }
 
-/** Domains a reply may link to: the business's own website and the configured list. */
+/**
+ * Domains a reply may link to: the business's own website, its scheduling page (Calendly,
+ * when meetings are booked through it: the bot sends single-use links there) and the
+ * configured list.
+ */
 export function allowedLinkDomains(business: BusinessProfile, values: AppSettings): string[] {
   const own = hostOf(business.contact?.websiteUrl);
+  const scheduling = values["scheduling.provider"] === "calendly" ? ["calendly.com"] : [];
   const configured = values["guardrails.allowed_link_domains"].map((domain) =>
     domain.toLowerCase().replace(/^www\./, ""),
   );
-  return [...new Set([...(own === null ? [] : [own.toLowerCase()]), ...configured])];
+  return [...new Set([...(own === null ? [] : [own.toLowerCase()]), ...scheduling, ...configured])];
+}
+
+/**
+ * Whether a reply may carry this link (the output guard's rule). A link to an allowed domain
+ * or below it passes, except that calendly.com, when it is allowed only because meetings are
+ * booked through Calendly, passes only for the pages the bot hands out: a single-use link
+ * (`/d/...`), a booking's reschedule or cancel page, and the business's own scheduling page.
+ * Any other Calendly page (someone else's, one a customer asked to have repeated) is removed.
+ */
+export function linkAllowed(
+  link: string,
+  business: BusinessProfile,
+  values: AppSettings,
+  domains: readonly string[] = allowedLinkDomains(business, values),
+): boolean {
+  const bare = link.replace(/^https?:\/\//i, "").replace(/^www\./i, "");
+  const host = (bare.split(/[/?#]/)[0] ?? "").toLowerCase().replace(/[.,;:!?]+$/, "");
+  if (!domains.some((domain) => host === domain || host.endsWith(`.${domain}`))) return false;
+  const own = hostOf(business.contact?.websiteUrl)?.toLowerCase() ?? null;
+  const configured = values["guardrails.allowed_link_domains"].map((domain) =>
+    domain.toLowerCase().replace(/^www\./, ""),
+  );
+  const byDomain = [...(own === null ? [] : [own]), ...configured].some(
+    (domain) => host === domain || host.endsWith(`.${domain}`),
+  );
+  if (byDomain) return true;
+  // Allowed only as the scheduling page: calendly.com itself, on the bot's own pages.
+  if (host !== "calendly.com") return false;
+  const path = decodeURIPathSafe(
+    (bare.slice(host.length).split(/[?#]/)[0] ?? "").replace(/[.,;:!?]+$/, ""),
+  ).toLowerCase();
+  if (/^\/(d|reschedulings|cancellations)\/[a-z0-9_-]+(\/[a-z0-9_-]+)?\/?$/.test(path)) return true;
+  const page = values["scheduling.calendly_event_type"];
+  if (page === null) return false;
+  let pagePath: string;
+  try {
+    pagePath = new URL(page.includes("://") ? page : `https://${page}`).pathname
+      .toLowerCase()
+      .replace(/\/+$/, "");
+  } catch {
+    return false;
+  }
+  return pagePath.length > 1 && (path === pagePath || path === `${pagePath}/`);
+}
+
+function decodeURIPathSafe(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
 }
 
 function boundaries(input: BusinessBlockInput): string {
@@ -607,6 +663,16 @@ function routing(input: BusinessBlockInput): string {
       referral.length > 0 ? ` You may add: ${referral}` : ""
     } Then call end_conversation with disposition completed.`,
     "- no decision yet: keep qualifying.",
+    values["scheduling.provider"] === "calendly"
+      ? "Meetings are booked through a scheduling page: offer_times returns a single-use link instead of times. Send the link as it is and say the customer picks a time there; the booking reaches the team by itself."
+      : null,
+    `When a meeting is booked: ${values["scheduling.confirmation_guidance"]}`,
+    values["scheduling.allow_reschedule"]
+      ? "A customer who wants another time for their booked meeting: get new times with offer_times and book the one they pick with book_meeting, which moves the meeting. The tool result says when it is too late to change it in chat."
+      : "This business does not move meetings in chat: when a customer wants another time, hand the conversation to a person.",
+    values["scheduling.allow_cancel"]
+      ? "A customer who clearly wants to cancel their meeting: call cancel_meeting, then confirm what its result says."
+      : "This business does not cancel meetings in chat: tell the customer the team will take care of it and hand the conversation to a person.",
     values["routing.existing_customer_outcome"] === "handoff"
       ? "When the person is already a customer with a new job in mind, hand the conversation to a person."
       : null,

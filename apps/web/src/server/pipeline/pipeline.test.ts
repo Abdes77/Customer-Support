@@ -224,6 +224,10 @@ describe("composition", () => {
       "email-sync",
       "email-poll",
       "email-watch-renew",
+      // C12: meeting reminders, the follow-up of a meeting request, and the reminder sweep.
+      "scheduling-reminders",
+      "scheduling-meeting-requested",
+      "scheduling-reminder-sweep",
     ]);
     // Every definition converts to an Inngest function that /api/inngest can serve.
     expect(inngestFunctions(withInngest)).toHaveLength(withInngest.jobs.length);

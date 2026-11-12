@@ -21,6 +21,7 @@ import {
 import type { BusinessContext, BusinessTenant, Database } from "@repo/db";
 import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
 import type { AnyJobEvent, Duration, EventSender, RetryCount } from "@repo/jobs";
+import type { SchedulingDeps } from "@repo/scheduling";
 import type { AppResolvedSettings } from "@repo/settings";
 
 import type { ActionHandlerRegistry } from "./actions";
@@ -235,6 +236,11 @@ export interface PipelineDeps {
   /** Per-account sending limits of a channel (C11: emails per inbox per hour and day). */
   readonly sendThrottles?: readonly SendThrottle[];
   readonly storage?: (tenant: BusinessTenant) => TenantStorage;
+  /**
+   * Calendars and Calendly for the scheduling handlers (C12): OAuth apps, public origin,
+   * `fetch`. Default: from the environment. Tests inject fake vendor APIs here.
+   */
+  readonly scheduling?: Partial<Omit<SchedulingDeps, "db" | "logger" | "events">>;
   readonly logger?: Logger;
   /** Injected clock. Default: the system clock. */
   readonly clock?: () => Date;
@@ -274,7 +280,9 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
     logger,
     leaseSeconds: options.leaseSeconds,
     storage,
+    events: deps.events,
     ...(deps.model === undefined ? {} : { model: deps.model }),
+    ...(deps.scheduling === undefined ? {} : { scheduling: deps.scheduling }),
   });
   return {
     db: deps.db,

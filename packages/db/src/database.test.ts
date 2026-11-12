@@ -34,6 +34,7 @@ import {
   channelConnections,
   channelConnectionSecrets,
   contacts,
+  integrationConnections,
   conversations,
   knowledgeItems,
   messages,
@@ -689,6 +690,31 @@ describe("directory", () => {
         externalAccountId: `${subscription}@other.example`,
         state: { subscriptionId: subscription },
       }),
+    ).rejects.toThrow();
+  });
+
+  it("finds the integration connection of a webhook key, which names exactly one (C12)", async () => {
+    const { a1, b1 } = world.businesses;
+    const key = `hook-${Date.now()}`;
+    const [row] = await t.admin
+      .insert(integrationConnections)
+      .values({ ...a1.tenant, provider: "calendly", config: { webhookKey: key } })
+      .returning({ id: integrationConnections.id });
+    expect(
+      await t.db.directory.findIntegrationConnectionByWebhookKey("calendly", key),
+    ).toMatchObject({ connectionId: row!.id, ...a1.tenant, provider: "calendly" });
+    expect(
+      await t.db.directory.findIntegrationConnectionByWebhookKey("google_calendar", key),
+    ).toBeNull();
+    expect(await t.db.directory.findIntegrationConnectionByWebhookKey("calendly", "")).toBeNull();
+    expect(
+      await t.db.directory.findIntegrationConnectionByWebhookKey("calendly", "other"),
+    ).toBeNull();
+    // A second connection, even of another business, cannot claim the same key.
+    await expect(
+      t.admin
+        .insert(integrationConnections)
+        .values({ ...b1.tenant, provider: "calendly", config: { webhookKey: key } }),
     ).rejects.toThrow();
   });
 

@@ -76,7 +76,21 @@ import {
   type KnowledgeServices,
 } from "@repo/knowledge";
 import { createLeadJobs } from "@repo/leads";
-import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipeline";
+import {
+  createAdapterRegistry,
+  createPipeline,
+  enqueueBotMessage,
+  type Pipeline,
+} from "@repo/pipeline";
+import {
+  createCalendlyWebhookHandler,
+  createSchedulingConnectionService,
+  createSchedulingJobs,
+  type FetchLike as SchedulingFetch,
+  type SchedulingConnectionService,
+  schedulingConfigFromEnv,
+  type SchedulingDeps,
+} from "@repo/scheduling";
 
 /**
  * The infrastructure composition root (ARCHITECTURE §6): which channel adapters this
@@ -98,7 +112,12 @@ import { createAdapterRegistry, createPipeline, type Pipeline } from "@repo/pipe
  * connection services (`metaPages`) behind Facebook Login and the admin panel; email (C11)
  * with its composer, send throttle and channel guard, the jobs `email-sync`, `email-poll` and
  * `email-watch-renew`, the Gmail and Graph notification handlers and the connection services
- * (`email`) behind the OAuth routes, the IMAP connect route and the admin panel.
+ * (`email`) behind the OAuth routes, the IMAP connect route and the admin panel; scheduling
+ * (C12): the jobs `scheduling-reminders`, `scheduling-meeting-requested` and
+ * `scheduling-reminder-sweep`, the calendar connection services (`scheduling`) behind the
+ * calendar OAuth routes, the Calendly token route and the admin panel, and the Calendly
+ * webhook handler. The scheduling action handlers are domain parts: the pipeline's
+ * composition registers them, with this deployment's OAuth apps and `fetch`.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -136,6 +155,13 @@ export interface ServerPipeline {
    * Microsoft 365 are offered when their OAuth apps are configured.
    */
   readonly email: ServerEmail;
+  /** Calendars and Calendly (C12). Google, Outlook and Calendly OAuth need their apps. */
+  readonly scheduling: ServerScheduling;
+}
+
+export interface ServerScheduling {
+  readonly connections: SchedulingConnectionService;
+  readonly calendlyWebhook: ReturnType<typeof createCalendlyWebhookHandler>;
 }
 
 export interface ServerEmail {
@@ -167,6 +193,8 @@ export interface ServerPipelineOptions {
   readonly googleKeys?: () => Promise<JsonWebKeySet>;
   /** Tests shorten the debounce of `email-sync`. */
   readonly emailJobs?: EmailJobOptions;
+  /** Tests inject fakes of Google Calendar, Microsoft Graph, Calendly and their OAuth. */
+  readonly schedulingFetch?: SchedulingFetch;
 }
 
 /**
@@ -412,6 +440,11 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   // The engine, action handlers, knowledge and loaders come from the pipeline's domain
   // composition (packages/pipeline/src/composition), where C4 to C13 register theirs. The
   // model client is infrastructure: it is chosen here, from this deployment's environment.
+  // Calendars and Calendly (C12): the same OAuth apps as email, asked for calendar scopes.
+  const schedulingConfig = {
+    fetch: options.schedulingFetch ?? ((input: string, init?: RequestInit) => fetch(input, init)),
+    ...schedulingConfigFromEnv(env),
+  };
   const modelMode = modelModeFromEnv(env, deployment);
   const model = createModelClientFromEnv({ env, deployment, logger });
   const transcriber =
@@ -448,7 +481,15 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     outboundComposers: [createEmailComposer()],
     sendThrottles: [createEmailSendThrottle()],
     channelGuards: [...(metaPagesDeps === null ? [] : [metaChannelGuard]), emailChannelGuard],
+    // Scheduling (C12): the handlers in the domain composition call the calendars with this.
+    scheduling: schedulingConfig,
   });
+  const schedulingDeps: SchedulingDeps = {
+    db,
+    logger: logger.child({ component: "scheduling" }),
+    events,
+    ...schedulingConfig,
+  };
   ingestEmail = (parsed) => pipeline.ingest(parsed);
   const widget =
     widgetSecret === undefined
@@ -472,7 +513,20 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   const whatsappJobs = whatsappDeps === null ? [] : createWhatsAppJobs(whatsappDeps);
   // `email-sync`, `email-poll`, `email-watch-renew` (C11).
   const emailJobs = createEmailJobs(emailDeps, options.emailJobs);
-  const jobs = [...pipeline.jobs(), ...knowledgeJobs, ...leadJobs, ...whatsappJobs, ...emailJobs];
+  // `scheduling-reminders`, `scheduling-meeting-requested`, `scheduling-reminder-sweep` (C12).
+  // Reminders are stored and sent by the pipeline like any bot message.
+  const schedulingJobs = createSchedulingJobs({
+    ...schedulingDeps,
+    outbound: { enqueue: enqueueBotMessage },
+  });
+  const jobs = [
+    ...pipeline.jobs(),
+    ...knowledgeJobs,
+    ...leadJobs,
+    ...whatsappJobs,
+    ...emailJobs,
+    ...schedulingJobs,
+  ];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
     jobs: mode,
@@ -485,6 +539,11 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     email: {
       gmail: emailDeps.google !== null,
       microsoft: emailDeps.microsoft !== null,
+    },
+    calendars: {
+      google: schedulingConfig.google !== null,
+      microsoft: schedulingConfig.microsoft !== null,
+      calendlyOAuth: schedulingConfig.calendly.app !== null,
     },
   });
   return {
@@ -504,6 +563,10 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
       connections: createEmailConnectionService(emailDeps),
       gmailPush: createGmailPushHandler(emailDeps),
       graphNotifications: createGraphNotificationHandler(emailDeps),
+    },
+    scheduling: {
+      connections: createSchedulingConnectionService(schedulingDeps),
+      calendlyWebhook: createCalendlyWebhookHandler(schedulingDeps),
     },
   };
 }

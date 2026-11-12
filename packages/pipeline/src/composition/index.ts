@@ -3,7 +3,13 @@ import type { ConversationEngine, KnowledgeRetriever, Logger } from "@repo/core"
 import type { BusinessTenant, Database } from "@repo/db";
 import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
 import { createKnowledgePorts } from "@repo/knowledge";
+import type { EventSender } from "@repo/jobs";
 import { createLeadTurnObserver, leadActionHandlers, loadLeadSnapshot } from "@repo/leads";
+import {
+  schedulingActionHandlers,
+  schedulingConfigFromEnv,
+  type SchedulingDeps,
+} from "@repo/scheduling";
 
 import { type ActionHandlerRegistry, createActionHandlerRegistry } from "../actions";
 import type { TurnGuard, TurnLoaders, TurnObserver } from "../deps";
@@ -28,8 +34,10 @@ import { engineActionHandlers } from "./handlers";
  *   turn observer that keeps every conversation's lead scored and sends the `lead.*` events,
  *   all from @repo/leads.
  *
+ * - C12: handlers for `offer_times`, `book_meeting` and `cancel_meeting` (calendars and
+ *   Calendly), from @repo/scheduling.
+ *
  * Later chunks register here, and only here:
- * - C12: handlers for `offer_times` and `book_meeting`.
  * - C13: handlers for `schedule_follow_up`, `escalate_emergency` and `handoff_to_human`;
  *   takeover guards. C17: rate-limit and spend-cap guards.
  */
@@ -57,6 +65,13 @@ export interface DomainCompositionOptions {
   readonly leaseSeconds?: number;
   /** Where attachments are stored. Default: the deployment's object store. */
   readonly storage?: (tenant: BusinessTenant) => TenantStorage;
+  /** Where domain events go (C12: a booking's reminders). Default: none are sent. */
+  readonly events?: EventSender;
+  /**
+   * Calendars and Calendly (C12): the OAuth apps, the public origin and the `fetch` the
+   * vendors are called with. Default: from the environment and the global `fetch`.
+   */
+  readonly scheduling?: Partial<Omit<SchedulingDeps, "db" | "logger" | "events">>;
 }
 
 export function createDomainComposition(options: DomainCompositionOptions): DomainComposition {
@@ -84,6 +99,14 @@ export function createDomainComposition(options: DomainCompositionOptions): Doma
         logger: logger.child({ component: "engine-handlers" }),
       }),
       ...leadActionHandlers({ db, logger: leadLogger }),
+      ...schedulingActionHandlers({
+        db,
+        logger: logger.child({ component: "scheduling" }),
+        fetch: (input, init) => fetch(input, init),
+        ...schedulingConfigFromEnv(),
+        events: options.events ?? null,
+        ...options.scheduling,
+      }),
     ]),
     knowledge: knowledge.retriever,
     loaders: { playbook: knowledge.playbookLoader, lead: loadLeadSnapshot },

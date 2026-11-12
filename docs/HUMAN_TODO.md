@@ -648,6 +648,86 @@ Format of an entry:
   5. Real mail programs' quoting and signature styles beyond the fixtures (Gmail, Outlook,
      Apple Mail, iPhone): the cleaner keeps a forwarded message and cuts only reply quotes.
 
+### 15. Calendars and Calendly: Google Calendar, Outlook, Calendly (C12)
+
+- **What:** scheduling is built and tested without any calendar account: availability,
+  booking, moving, cancelling and reminders run in `pnpm verify` against fakes of the Google
+  Calendar API, Microsoft Graph calendars, Calendly and their OAuth endpoints, with the real
+  database, the real connect and webhook routes and the real jobs. Docs read on 2026-11-12:
+  Google Calendar `events` (resource, `list`, `insert`), Graph `event`, `calendarView` and
+  `POST /events`, Calendly's single-use scheduling links, webhook subscriptions, webhook
+  signatures, the Invitee resource and the rescheduling guide. Nothing reached Google,
+  Microsoft or Calendly. Needed:
+  1. **Google** (the project of entry 14): enable the **Google Calendar API**; add the scopes
+     `https://www.googleapis.com/auth/calendar.readonly` and
+     `https://www.googleapis.com/auth/calendar.events` to the consent screen (both
+     "sensitive": verification without the security assessment of the Gmail scopes); add the
+     redirect URI `<APP_URL>/api/oauth/calendar/google/callback` to the same OAuth client.
+  2. **Microsoft** (the app of entry 14): add the delegated permission `Calendars.ReadWrite`
+     and the Web redirect URI `<APP_URL>/api/oauth/calendar/microsoft/callback`.
+  3. **Calendly**, either way per business:
+     - OAuth (for an agency connecting many clients): register an app at
+       developer.calendly.com with the redirect URI
+       `<APP_URL>/api/oauth/calendar/calendly/callback`; its client id and secret are
+       `CALENDLY_CLIENT_ID` and `CALENDLY_CLIENT_SECRET`, and the app's webhook signing key
+       (shown once at creation; Calendly support re-issues it) is
+       `CALENDLY_WEBHOOK_SIGNING_KEY`.
+     - A personal access token (Calendly, Integrations, API and webhooks) pasted by agency
+       staff (`POST /api/integrations/calendly/token`): no app needed; each connection's
+       webhook gets its own signing key.
+     Then set the business's `scheduling.calendly_event_type` to the event type's page (for
+     example `https://calendly.com/summit-roofing/estimate`).
+  4. Per business: `scheduling.provider` (Google Calendar, Outlook Calendar or Calendly), the
+     routing that books (`routing.*_outcome` = book a meeting), and the meeting settings
+     (hours, length, buffers, lead time, travel rules).
+- **Where:** Vercel environment variables; Google Cloud console; Microsoft Entra admin
+  center; developer.calendly.com or the client's Calendly account.
+- **Variables:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_ID`,
+  `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID` (shared with entry 14),
+  `CALENDLY_CLIENT_ID`, `CALENDLY_CLIENT_SECRET`, `CALENDLY_WEBHOOK_SIGNING_KEY`, `APP_URL`
+  (redirect and webhook URLs; Calendly needs it public https). `CREDENTIALS_ENCRYPTION_KEY`
+  also signs the OAuth state (a derived key).
+- **Live checks that were skipped:**
+  1. Each provider's client against a real account, with a token from Google's OAuth
+     Playground, Graph Explorer or a Calendly personal token (asked for on standard input):
+     `pnpm --filter @repo/scheduling live:check --provider google --write`,
+     `pnpm --filter @repo/scheduling live:check --provider microsoft --write`,
+     `pnpm --filter @repo/scheduling live:check --provider calendly --event-type
+     https://calendly.com/<you>/<event>`. Expect the calendars, the next week's events as
+     busy, tentative or free (put a tentative and an all-day event in the calendar first), a
+     test event created once although the create is sent twice, moved and deleted, and a
+     single-use link.
+  2. A booking through the bot: run the app where Google, Microsoft and Calendly can reach it
+     (a preview deployment, or `pnpm dev` behind `cloudflared tunnel --url
+     http://localhost:3000` with `APP_URL` set to the tunnel), sign in as agency staff and
+     connect from the browser's console until C16's page exists:
+     `fetch("/api/oauth/calendar/google", {method: "POST", headers: {"content-type":
+     "application/json"}, body: JSON.stringify({businessId: "<id>", returnTo: "/"})}).then(r =>
+     r.json()).then(r => location.href = r.authorizationUrl)` (and `microsoft`, `calendly`).
+     Set `scheduling.provider` and a routing that books, then qualify yourself in
+     `/dev/chat` (with `ANTHROPIC_API_KEY`). Expect two or three real free times in your
+     words' preference, an event with the lead report and the conversation link after you
+     pick one, the customer invited when the email is known, "move it to Friday" moving the
+     same event, "cancel it" deleting it, and reminders in the chat before the meeting (or
+     run `scheduling-reminder-sweep` from the Inngest dashboard). With Calendly: a single-use
+     link in the reply, and after booking on it the `bookings` row confirmed within seconds.
+- **Unverified details (check them in live check 2):**
+  1. **Not settled by Calendly's docs:** whether `utm_content` added to a single-use link
+     (`POST /scheduling_links`, a `https://calendly.com/d/...` URL) comes back in the
+     invitee's `tracking`. Calendly's developer FAQ (re-read 2026-11-12) documents UTM
+     parameters on scheduling links reaching `tracking` in the webhook payload and the List
+     Event Invitees endpoint, but says nothing about single-use links. The bot finds the
+     conversation only by this token. If it does not come back, every Calendly booking stays
+     `pending` (the delivery is logged `calendly.unmatched`) and the team gets the "no meeting
+     booked yet" alert; the fallback would then have to be matching by the invitee's email.
+     Also check whether a rescheduled invitee keeps the original `tracking` (the code does
+     not rely on it: a reschedule is matched by `old_invitee`).
+  2. How Graph returns all-day events when asked for UTC times (midnight of the event's
+     own date, or shifted by the zone's offset): both forms are read as the same days.
+  3. Google's 409 for a repeated client-chosen event id, and Graph's `transactionId`
+     returning the first event instead of a second one (live check 1 shows both).
+  4. That Calendly answers 403 "already canceled" for a second cancellation.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -674,11 +754,8 @@ already listed and described in `.env.example`.
 | Account | Needed for | Variables (group in `.env.example`) | Entry added by |
 | --- | --- | --- | --- |
 | Meta developer app, business verification, App Review | WhatsApp, Instagram, Messenger | Meta | C9, C10, C18 |
-| Google Cloud project (OAuth client, Pub/Sub topic) | Google Calendar (Gmail: entry 14) | Google | C12 |
-| Microsoft Entra app registration | Outlook calendar (mail: entry 14) | Microsoft | C12 |
 | Twilio account and number | Alert SMS, escalation calls | Twilio | C13 |
 | SMTP sender for alerts | Alert email | Alert delivery | C13 |
-| Calendly developer app | Calendly scheduling links | Calendly | C12 |
 | HubSpot, GoHighLevel, Jobber, Housecall Pro, ServiceTitan developer accounts | CRM connectors | CRM connectors | C14 |
 | Sentry project | Error tracking | Observability | C17 |
 | Vercel project | Hosting (root directory `apps/web`, Node.js 22, pnpm) | all of the above | C18 |
@@ -738,6 +815,9 @@ already listed and described in `.env.example`.
   against fakes of their APIs. No request reached Google or Microsoft (entry 14). The email
   capabilities in `CHANNEL_CAPABILITIES` are ours to choose: one email per reply, up to
   100,000 characters, images and files as attachments, no messaging window.
+- **Calendars and Calendly (C12).** Built from Google's, Microsoft's and Calendly's docs
+  read on 2026-11-12, tested against fakes of their APIs and OAuth endpoints; no request
+  reached them (entry 15).
 - **Supabase (C1).** The schema, the row-level security and both access paths are tested on
   plain PostgreSQL 16 with a compatibility bootstrap that creates Supabase's roles and
   `auth.uid()`. Not yet seen on a real project: the `postgres` role switching to

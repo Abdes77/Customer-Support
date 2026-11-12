@@ -12,7 +12,7 @@ import { describeSituation } from "../engine/situation";
 import type { ModelMessageParam } from "../model/types";
 import { testBusiness, testInput, testTurn } from "../testing/fixtures";
 import { buildPrompt, withOperatorNote } from "./build";
-import { renderBusinessBlock } from "./business-block";
+import { allowedLinkDomains, renderBusinessBlock } from "./business-block";
 import { renderHistory } from "./conversation";
 import { CURRENT_REPLY_PROMPT, PROMPT_VERSION, RENDER_VERSION } from "./core";
 import { renderFingerprint } from "./fingerprint";
@@ -30,6 +30,10 @@ const RENDER_FINGERPRINTS: Readonly<Record<number, string>> = {
   // sample request has neither (default settings, no pinned fact), so its hash is r1's;
   // `playbook-block.test.ts` pins the new rendering.
   2: "846fd63b96ef65accf22276b91bb6f563512670ff7caf10ff1df849a5bfcc822",
+  // r3 (C12): the `cancel_meeting` tool, `book_meeting` moves an existing meeting, and the
+  // routing section states the confirmation guidance and the rescheduling and cancelling
+  // rules (and, with Calendly, that offer_times returns a link, which may be sent).
+  3: "91819b31464a875e38950a7b863d512ac10c44486d9e133c6f19ba1265d9f20e",
 };
 
 function build(
@@ -80,7 +84,7 @@ describe("request layout (ARCHITECTURE §5)", () => {
     const { tools } = build();
     const names = tools.map((tool) => tool.name);
     expect(names).toEqual([...names].sort());
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
     const check = (schema: unknown, path: string) => {
       if (schema === null || typeof schema !== "object") return;
       const node = schema as Record<string, unknown>;
@@ -455,6 +459,29 @@ describe("the business section", () => {
       expect(block).not.toMatch(/\bnull\b/);
       expect(block.endsWith("</business>")).toBe(true);
     }
+  });
+
+  it("states how meetings are confirmed, moved and cancelled, and allows Calendly links (C12)", () => {
+    const block = render({ "scheduling.provider": "google_calendar" });
+    expect(block).toContain("When a meeting is booked: Confirm the day, date and time");
+    expect(block).toContain("which moves the meeting");
+    expect(block).toContain("call cancel_meeting");
+    expect(block).not.toContain("calendly.com");
+    const strict = render({
+      "scheduling.allow_reschedule": false,
+      "scheduling.allow_cancel": false,
+    });
+    expect(strict).toContain("does not move meetings in chat");
+    expect(strict).toContain("does not cancel meetings in chat");
+    const calendly = render({
+      "scheduling.provider": "calendly",
+      "scheduling.calendly_event_type": "https://calendly.com/summit/estimate",
+    });
+    expect(calendly).toContain("offer_times returns a single-use link");
+    expect(calendly).toContain("calendly.com");
+    expect(
+      allowedLinkDomains(business, settingsWith({ "scheduling.provider": "calendly" }).values),
+    ).toContain("calendly.com");
   });
 
   it("shows only the facts of the categories kept in every reply", () => {

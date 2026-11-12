@@ -178,6 +178,7 @@ function check(action: EngineAction, context: ToolRunContext): Check {
       }
       return { kind: "run", action, notes: [] };
     }
+    case "cancel_meeting":
     case "schedule_follow_up":
     case "handoff_to_human":
     case "mark_not_a_fit":
@@ -228,6 +229,7 @@ function guidance(action: EngineAction, outcome: ActionOutcome, context: ToolRun
         : [];
     case "analyze_photos":
     case "book_meeting":
+    case "cancel_meeting":
     case "offer_times":
     case "schedule_follow_up":
     case "mark_not_a_fit":
