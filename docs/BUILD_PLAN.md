@@ -285,6 +285,15 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   scoring code), calendars and Calendly (C12), integration screens (C16).
 - **Must deliver:** connectors behind `IntegrationConnector`, each with contract tests on
   recorded fixtures; subscribers to `lead.*`; errors readable in the admin panel.
+- **Delivered, for C16 and C17:** `@repo/integrations` (the five CRM connectors and the signed
+  webhook, the mapping, the delivery journal with retries, `createIntegrationJobs`,
+  `createIntegrationService`, `createSafePoster`, `verifyWebhookSignature`; `/testing` with
+  fakes of the five CRMs and a local receiver); migration 0013 (`integration_records`, the
+  journal's retry columns, `agency_secrets` with `db.secrets.agency`); the event
+  `integrations.delivery_requested`; `getIntegrations()` in `apps/web/src/server/integrations`
+  and the routes `POST /api/oauth/crm/{provider}` (+ callback) and
+  `POST /api/integrations/crm/{provider}` for C16's integration page; `docs/INTEGRATIONS.md`.
+  ARCHITECTURE §2 "As built (C14)" has the rest.
 
 ### C15 · Admin core
 

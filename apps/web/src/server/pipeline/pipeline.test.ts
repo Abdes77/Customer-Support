@@ -242,6 +242,14 @@ describe("composition", () => {
       "handoff-takeover-release",
       "handoff-follow-up",
       "handoff-sweep",
+      "integrations-lead-qualified",
+      "integrations-lead-meeting-requested",
+      "integrations-lead-handoff",
+      "integrations-lead-disqualified",
+      "integrations-lead-emergency",
+      "integrations-booking-changed",
+      "integrations-deliver",
+      "integrations-sweep",
     ]);
     // Every definition converts to an Inngest function that /api/inngest can serve.
     expect(inngestFunctions(withInngest)).toHaveLength(withInngest.jobs.length);

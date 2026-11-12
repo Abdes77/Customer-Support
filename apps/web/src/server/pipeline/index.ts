@@ -81,6 +81,16 @@ import {
   type TwilioWebhookHandlers,
 } from "@repo/handoff";
 import {
+  createIntegrationJobs,
+  createIntegrationService,
+  createSafePoster,
+  type FetchLike as IntegrationFetch,
+  integrationConfigFromEnv,
+  type IntegrationDeps,
+  type IntegrationService,
+  type SafePoster,
+} from "@repo/integrations";
+import {
   createKnowledgeJobs,
   createKnowledgeServices,
   type KnowledgeServices,
@@ -133,7 +143,11 @@ import {
  * follow-ups and the sweeper (`handoff-*`), with this deployment's alert transports (Twilio,
  * SMTP, the agency's WhatsApp number); the admin panel's service (`handoff.service`) and the
  * handlers of Twilio's callbacks (`handoff.twilio`). Its action handlers, observers, guard and
- * send gate are domain parts registered by the pipeline's composition.
+ * send gate are domain parts registered by the pipeline's composition. Integrations (C14):
+ * the subscribers to `lead.*` and `scheduling.booking_changed`, the deliveries to CRMs and
+ * outgoing webhooks with their backoff, and the sweeper (`integrations-*`), with this
+ * deployment's CRM apps; the admin panel's service (`integrations`) behind the CRM connect
+ * routes.
  */
 export interface ServerPipeline {
   readonly pipeline: Pipeline;
@@ -175,6 +189,8 @@ export interface ServerPipeline {
   readonly scheduling: ServerScheduling;
   /** Takeover, emergencies, alerts and follow-ups (C13). */
   readonly handoff: ServerHandoff;
+  /** CRMs and outgoing webhooks (C14): what the admin panel and the connect routes call. */
+  readonly integrations: IntegrationService;
 }
 
 export interface ServerHandoff {
@@ -226,6 +242,10 @@ export interface ServerPipelineOptions {
   readonly alertTransports?: AlertTransports;
   /** Tests inject a clock for handoff's timing. */
   readonly clock?: () => Date;
+  /** Tests inject fakes of the CRMs' APIs and OAuth endpoints. */
+  readonly integrationsFetch?: IntegrationFetch;
+  /** Tests inject a poster that reaches a local webhook receiver. */
+  readonly webhookPoster?: SafePoster;
 }
 
 /**
@@ -563,6 +583,17 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     ...(options.clock === undefined ? {} : { clock: options.clock }),
   };
   const handoffJobs = createHandoffJobs(handoffDeps);
+  // CRMs and outgoing webhooks (C14): every webhook goes through the guarded poster.
+  const integrationDeps: IntegrationDeps = {
+    db,
+    logger: logger.child({ component: "integrations" }),
+    events,
+    fetch: options.integrationsFetch ?? ((input: string, init?: RequestInit) => fetch(input, init)),
+    poster: options.webhookPoster ?? createSafePoster(),
+    ...integrationConfigFromEnv(env),
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
+  };
+  const integrationJobs = createIntegrationJobs(integrationDeps);
   const jobs = [
     ...pipeline.jobs(),
     ...knowledgeJobs,
@@ -571,6 +602,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     ...emailJobs,
     ...schedulingJobs,
     ...handoffJobs,
+    ...integrationJobs,
   ];
   if (runner !== null) runner.register(jobs);
   logger.info("pipeline.ready", {
@@ -595,6 +627,12 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
       voice: handoffDeps.transports.voice !== null,
       email: handoffDeps.transports.email !== null,
       whatsapp: handoffDeps.transports.whatsapp !== null,
+    },
+    crms: {
+      hubspot: integrationDeps.apps.hubspot !== null,
+      gohighlevel: integrationDeps.apps.gohighlevel !== null,
+      jobber: integrationDeps.apps.jobber !== null,
+      servicetitan: integrationDeps.apps.servicetitan !== null,
     },
   });
   return {
@@ -627,6 +665,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
       }),
       deps: handoffDeps,
     },
+    integrations: createIntegrationService(integrationDeps),
   };
 }
 

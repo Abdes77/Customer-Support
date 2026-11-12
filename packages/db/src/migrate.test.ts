@@ -65,6 +65,7 @@ describe("migrations on an empty database", () => {
     expect(rows.map((row) => row["name"])).toEqual([
       "agencies",
       "agency_memberships",
+      "agency_secrets",
       "alerts",
       "api_keys",
       "attachments",
@@ -85,6 +86,7 @@ describe("migrations on an empty database", () => {
       "integration_connection_secrets",
       "integration_connections",
       "integration_events",
+      "integration_records",
       "internal_notes",
       "knowledge_items",
       "lead_events",

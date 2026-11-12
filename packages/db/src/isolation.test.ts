@@ -495,6 +495,13 @@ describe.each(agencyEntries.map((entry) => [entry.name, entry] as const))(
           const total = await count(t.admin as unknown as Transaction, entry, inAgency(agency));
           expect(total).toBeGreaterThan(0);
 
+          if (entry.user.read === "nobody") {
+            // No policy for users at all (agency secrets): the table cannot even be queried.
+            expect(await visibleCount(tx, entry, inAgency(agency)), `${where}: no access`).toBe(
+              "no privilege",
+            );
+            continue;
+          }
           const visible = await count(tx, entry, inAgency(agency));
           expect(visible, `${where}: read`).toBe(
             levelAllows(entry.user.read, staffRole) ? total : 0,

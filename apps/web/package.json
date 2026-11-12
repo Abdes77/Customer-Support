@@ -23,6 +23,7 @@
     "@repo/core": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/handoff": "workspace:*",
+    "@repo/integrations": "workspace:*",
     "@repo/jobs": "workspace:*",
     "@repo/knowledge": "workspace:*",
     "@repo/leads": "workspace:*",

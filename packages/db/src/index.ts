@@ -87,7 +87,7 @@ export {
   SecretDecryptionError,
   secretKeyId,
 } from "./crypto/secrets";
-export type { SecretStore, SecretStores } from "./repositories/secrets";
+export type { AgencySecretStore, SecretStore, SecretStores } from "./repositories/secrets";
 export { generateApiKey, type GeneratedApiKey, hashApiKey, looksLikeApiKey } from "./api-keys";
 
 // Audit log

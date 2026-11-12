@@ -191,6 +191,9 @@ importers:
       '@repo/handoff':
         specifier: workspace:*
         version: link:../../packages/handoff
+      '@repo/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       '@repo/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs
@@ -653,6 +656,18 @@ importers:
       '@repo/core':
         specifier: workspace:*
         version: link:../core
+      '@repo/db':
+        specifier: workspace:*
+        version: link:../db
+      '@repo/jobs':
+        specifier: workspace:*
+        version: link:../jobs
+      '@repo/settings':
+        specifier: workspace:*
+        version: link:../settings
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -660,6 +675,9 @@ importers:
       eslint:
         specifier: 'catalog:'
         version: 10.14.0(jiti@2.7.0)
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
       typescript:
         specifier: 'catalog:'
         version: 6.0.3

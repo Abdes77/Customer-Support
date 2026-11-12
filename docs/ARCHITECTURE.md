@@ -746,6 +746,56 @@ the routes `/api/handoff/twilio/{sms|voice|status}` and `/api/handoff/ack/{token
   `emergency.no_contacts`, `emergency.chain_failed` are the alerting hooks; the readiness
   check can report `emergencyReadiness()` per business.
 
+### As built (C14)
+
+Integrations: `packages/integrations` (connectors, the framework, the jobs and the admin
+panel's service; `/testing` for fakes of the five CRMs' APIs, a local webhook receiver and a
+sample payload), the routes `POST /api/oauth/crm/{hubspot|gohighlevel|jobber}` (+
+`/callback`) and `POST /api/integrations/crm/{provider}` in `apps/web`. Setup per vendor and
+what was checked against which docs: `docs/INTEGRATIONS.md`.
+
+- **Connectors** (`IntegrationConnector`, stateless, injected `fetch`, vendor answers checked
+  with Zod, failures as `ConnectorError`): HubSpot (contact found by email then phone, created
+  or updated; report note kept in place), GoHighLevel (contact upsert; note; optional
+  opportunity), Jobber (GraphQL with variables only: client, request, note), Housecall Pro
+  (customer, lead with the report), ServiceTitan (a booking through the tenant's booking
+  provider, `externalId` = our key), and the generic webhook. Factories take the deployment's
+  apps (`integrationConfigFromEnv`); `createConnectorRegistry` builds all six.
+- **Mapping** (`src/mapping.ts`): a closed catalogue of payload paths, transforms, the business's
+  `integrations.field_mapping.<crm>` or the connector's default. `loadLeadSyncPayload` builds
+  the canonical payload (lead, fields, newest report, contact details from the bot's records
+  first, ZIP, newest booking, transcript when asked).
+- **Deliveries:** `integrations-lead-*` (one job per lead event) and
+  `integrations-booking-changed` plan one `integration_events` row per CRM connection and
+  webhook target (key: event + connection) and emit `integrations.delivery_requested`;
+  `integrations-deliver` (limit 2 per connection) runs `deliverOnce` with sleeps between
+  attempts. An attempt claims the row (`locked_until`); then, in a transaction that commits
+  before any vendor call, refreshes credentials under the secret's lock when they expire and
+  marks the lead's `integration_records` row "push under way"; then calls the vendor holding
+  that row's lock, storing the external id, the connector's state and a fingerprint in the
+  same transaction (an unchanged update is skipped). An attempt that finds an earlier mark
+  without an external id passes `PushRecovery` to `pushLead`, and the connector looks for the
+  record the lost push made before creating one (DECISIONS 244). Outcomes, errors (vendor
+  text redacted) and the next attempt are written after the vendor answered; a 401/403 marks
+  the CRM connection `error`, and its failed deliveries are queued again when it is connected
+  again or a test passes. `integrations-sweep` restarts lost runs.
+- **Webhooks:** targets are settings; each gets a connection row per business (status; the
+  business target's secret) and an agency target's secret is in `agency_secrets`
+  (`db.secrets.agency`). Every request goes through `createSafePoster` (the crawler's address
+  rules, the socket pinned, no redirects) and is signed `X-HSRB-Signature: t=..,v1=..`.
+- **For C16:** `getIntegrations()` in `apps/web/src/server/integrations`: `catalogue`,
+  `mappingSources`, `list`, `updateConfig` (GoHighLevel pipeline, ServiceTitan booking
+  provider ...), `test`, `disconnect`, `deliveries`, `retry`, `previewMapping`,
+  `webhookTargets`, `testWebhook`, `checkWebhookUrl`, and for agency admins only (the
+  service checks the `UserAccess` it is given) `revealWebhookSecret` / `rotateWebhookSecret`
+  (+ agency versions). OAuth starts with
+  `POST /api/oauth/crm/{provider}` (JSON `{ businessId, returnTo }`, answer
+  `{ authorizationUrl }` plus the flow's cookie) and returns to `returnTo?crm=connected|...`;
+  keys with `POST /api/integrations/crm/{provider}` (`{ businessId, fields, config? }`).
+  **For C17:** the poster's rules (`net/safe-post.ts`) and the signing are the SSRF and replay
+  answers for outgoing webhooks; `integration_events` rows and `integration_connections.last_error`
+  hold only connectors' safe messages.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -903,7 +953,10 @@ Rules for every function:
 | `email-sync` | `email.sync_requested` | debounce and limit 1 per inbox; reads from the stored cursor, batches of 25 | C11 |
 | `email-poll` | cron, every minute | IMAP inboxes, and Gmail/Graph ones without push or not read for 15 minutes | C11 |
 | `email-watch-renew` | cron, hourly | renews Gmail watches (daily) and Graph subscriptions before expiry | C11 |
-| `integrations-sync` | `lead.*` | per connection, idempotency key, backoff | C14 |
+| `integrations-lead-*` | `lead.*` (one function per event) | plan one delivery per CRM connection and webhook target (idempotency key = event + connection) | C14 |
+| `integrations-booking-changed` | `scheduling.booking_changed` | updates of records a CRM already has; webhook targets of "meeting" | C14 |
+| `integrations-deliver` | `integrations.delivery_requested` | limit 2 per connection; attempts with 1/5/15/60/240-minute pauses; journal row checked first | C14 |
+| `integrations-sweep` | cron, every five minutes | restarts deliveries whose run was lost | C14 |
 | `knowledge-playbook-generate` | `playbook.generation_requested` | limit 1 per segment; one step per model call; progress on `playbook_generations` | C6 |
 | `knowledge-import` | `knowledge.import_requested` | website crawl; limit 1 per business; one step per page; progress on `import_runs` | C6 |
 | `scheduling-reminders` | `scheduling.booking_changed` | limit 1 per booking; `sleepUntil` per reminder; a later version of the booking makes the run send nothing | C12 |
@@ -927,7 +980,7 @@ Event names reserved so far are the keys of `EVENT_CATALOG`: `message.received`,
 `conversation.takeover_released`, `lead.qualified`, `lead.meeting_requested`, `lead.handoff`,
 `lead.disqualified`, `lead.emergency`, `playbook.generation_requested`,
 `knowledge.import_requested`, `email.sync_requested` (C11), `scheduling.booking_changed` (C12),
-`conversation.turn_requested`, `handoff.escalation_started` and `handoff.follow_up_planned` (C13). A chunk that needs a new cross-package event adds its
+`conversation.turn_requested`, `handoff.escalation_started` and `handoff.follow_up_planned` (C13), `integrations.delivery_requested` (C14). A chunk that needs a new cross-package event adds its
 schema under `packages/core/src/events` and registers it in the catalogue.
 
 Vercel limits one function invocation, so one Inngest step must finish within the route's
@@ -1222,8 +1275,8 @@ never edited). Expected tables, by area:
 | Conversations | contacts, contact identities, conversations (turn lease, last inbound time, `handled_through_seq` watermark), messages (unique provider id, sequence, status, trace id), attachments, takeover locks, internal notes, conversation turns (one row per reply turn, C3) |
 | Leads | leads, lead fields (value, confidence, evidence), lead reports, routing decisions (`sequence`), lead events (outbox, C5) |
 | Model | model calls (inputs, outputs, tokens, latency, cache reads) |
-| Integrations | integration connections, integration connection secrets, integration event log, bookings |
-| Operations | scheduled jobs, alerts, escalations, dead letters, rate-limit and spend counters, audit log |
+| Integrations | integration connections, integration connection secrets, integration event log (the delivery journal), integration records (C14), bookings |
+| Operations | scheduled jobs, alerts, escalations, dead letters, rate-limit and spend counters, audit log, agency secrets (C14) |
 
 Vocabulary to share: message direction `inbound` / `outbound`; author `customer`, `bot`,
 `human_agent`; outbound status `queued`, `sending`, `sent`, `delivered`, `read`, `failed`,

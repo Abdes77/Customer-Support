@@ -50,7 +50,12 @@ export type ConnectorAuth =
     }
   | { readonly type: "none" };
 
-/** The canonical lead payload every connector receives. Field mappings read from it by path. */
+/**
+ * The canonical lead payload every connector receives. Field mappings read from it by path.
+ * Every string that comes from the conversation (names, addresses, lead fields, the report,
+ * the transcript) is customer-written: connectors send it as data, encoded the way the
+ * vendor's API expects (JSON values, GraphQL variables), never spliced into a query or markup.
+ */
 export interface LeadSyncPayload {
   readonly lead: {
     readonly id: LeadId;
@@ -63,6 +68,8 @@ export interface LeadSyncPayload {
     readonly report: { readonly summary: string; readonly markdown: string } | null;
     readonly createdAt: IsoDateTime;
     readonly updatedAt: IsoDateTime;
+    /** C14: the event that caused this sync ("lead.qualified", "booking.confirmed", ...). */
+    readonly trigger?: string;
   };
   readonly contact: {
     readonly id: ContactId;
@@ -70,6 +77,11 @@ export interface LeadSyncPayload {
     readonly phone: string | null;
     readonly email: string | null;
     readonly address: string | null;
+    /** C14: `name` split at the last space (a single word is the first name). */
+    readonly firstName?: string | null;
+    readonly lastName?: string | null;
+    /** C14: a five-digit ZIP code found in the address or the service-area answer. */
+    readonly postalCode?: string | null;
   };
   readonly business: { readonly id: BusinessId; readonly name: string };
   readonly conversation: {
@@ -78,6 +90,33 @@ export interface LeadSyncPayload {
     /** Link to the conversation in the admin panel. */
     readonly url: string;
   };
+  /** C14: the lead's newest booking (C12), when it has one. */
+  readonly booking?: {
+    readonly id: string;
+    readonly status: string;
+    readonly startsAt: IsoDateTime | null;
+    readonly endsAt: IsoDateTime | null;
+    readonly timezone: string | null;
+  } | null;
+  /**
+   * C14: the conversation as plain text, oldest first, only when the settings ask for it
+   * (`integrations.include_transcript`, `integrations.webhook_include_transcript`).
+   */
+  readonly transcript?: string | null;
+}
+
+/** C14: what the settings of the business ask of every push (the same for every CRM). */
+export interface ConnectorSyncOptions {
+  /** `integrations.lead_source`. */
+  readonly leadSource: string;
+  /** `integrations.tags`. */
+  readonly tags: readonly string[];
+  /** Add the written report as a note (`integrations.include_report`). */
+  readonly includeReport: boolean;
+  /** Add the transcript as a note (`integrations.include_transcript`). */
+  readonly includeTranscript: boolean;
+  /** `integrations.duplicates`: reuse a contact with the same email or phone, or always create. */
+  readonly duplicates: "update_existing" | "always_create";
 }
 
 /** One row of a field mapping: copy `source` (a dot path into LeadSyncPayload) to `target`. */
@@ -111,6 +150,8 @@ export interface ConnectorContext<TCredentials, TConfig> {
   readonly credentials: TCredentials;
   readonly config: TConfig;
   readonly fieldMapping: FieldMapping;
+  /** C14: the business's integration settings for this push. */
+  readonly options: ConnectorSyncOptions;
   /** Injected so contract tests can replay recorded fixtures. */
   readonly fetch: typeof fetch;
   readonly logger: Logger;
@@ -121,6 +162,24 @@ export interface ExternalRecord {
   readonly externalId: string;
   /** Deep link to the record in the external system, when it has one. */
   readonly externalUrl: string | null;
+  /**
+   * C14: ids of related records the connector needs later (the contact behind a request, a
+   * note it keeps current). Stored with the record and handed back to `updateLead`. Ids only.
+   */
+  readonly state?: Readonly<Record<string, string>>;
+}
+
+/**
+ * C14: an earlier push of this lead to this connection started at `since` and its answer was
+ * never stored (the vendor may have accepted it and our database write failed, or the process
+ * died mid-call). Before creating anything, the connector looks for what that push may have
+ * created (by our external reference, the email or the phone) and adopts it. `isKnownRecord`
+ * says whether an external id is already stored for another lead of this connection, so a
+ * record that belongs to an earlier lead of the same customer is never adopted.
+ */
+export interface PushRecovery {
+  readonly since: Date;
+  isKnownRecord(externalId: string): Promise<boolean>;
 }
 
 export interface IntegrationConnector<TCredentials = unknown, TConfig = unknown> {
@@ -141,7 +200,11 @@ export interface IntegrationConnector<TCredentials = unknown, TConfig = unknown>
   pushLead(
     context: ConnectorContext<TCredentials, TConfig>,
     payload: LeadSyncPayload,
-    options: { readonly idempotencyKey: string },
+    options: {
+      readonly idempotencyKey: string;
+      /** C14: set when an earlier push of this lead may have reached the vendor unrecorded. */
+      readonly recovery?: PushRecovery;
+    },
   ): Promise<Result<ExternalRecord, ConnectorError>>;
 
   /** Updates a lead that was pushed before. */
@@ -149,11 +212,21 @@ export interface IntegrationConnector<TCredentials = unknown, TConfig = unknown>
     context: ConnectorContext<TCredentials, TConfig>,
     externalId: string,
     payload: LeadSyncPayload,
-    options: { readonly idempotencyKey: string },
+    options: {
+      readonly idempotencyKey: string;
+      /** C14: the record as stored after the last push, with the connector's state. */
+      readonly record?: ExternalRecord;
+    },
   ): Promise<Result<ExternalRecord, ConnectorError>>;
 
-  /** Exchanges a refresh token for new credentials (OAuth connectors only). */
+  /**
+   * Exchanges a refresh token (or client credentials) for new credentials. The framework calls
+   * it under the connection's secret lock when `credentialsExpireSoon` says so.
+   */
   refreshCredentials?(
     context: ConnectorContext<TCredentials, TConfig>,
   ): Promise<Result<TCredentials, ConnectorError>>;
+
+  /** C14: true when the stored credentials must be refreshed before the next call. */
+  credentialsExpireSoon?(credentials: TCredentials, now: Date): boolean;
 }

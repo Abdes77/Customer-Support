@@ -836,6 +836,97 @@ Format of an entry:
      when a key was pressed; it does not say whether the query string is kept. Live check 2
      (press 1) settles it: "The emergency is acknowledged" means it is.
 
+### 17. CRMs and outgoing webhooks: HubSpot, GoHighLevel, Jobber, Housecall Pro, ServiceTitan (C14)
+
+- **What:** the five CRM connectors and the signed outgoing webhook are built and tested
+  without any vendor account: `pnpm verify` runs every connector's contract tests against
+  recorded-style fakes of the vendors' APIs (`packages/integrations/src/testing`), the
+  deliveries, retries, journal and sweeper against the real database and jobs, the OAuth and
+  key routes of `apps/web`, and the webhook against a local receiver that checks the
+  signature. Nothing reached a CRM. `docs/INTEGRATIONS.md` says, per vendor, what was checked
+  against its docs on 2026-11-12 and what was written from memory; in short:
+  - **HubSpot:** contacts, notes and OAuth read in the docs; contact search and the
+    account-info test call from memory.
+  - **GoHighLevel:** contact upsert, update, notes, the `Version` header (`v3`) and rate
+    limits read; the base URL, OAuth endpoints, note update, opportunities and the location
+    call from memory.
+  - **Jobber:** the Developer Center still answers with a bot challenge (retried in the C14
+    review). Not read in the reference docs, so per endpoint:
+    - confirmed by Jobber's own app templates on GitHub (GetJobber/Jobber-AppTemplate-RailsAPI
+      and -React): the GraphQL endpoint, bearer token, `X-JOBBER-GRAPHQL-VERSION` header, the
+      authorize page `/api/oauth/authorize`, JWT access tokens with an `exp` claim;
+    - confirmed by the schema dump in that template (API version 2022-03-10, older than the
+      2025-04-16 we send): `account`, `clients(searchTerm)` with emails and phones,
+      `clientCreate` and its input fields, `clientEdit` (no emails/phones), `clientCreateNote`,
+      `requests(filter: { clientId, createdAt })`;
+    - **in doubt:** `requestCreate` — that schema requires `customFormInput: { formId }`,
+      which we do not send; if the live check fails here, a form id has to be added;
+    - from memory: the token endpoint `/api/oauth/token` and refresh-token rotation, the
+      version value 2025-04-16 (from search results), throttling errors and rate limits.
+  - **Housecall Pro:** read in the C14 review through Stoplight's API (the OpenAPI file of
+    project `housecall-public-api` and the Authentication article): the `Token` header, `GET
+    /customers?q=`, `POST /customers` and its fields, `PUT /customers/{id}`, `POST /leads`
+    and its fields, `GET /leads?customer_id=`, `GET /company`. One fix followed: the address
+    no longer carries an undocumented `type`. Not in the docs: an Idempotency-Key header (sent,
+    not relied on), the web-app link to a customer, rate limits.
+  - **ServiceTitan:** read in the C14 review: the CRM API's OpenAPI document that the
+    Developer Portal loads (`developer.servicetitan.io/api/docs/apis/tenant-crm`): `ST-App-Key`,
+    the token URL and the `tn.crm.bookings:r|w` scopes, create, update and list of bookings
+    for a booking provider with their schemas. Fixes followed: an address is sent only when
+    street, city, state and ZIP are all mapped (the schema requires them), an update no
+    longer sends contacts (not in the update schema) and sends every address field, and
+    `externalId` is now our lead reference `hsrb-lead-<lead id>`, looked up before creating
+    when an earlier push's answer was lost. From integrators' guides only: the integration
+    environment's auth host.
+- **Accounts, approvals and variables** (all optional: a CRM without its variables offers
+  only what needs none):
+  1. **HubSpot:** for OAuth, a public app in a HubSpot developer account (free) with redirect
+     URL `{APP_URL}/api/oauth/crm/hubspot/callback` and scopes `oauth
+     crm.objects.contacts.read crm.objects.contacts.write`; set `HUBSPOT_CLIENT_ID`,
+     `HUBSPOT_CLIENT_SECRET`. No marketplace review is needed for the agency's own accounts.
+     Without it, businesses paste a private app token (Settings → Integrations → Private apps).
+  2. **GoHighLevel:** for OAuth, a Marketplace app (sub-account level, private) with redirect
+     URL `{APP_URL}/api/oauth/crm/gohighlevel/callback` and scopes `contacts.readonly
+     contacts.write opportunities.write locations.readonly`; set `GOHIGHLEVEL_CLIENT_ID`,
+     `GOHIGHLEVEL_CLIENT_SECRET`. Without it, a sub-account's Private Integration Token and
+     location id.
+  3. **Jobber:** an app in Jobber's Developer Center (OAuth only; scopes: clients read and
+     write, requests write) with callback `{APP_URL}/api/oauth/crm/jobber/callback`; set
+     `JOBBER_CLIENT_ID`, `JOBBER_CLIENT_SECRET`. Unpublished apps can be installed by the
+     agency's own accounts; the App Marketplace needs Jobber's review.
+  4. **Housecall Pro:** nothing for the agency; each business needs the **MAX plan**, an API
+     key (App Store → API), and **API Leads** switched on in the Job Inbox settings.
+  5. **ServiceTitan:** **approval required.** Create the app in ServiceTitan's Developer
+     Portal (Integration environment first; CRM bookings scopes), get it approved for
+     Production, set `SERVICETITAN_APP_KEY` and `SERVICETITAN_ENVIRONMENT=production`. Each
+     tenant connects the app (API Application Access), gives the business its tenant id,
+     client id and secret, and creates a booking provider for us.
+- **Live checks** (secrets are read from standard input, never printed; `--write` creates a
+  test lead "HSRB Test Lead", test@example.com, then updates it: delete it afterwards):
+  ```
+  pnpm --filter @repo/integrations live:check --provider hubspot --write
+  pnpm --filter @repo/integrations live:check --provider gohighlevel --location <location id> --write
+  pnpm --filter @repo/integrations live:check --provider jobber --write
+  pnpm --filter @repo/integrations live:check --provider housecall_pro --write
+  SERVICETITAN_APP_KEY=... pnpm --filter @repo/integrations live:check --provider servicetitan \
+    --tenant <id> --client-id <id> --booking-provider <id> --environment integration --write
+  pnpm --filter @repo/integrations live:check --provider webhook --url https://hooks.zapier.com/... --write
+  ```
+  Then the full path once per CRM: connect it in the admin panel (OAuth or key), set
+  `integrations.sync_events`, finish a qualifying conversation in `/dev/chat`, and see the
+  record, its note and (GoHighLevel with a pipeline) the opportunity appear; book a meeting
+  and see the record updated. What the checks settle: GoHighLevel's `Version` value (if `v3`
+  is refused use `2021-07-28`, `GHL_API_VERSION`); Jobber's token endpoint and whether
+  `requestCreate` needs `customFormInput` in version 2025-04-16 (fix `connectors/jobber.ts`
+  from the GraphiQL explorer if anything differs); that Housecall Pro stores our
+  `lead_source` as sent (the lost-push lookup matches on it); that ServiceTitan's booking
+  list filters by `externalId`; whether HubSpot accepts the PKCE parameters (it ignores them
+  if not). `--write` also pushes the test lead a second time as if the first answer had been
+  lost: it must print "recovery: found the first record (ok)" for every CRM.
+- **Webhook receivers:** add a target in the settings, reveal its signing secret as an agency
+  admin and give it to the receiver (Zapier and Make ignore it; your own system should verify
+  it as `docs/INTEGRATIONS.md` shows).
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -862,7 +953,6 @@ already listed and described in `.env.example`.
 | Account | Needed for | Variables (group in `.env.example`) | Entry added by |
 | --- | --- | --- | --- |
 | Meta developer app, business verification, App Review | WhatsApp, Instagram, Messenger | Meta | C9, C10, C18 |
-| HubSpot, GoHighLevel, Jobber, Housecall Pro, ServiceTitan developer accounts | CRM connectors | CRM connectors | C14 |
 | Sentry project | Error tracking | Observability | C17 |
 | Vercel project | Hosting (root directory `apps/web`, Node.js 22, pnpm) | all of the above | C18 |
 
@@ -930,6 +1020,11 @@ already listed and described in `.env.example`.
   call, email or WhatsApp message was sent (entry 16). The US area-code table behind
   `hours.customer_time_zone` = "phone_area_code" was compiled from the numbering plan's
   assignments by state, without a vendor lookup; numbers that moved keep their old zone.
+- **CRMs and webhooks (C14).** Built from the vendors' docs read on 2026-11-12 (HubSpot, most
+  of GoHighLevel; Housecall Pro's OpenAPI file and ServiceTitan's CRM OpenAPI document in the
+  review) and, for Jobber, from Jobber's published app templates and an older schema dump plus
+  memory; tested against recorded-style fakes of the five APIs and a local webhook receiver;
+  no request reached a CRM (entry 17 lists what is confirmed per endpoint).
 - **Supabase (C1).** The schema, the row-level security and both access paths are tested on
   plain PostgreSQL 16 with a compatibility bootstrap that creates Supabase's roles and
   `auth.uid()`. Not yet seen on a real project: the `postgres` role switching to

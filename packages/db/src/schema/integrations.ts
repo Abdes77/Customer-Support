@@ -15,6 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import type {
+  AgencyId,
   ContactId,
   ConversationId,
   IntegrationConnectionId,
@@ -26,8 +27,8 @@ import { tenantFk } from "./businesses";
 import { createdAt, oneOf, tenantColumns, timestamptz, updatedAt } from "./columns";
 import { contactFk, conversationFk } from "./conversations";
 import { leadFk } from "./leads";
-import { businessPolicies } from "./policies";
-import { users } from "./tenancy";
+import { agencyPolicies, businessPolicies } from "./policies";
+import { agencies, users } from "./tenancy";
 import { BOOKING_STATUSES, CONNECTION_STATUSES, INTEGRATION_EVENT_STATUSES } from "./vocab";
 
 /**
@@ -71,6 +72,11 @@ export const integrationConnections = pgTable(
     uniqueIndex("integration_connections_webhook_key")
       .on(t.provider, sql`(${t.config} ->> 'webhookKey')`)
       .where(sql`(${t.config} ->> 'webhookKey') is not null`),
+    // C14: one connection row per outgoing webhook target of a business ("business:<name>" or
+    // "agency:<name>"); it holds the target's signing secret (business targets) and status.
+    uniqueIndex("integration_connections_webhook_target_key")
+      .on(t.businessId, t.externalAccountId)
+      .where(sql`${t.provider} = 'webhook'`),
     check("integration_connections_status_check", oneOf(t.status, CONNECTION_STATUSES)),
     ...businessPolicies("integration_connections"),
   ],
@@ -142,6 +148,14 @@ export const integrationEvents = pgTable(
     request: jsonb("request").$type<unknown>(),
     response: jsonb("response").$type<unknown>(),
     durationMs: integer("duration_ms"),
+    /** C14: the outgoing webhook target's name, for webhook deliveries. */
+    target: text("target"),
+    /** C14: when a pending delivery is due again (after a failed attempt). */
+    nextAttemptAt: timestamptz("next_attempt_at"),
+    /** C14: an attempt is under way until then; another runner leaves the row alone. */
+    lockedUntil: timestamptz("locked_until"),
+    /** C14: when the delivery reached a final status. */
+    completedAt: timestamptz("completed_at"),
     occurredAt: timestamptz("occurred_at").notNull().defaultNow(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -156,8 +170,76 @@ export const integrationEvents = pgTable(
     ),
     index("integration_events_business_occurred_idx").on(t.businessId, t.occurredAt),
     index("integration_events_lead_idx").on(t.leadId),
+    index("integration_events_pending_idx")
+      .on(t.businessId, t.nextAttemptAt)
+      .where(sql`${t.status} = 'pending'`),
     check("integration_events_status_check", oneOf(t.status, INTEGRATION_EVENT_STATUSES)),
     ...businessPolicies("integration_events"),
+  ],
+);
+
+/**
+ * C14: what a CRM connection holds for one lead: the external record's id (and the connector's
+ * own state, such as the contact behind a request), and a fingerprint of the last payload
+ * pushed, so an update without changes is skipped. A delivery takes this row's lock for the
+ * duration of the vendor call, so two deliveries for one lead never both create a record.
+ */
+export const integrationRecords = pgTable(
+  "integration_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ...tenantColumns(),
+    integrationConnectionId: uuid("integration_connection_id")
+      .$type<IntegrationConnectionId>()
+      .notNull(),
+    leadId: uuid("lead_id").$type<LeadId>().notNull(),
+    /** Null until the first push succeeded. */
+    externalId: text("external_id"),
+    externalUrl: text("external_url"),
+    /** Connector state (ids of related records). Never credentials, never customer text. */
+    externalState: jsonb("external_state").$type<Record<string, string>>().notNull().default({}),
+    lastPayloadHash: text("last_payload_hash"),
+    lastPushedAt: timestamptz("last_pushed_at"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    tenantFk("integration_records", t),
+    integrationConnectionFk("integration_records", t).onDelete("cascade"),
+    leadFk("integration_records", t),
+    uniqueIndex("integration_records_connection_lead_key").on(t.integrationConnectionId, t.leadId),
+    index("integration_records_business_idx").on(t.businessId),
+    index("integration_records_lead_idx").on(t.leadId),
+    ...businessPolicies("integration_records"),
+  ],
+);
+
+/**
+ * C14: encrypted secrets that belong to the agency rather than to one business: the signing
+ * secret of each agency-wide webhook target (`purpose` "webhook_target", `name` the target's
+ * name). Only the system scope reaches it (no policy for signed-in users), through
+ * `getDatabase().secrets.agency`; every scope inside the agency may read, an agency-wide
+ * scope writes.
+ */
+export const agencySecrets = pgTable(
+  "agency_secrets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    agencyId: uuid("agency_id")
+      .$type<AgencyId>()
+      .notNull()
+      .references(() => agencies.id, { onDelete: "cascade" }),
+    purpose: text("purpose").notNull(),
+    name: text("name").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    keyId: text("key_id").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("agency_secrets_agency_purpose_name_key").on(t.agencyId, t.purpose, t.name),
+    index("agency_secrets_key_idx").on(t.keyId),
+    ...agencyPolicies("agency_secrets").filter((policy) => policy.name.endsWith("_system")),
   ],
 );
 

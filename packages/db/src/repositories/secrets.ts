@@ -3,7 +3,7 @@ import type { z } from "zod";
 
 import type { ChannelConnectionId, IntegrationConnectionId } from "@repo/core";
 
-import type { BusinessContext } from "../context";
+import type { AgencyContext, BusinessContext, SystemContext } from "../context";
 import {
   decryptJson,
   encryptJson,
@@ -54,9 +54,27 @@ export interface SecretStore<TConnectionId extends string> {
   reencrypt(ctx: BusinessContext, connectionId: TConnectionId): Promise<boolean>;
 }
 
+/**
+ * Secrets that belong to an agency rather than one business (C14: the signing secret of an
+ * agency-wide webhook target), in `agency_secrets`, keyed by purpose and name. Any system
+ * scope inside the agency may read (a business's delivery job signs with it); only an
+ * agency-wide scope writes. The envelope is bound to agency, purpose and name.
+ */
+export interface AgencySecretStore {
+  read<T = unknown>(
+    ctx: SystemContext,
+    purpose: string,
+    name: string,
+    schema?: z.ZodType<T>,
+  ): Promise<T | null>;
+  write(ctx: AgencyContext, purpose: string, name: string, value: unknown): Promise<void>;
+  remove(ctx: AgencyContext, purpose: string, name: string): Promise<void>;
+}
+
 export interface SecretStores {
   readonly channel: SecretStore<ChannelConnectionId>;
   readonly integration: SecretStore<IntegrationConnectionId>;
+  readonly agency: AgencySecretStore;
 }
 
 type Rows = readonly Record<string, unknown>[];
@@ -132,8 +150,49 @@ function createSecretStore<TConnectionId extends string>(
   };
 }
 
+function createAgencySecretStore(getKeyring: () => Keyring): AgencySecretStore {
+  const binding = (agencyId: string, purpose: string, name: string): SecretBinding => ({
+    agencyId,
+    businessId: null,
+    purpose: `agency:${purpose}`,
+    recordId: name,
+  });
+  return {
+    async read(ctx, purpose, name, schema) {
+      const rows = (await ctx.tx.execute(
+        sql`select ciphertext from agency_secrets where agency_id = ${ctx.tenant.agencyId}::uuid and purpose = ${purpose} and name = ${name}`,
+      )) as unknown as Rows;
+      const envelope = (rows[0]?.["ciphertext"] as string | undefined) ?? null;
+      if (envelope === null) return null;
+      return decryptJson(
+        envelope,
+        binding(ctx.tenant.agencyId, purpose, name),
+        getKeyring(),
+        schema,
+      );
+    },
+    async write(ctx, purpose, name, value) {
+      const keyring = getKeyring();
+      const envelope = encryptJson(value, binding(ctx.tenant.agencyId, purpose, name), keyring);
+      await ctx.tx.execute(sql`
+        insert into agency_secrets (agency_id, purpose, name, ciphertext, key_id)
+        values (${ctx.tenant.agencyId}::uuid, ${purpose}, ${name}, ${envelope}, ${keyring.primaryKeyId})
+        on conflict (agency_id, purpose, name) do update
+          set ciphertext = excluded.ciphertext,
+              key_id = excluded.key_id,
+              updated_at = now()`);
+    },
+    async remove(ctx, purpose, name) {
+      await ctx.tx.execute(
+        sql`delete from agency_secrets where agency_id = ${ctx.tenant.agencyId}::uuid and purpose = ${purpose} and name = ${name}`,
+      );
+    },
+  };
+}
+
 export function createSecretStores(getKeyring: () => Keyring): SecretStores {
   return {
+    agency: createAgencySecretStore(getKeyring),
     channel: createSecretStore("channel_connection_secrets", "channel_connection", getKeyring),
     integration: createSecretStore(
       "integration_connection_secrets",

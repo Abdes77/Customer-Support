@@ -104,6 +104,13 @@ const samples: { [TName in keyof typeof EVENT_CATALOG]: unknown } = {
     reason: "opted_out_customer_wrote",
     day: "2026-11-10",
   },
+  "integrations.delivery_requested": {
+    traceId: ids.traceId,
+    agencyId: ids.agencyId,
+    businessId: ids.businessId,
+    connectionId: "8b0d2f4b-6d8f-4b0d-a2f4-9d1f3b5d7f17",
+    deliveryId: "9c1e3a5c-7e9a-4c1e-b3a5-0e2a4c6e8a18",
+  },
 };
 
 describe("event catalogue", () => {
