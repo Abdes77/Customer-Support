@@ -28,6 +28,13 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   typedRoutes: true,
+  // Out of the way of the admin panel's sidebar (sign-out sits bottom left).
+  devIndicators: { position: "bottom-right" },
+  experimental: {
+    // The admin panel's CSV upload (C15) sends the file as text through a server action:
+    // room for 3.5 MB of CSV, under Vercel's 4.5 MB request limit.
+    serverActions: { bodySizeLimit: "4mb" },
+  },
 };
 
 export default nextConfig;

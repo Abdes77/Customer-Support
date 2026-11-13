@@ -304,6 +304,33 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   exist, add it to the owning package.
 - **Must deliver:** the settings screen rendered only from the registry; empty slots (routes
   and navigation entries) for the channel and integration pages of C16.
+- **Delivered, for C16, C17 and C18:** the admin shell (`apps/web/src/app/(admin)/layout.tsx`,
+  role-aware navigation in `src/components/shell`), the UI primitives (`src/components/ui`),
+  the business list, the onboarding wizard (`/businesses/new`, then
+  `/businesses/<id>/onboarding/<step>`), the knowledge editor, playbooks (`/playbooks`,
+  versions, diff, rollback, edit, regenerate; per-business overrides), the settings screen
+  for the agency, a segment and a business (`src/components/settings`, drawn only from the
+  registry), alert contacts with C13's readiness. Server side in `apps/web/src/server/admin`:
+  `requireBusinessPage`, `requireStaffSession`, `runAction` / `actionSession` (cross-site
+  check, then the session; use them for every new server action), `actionBusiness`,
+  `getSettings()`, `getAdminSettings()`; server actions in `src/app/(admin)/_actions`.
+  Businesses are written through `@repo/db` (`createBusiness`, `updateBusinessProfile`,
+  `setBusinessStatus`, `listVisibleBusinesses`). Playwright: `apps/web/e2e/admin.spec.ts`.
+- **Slots for C16 to fill** (routes exist, linked from the navigation, show "Not available
+  yet" and read nothing):
+  - `/inbox` and `/inbox/[conversationId]` (alerts and calendar events already link to the
+    second): the live inbox, conversation view, lead panel, takeover and manual reply
+    (`getHandoff()`), internal notes.
+  - `/leads` (list, filters, CSV export), `/analytics`, `/audit` (agency admins).
+  - `/businesses/[businessId]/channels`: widget (`@repo/channel-widget/server`
+    `widgetEmbedInfo` and friends), WhatsApp (`getWhatsApp()`), Messenger and Instagram
+    (`getMetaPages()`), email (`getEmail()`).
+  - `/businesses/[businessId]/integrations`: calendars and Calendly (`getScheduling()`), CRMs
+    and webhooks with field mapping (`getIntegrations()`); the mapping and webhook settings
+    are already editable on the Settings tab.
+  - The client portal's per-screen permissions (`client_portal.view_*`, `reply_and_take_over`,
+    `export_leads`): enforce them in those screens; the nav already gives client users only
+    their business, Inbox, Leads and Analytics.
 
 ### C16 · Inbox, leads and analytics
 

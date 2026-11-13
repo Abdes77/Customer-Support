@@ -53,8 +53,8 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 - New table: policies in the schema, `pnpm db:generate`, an entry in
   `packages/db/src/testing/isolation-matrix.ts` (ARCHITECTURE §8). Tests that need a database
   use `createTestDatabase()` from `@repo/db/testing`.
-- Auth in `apps/web`: `requireAccess()` from `@/server/auth`, then `requireBusinessRole()`.
-  Local sign-in needs `LOCAL_AUTH_SECRET`; seed users are in `packages/db/src/seed/demo.ts`.
+- Auth in `apps/web`: `requireAccess()`, then `requireBusinessRole()`; admin pages and actions:
+  `requireBusinessPage` / `runAction` (`@/server/admin`). Local sign-in: `LOCAL_AUTH_SECRET`.
 - Configuration: declare variables in the env spec and read them with `getEnv()` /
   `requireEnv()` from `@repo/core/env`. `process.env` is blocked by ESLint.
 - Settings: anything a business might tune is a setting, not an env variable or a constant.

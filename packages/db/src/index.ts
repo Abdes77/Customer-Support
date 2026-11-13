@@ -90,6 +90,20 @@ export {
 export type { AgencySecretStore, SecretStore, SecretStores } from "./repositories/secrets";
 export { generateApiKey, type GeneratedApiKey, hashApiKey, looksLikeApiKey } from "./api-keys";
 
+// Businesses for the admin panel (C15)
+export {
+  type BusinessDetails,
+  BusinessProfileInput,
+  businessSlug,
+  type BusinessSummary,
+  createBusiness,
+  getVisibleBusiness,
+  isTimeZone,
+  listVisibleBusinesses,
+  setBusinessStatus,
+  updateBusinessProfile,
+} from "./repositories/businesses";
+
 // Audit log
 export {
   type AuditActor,
