@@ -44,6 +44,12 @@ export interface DevelopmentSwitches {
   readonly processWidgetSecret: boolean;
   /** Inngest's dev mode, which does not check request signatures. */
   readonly inngestDev: boolean;
+  /**
+   * DEV_META_GRAPH_URL, DEV_LOCAL_MAIL_PORTS or DEV_LOCAL_MAIL_CA_FILE is set: fakes of Meta's
+   * Graph API and of a mail server for the browser tests (C18). Optional for callers that
+   * predate it.
+   */
+  readonly localServiceFakes?: boolean;
 }
 
 const SWITCH_LABELS: Readonly<Record<keyof DevelopmentSwitches, string>> = {
@@ -55,6 +61,7 @@ const SWITCH_LABELS: Readonly<Record<keyof DevelopmentSwitches, string>> = {
   processTestChannelSecret: "test channel with a per-process secret (/dev/chat)",
   processWidgetSecret: "website chat with a per-process secret",
   inngestDev: "Inngest dev mode",
+  localServiceFakes: "fake Meta Graph API or local mail server (DEV_* variables)",
 };
 
 /**

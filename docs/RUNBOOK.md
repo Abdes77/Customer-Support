@@ -23,10 +23,11 @@ Where things are:
 
 ## Daily checks (about ten minutes)
 
-1. **Readiness**, with the health token:
+1. **Readiness**, with the health token (replace `<HEALTH_CHECK_TOKEN>` with its value from
+   the vault):
 
    ```
-   curl -s -H "authorization: Bearer $HEALTH_CHECK_TOKEN" <APP_URL>/api/health/ready
+   curl -s -H "authorization: Bearer <HEALTH_CHECK_TOKEN>" <APP_URL>/api/health/ready
    ```
 
    Expect `"status":"ready"`. What each check means:
@@ -37,8 +38,8 @@ Where things are:
    | `jobs` | Inngest keys are missing | Vercel variables (step 16), redeploy |
    | `model` | `ANTHROPIC_API_KEY` is missing | Vercel variables, redeploy |
    | `configuration` | A required variable is missing | The message names it |
-   | `development_switches` | A developer-only switch is on in production | Remove `DEVELOPMENT_MODE` (and anything the message names) from Vercel, redeploy |
-   | `unanswered` | Customer messages waited more than 30 minutes without a reply turn | "The bot is not answering" below |
+   | `development_switches` | A developer-only switch is on in production | Remove `DEVELOPMENT_MODE`, `LOCAL_AUTH_SECRET`, any `DEV_*` variable and anything else the message names from Vercel, redeploy |
+   | `unanswered` | Customer messages waited more than 30 minutes without any reply turn starting | "The bot is not answering" below |
    | `stuck_work` (warning) | A reply did not go out, or a message never reached the job runner, in the last day | The alerts in the admin panel name the conversations |
    | `emergency_contacts` (warning) | Active businesses whose emergencies reach nobody | Fill their escalation chain (business, Alert contacts) |
    | `error_reporting` (warning) | `SENTRY_DSN` is not set | Set it |
@@ -59,10 +60,12 @@ Where things are:
    hour, and only if customers write):
 
    ```
-   APP_URL=<APP_URL> TEST_CHANNEL_SECRET=<the deployment's value> pnpm --filter @repo/pipeline live:roundtrip
+   APP_URL=<APP_URL> TEST_CHANNEL_SECRET=<the deployment's value> pnpm --filter @repo/pipeline live:roundtrip --business <the test business's id>
    ```
 
-   Expect exactly one reply to the three test messages.
+   Expect exactly one reply to the three test messages. Always name the agency's own test
+   business (HUMAN_TODO step 22): without `--business` it writes into the first active
+   business it finds, a client's.
 
 Weekly: who has access (**People**, and the People tab of businesses with client logins) and the
 audit log's `agency_membership.` and `business_membership.` entries; the database dump and the
@@ -206,7 +209,8 @@ for a calendar or CRM) and check the reply or the record.
 ### The bot is not answering
 
 Readiness shows `unanswered` failing, or the inbox fills with unread conversations and no bot
-replies.
+replies. (A turn that started and failed does not make `unanswered` fail: it raises its own
+alert and appears as a failed `pipeline-reply` run.)
 
 1. Readiness: is `database`, `jobs` or `model` failing? Fix that first.
 2. Inngest dashboard: is the app synced, and do `pipeline-reply` runs appear? If not: sync again

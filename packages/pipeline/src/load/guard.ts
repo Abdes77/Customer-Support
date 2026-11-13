@@ -15,7 +15,14 @@ export function loadTestRefusal(
   const target = source["TEST_DATABASE_URL"] ?? DEFAULT_TEST_DATABASE_URL;
   let host: string;
   try {
-    host = new URL(target).hostname;
+    const parsed = new URL(target);
+    host = parsed.hostname;
+    // A connection string can name its server in the query too (`?host=`), past the check.
+    for (const name of ["host", "hostaddr"]) {
+      if (parsed.searchParams.has(name)) {
+        return `TEST_DATABASE_URL names its server in "?${name}=": write the address in place of the host.`;
+      }
+    }
   } catch {
     return "TEST_DATABASE_URL is not a URL.";
   }

@@ -886,6 +886,14 @@ describe("directory", () => {
     expect(found?.id).toBe(world.users.aAdmin.id);
     expect(await t.db.directory.findUserByEmail("nobody@world.test")).toBeNull();
   });
+
+  it("never takes a look-alike address for the plain one an admin typed", async () => {
+    // "\u212A" is the Kelvin sign, which PostgreSQL's lower() can fold into "k".
+    await t.admin.execute(
+      sql`insert into auth.users (id, email) values (gen_random_uuid(), ${"ja\u212Ae@world.test"})`,
+    );
+    expect(await t.db.directory.findUserByEmail("jake@world.test")).toBeNull();
+  });
 });
 
 describe("platform", () => {

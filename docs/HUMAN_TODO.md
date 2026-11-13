@@ -39,15 +39,24 @@ without it, every connected channel, calendar and CRM has to be connected again.
 ### 2. Prepare the command computer
 
 A Mac or Linux computer (or Windows with WSL) that you trust. Install Node.js 22
-(https://nodejs.org), pnpm 10 (`npm install --global pnpm@10`), Git and the PostgreSQL client
-tools (`psql`, `pg_dump`). Then get the code and its dependencies:
+(https://nodejs.org), Git and the PostgreSQL client tools (`psql`, `pg_dump`), then pnpm 10:
+
+```
+npm install --global pnpm@10
+```
+
+Then get the code and its dependencies:
 
 ```
 git clone <the repository's URL> reply-bot
 ```
 
 ```
-cd reply-bot && pnpm install
+cd reply-bot
+```
+
+```
+pnpm install
 ```
 
 Then create `.env.local` from the template; you fill it in step 16:
@@ -56,12 +65,8 @@ Then create `.env.local` from the template; you fill it in step 16:
 cp .env.example .env.local
 ```
 
-Optional, to see the product on this computer before any account exists (needs Docker or a
-local PostgreSQL 16; see "Local development" at the end):
-
-```
-pnpm services:up && pnpm db:migrate && pnpm db:seed && pnpm dev
-```
+Optional: to see the product on this computer before any account exists, follow "Local
+development" at the end (needs Docker or a local PostgreSQL 16).
 
 ### 3. Require the automatic checks on GitHub
 
@@ -393,8 +398,9 @@ the step named here.
 runner, the offline stand-in model, local storage and per-process secrets, and
 `/api/health/ready` fails while it is on), `LOCAL_AUTH_SECRET`, `AI_MODEL_MODE`,
 `INNGEST_DEV`, `INNGEST_BASE_URL`, `DEV_META_GRAPH_URL`, `DEV_LOCAL_MAIL_PORTS`,
-`DEV_LOCAL_MAIL_CA_FILE`, `TEST_DATABASE_URL`, `SEED_USER_PASSWORD`. The `DEV_*` ones are
-ignored on a deployment anyway; they exist for the browser tests.
+`DEV_LOCAL_MAIL_CA_FILE`, `TEST_DATABASE_URL`, `SEED_USER_PASSWORD`. The `DEV_*` ones exist
+for the browser tests: a deployment ignores them, and `/api/health/ready` fails while any of
+them is set.
 
 ## Part 3. Deploy
 
@@ -489,7 +495,8 @@ lists. A second agency admin is worth having from the start: nobody can change t
 so only another admin can.
 
 1. The invitation emails, without giving anyone access (an address of yours that has no
-   account yet; run it twice to see both emails):
+   account yet; run it twice, at least a minute apart, to see both emails: Supabase sends one
+   email per address a minute and refuses the second run otherwise):
 
    ```
    pnpm --filter @repo/db live:invite --email you+invite@example.com
@@ -510,16 +517,18 @@ email arrives, check Supabase's Authentication logs.
 
 ### 21. Check the deployment from outside
 
-1. Readiness, with the token of step 6:
+1. Readiness, with the token of step 6 (replace `<HEALTH_CHECK_TOKEN>` with its value from
+   the vault):
 
    ```
-   curl -s -H "authorization: Bearer $HEALTH_CHECK_TOKEN" <APP_URL>/api/health/ready
+   curl -s -H "authorization: Bearer <HEALTH_CHECK_TOKEN>" <APP_URL>/api/health/ready
    ```
 
    **Pass:** `"status":"ready"` and a list of checks. The same command without the header must
    answer the status alone. A warning about businesses whose emergencies reach nobody is
    expected until step 23; a failing `unanswered` check means customer messages waited more
-   than 30 minutes without a reply turn: the job runner is not running (`docs/RUNBOOK.md`).
+   than 30 minutes without any reply turn starting: the job runner is not running
+   (`docs/RUNBOOK.md`).
 
 2. Security headers:
 
@@ -529,10 +538,11 @@ email arrives, check Supabase's Authentication logs.
 
    **Pass:** `x-frame-options: DENY`, `x-content-type-options: nosniff` and a `referrer-policy`.
 
-3. The Supabase Data API is closed (step 5.6):
+3. The Supabase Data API is closed (step 5.6). Replace the two placeholders with the values of
+   `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`:
 
    ```
-   curl -s "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/conversations?select=id&limit=1" -H "apikey: $NEXT_PUBLIC_SUPABASE_ANON_KEY"
+   curl -s "<NEXT_PUBLIC_SUPABASE_URL>/rest/v1/conversations?select=id&limit=1" -H "apikey: <NEXT_PUBLIC_SUPABASE_ANON_KEY>"
    ```
 
    **Pass:** an error saying the schema is not exposed, not rows and not `[]`.
@@ -551,10 +561,20 @@ email arrives, check Supabase's Authentication logs.
 
 ### 22. The live round trip (after this and every later deployment)
 
+It needs an active business of the agency's own that no customer ever reaches, because it
+writes a test conversation into it and the bot answers it (with the real model, a few cents).
+Create one now in the admin panel: Businesses, **Onboard a business**, for example "Agency
+test", any trade, and go through the wizard to **Finish** (`docs/ONBOARDING.md` section 2).
+Finishing needs no channel and no playbook: if the trade's playbook is still being researched,
+or the research fails (step 26 is its real check), finish anyway. Put yourself in its alert
+contacts as the emergency contact. Its id is in the address of its page. Never use a client's business here:
+without `--business` the command picks the first active business it finds, which after launch
+is a client's.
+
 From the command computer (with the production `DATABASE_URL` in `.env.local`):
 
 ```
-APP_URL=<APP_URL> TEST_CHANNEL_SECRET=<the deployment's value> pnpm --filter @repo/pipeline live:roundtrip
+APP_URL=<APP_URL> TEST_CHANNEL_SECRET=<the deployment's value> pnpm --filter @repo/pipeline live:roundtrip --business <the test business's id>
 ```
 
 It posts three quick messages and a duplicate to the test channel's webhook. **Pass:** it
@@ -620,8 +640,12 @@ pnpm --filter @repo/ai prompt:fingerprint --print
 - Every request fails with a 400 that mentions data retention: the workspace lacks 30-day
   retention (step 4).
 - A 400 about `strict` or structured outputs: the organization uses customer-managed
-  encryption keys; run with `--no-strict` and tell a developer, who sets `strictTools: false`
-  where the engine is created (`packages/pipeline/src/composition`).
+  encryption keys. Run the following and tell a developer, who sets `strictTools: false` where
+  the engine is created (`packages/pipeline/src/composition`):
+
+  ```
+  pnpm --filter @repo/ai live:conversations --no-strict
+  ```
 - A slow first call is the one-time compilation of the tool schemas; later calls reuse it for
   24 hours.
 - Not covered by this check: photo analysis with real images (send a photo through the website
@@ -631,8 +655,15 @@ pnpm --filter @repo/ai prompt:fingerprint --print
 ### 25. The evaluation suite, its baseline, and the check on every pull request
 
 No quality number exists yet: every evaluation so far ran against stand-ins that evaluate
-nothing. Run on the command computer with local PostgreSQL (`pnpm services:up`; the
-evaluation plays in a throwaway database and sends nothing). Steps, in this order:
+nothing. Run on the command computer; the evaluation plays in a throwaway database on a local
+PostgreSQL 16 and sends nothing. Start that database first (it needs Docker or a local
+PostgreSQL 16, as in "Local development" at the end):
+
+```
+pnpm services:up
+```
+
+Steps, in this order:
 
 1. Check the judge before trusting it (eight judge calls, about a minute):
 
@@ -661,9 +692,21 @@ evaluation plays in a throwaway database and sends nothing). Steps, in this orde
 
 3. Expect failures on the first run: the prompt has never been read by the model it was written
    for. A developer fixes causes, not conversations: the prompt as a new version
-   (`packages/ai/src/prompt/core`), or the engine, then runs again. `pnpm eval --scenario roofing.renter` replays one scenario, `--persona emergency` one kind of customer, `--resume
-   <dir>` finishes a run the API interrupted. A change to a default setting needs a line in
-   `docs/DECISIONS.md`.
+   (`packages/ai/src/prompt/core`), or the engine, then runs again. A change to a default
+   setting needs a line in `docs/DECISIONS.md`. To replay one scenario, one kind of customer,
+   or finish a run the API interrupted (the folder it printed):
+
+   ```
+   pnpm eval --scenario roofing.renter
+   ```
+
+   ```
+   pnpm eval --persona emergency
+   ```
+
+   ```
+   pnpm eval --resume <the run's folder>
+   ```
 
 4. **Pass:** every scenario passes with zero setting-compliance failures. Then save the
    baseline and commit it:
@@ -706,15 +749,30 @@ without a database. For every model call it prints the step, the stop reason, th
 the tokens and the seconds; then the size of each section, the price norms and the sources.
 **Pass:** no failure (it fails when a document is not complete, breaks a rule or cites a page
 the search did not return). Expect several minutes and a few dollars per trade. Read both
-playbooks once (`--out <folder>` writes them as JSON). One trade: `live:playbook "Pest
-control"`; regions for the price norms: `--region CO --region MN`.
+playbooks once; this variant writes them as JSON files into a folder of your choice:
+
+```
+pnpm --filter @repo/knowledge live:playbook --out <folder>
+```
+
+One trade only, with the regions for its price norms:
+
+```
+pnpm --filter @repo/knowledge live:playbook "Pest control" --region CO --region MN
+```
 
 - A call must finish within 270 seconds (one job step runs inside one request of
   `/api/inngest`, maximum 300). If a research step is slower, lower "Web searches per research
   step" (`knowledge.playbook_research_searches`) or the effort of "Playbook generation"
-  (`model.playbook.effort`) in the agency's settings; the command has the same options
-  (`--searches 3`, `--effort medium`).
-- A 400 about `strict`: `--no-strict`, as in step 24. A 400 that mentions `allowed_callers` or
+  (`model.playbook.effort`) in the agency's settings, and try the command with the same
+  options:
+
+  ```
+  pnpm --filter @repo/knowledge live:playbook --searches 3 --effort medium
+  ```
+
+- A 400 about `strict`: add `--no-strict` to the command, as in step 24. A 400 that mentions
+  `allowed_callers` or
   the tool version: tell a developer (the tool definition is `webSearchTool()` in
   `packages/knowledge/src/playbooks/generate.ts`).
 - Then onboard a business in a new segment in the admin panel and watch the run finish: the
@@ -797,15 +855,21 @@ as the join's `access_token` only when it is a JWT (a legacy anon key); with a p
    messages on your phone.
 
 2. A real conversation: point the webhook (step 10) at the deployment (or at `pnpm dev` behind
-   `cloudflared tunnel --url http://localhost:3000`), and connect the test number to a test
-   business:
+   a tunnel, below), and connect the test number to a test business:
 
    ```
    pnpm --filter @repo/channel-whatsapp live:check connect --business <business id>
    ```
 
-   (The business id is in the address of its page in the admin panel, or
-   `psql "$DATABASE_URL" -c "select id, name from businesses"`.) Then write to the test number
+   (The business id is in the address of its page in the admin panel.) To try this against
+   `pnpm dev` on the command computer instead of the deployment, expose it with a Cloudflare
+   tunnel (`cloudflared`, installed from Cloudflare's site) and use the address it prints:
+
+   ```
+   cloudflared tunnel --url http://localhost:3000
+   ```
+
+   Then write to the test number
    from your phone. **Pass:** blue ticks and "typing…", one reply per burst of messages, a photo
    stored, a voice note answered with "please type" (or transcribed with Deepgram), and
    statuses moving to delivered and read in the conversation.
@@ -825,7 +889,8 @@ Details to look at during check 2 (not settled by Meta's docs):
   `US.ENT.…`); anything that is not a phone number is sent as `recipient`.
 - Meta's media host names: the downloader allows `fbsbx.com`, `facebook.com`, `fbcdn.net`,
   `whatsapp.net` and `cdninstagram.com`; a photo that fails with "not one of Meta's hosts"
-  means the list needs the host it names (`META_MEDIA_HOST_SUFFIXES`).
+  means the list needs the host it names: tell a developer (the list is
+  `META_MEDIA_HOST_SUFFIXES` in `packages/channels/meta/src/graph.ts`).
 - Whether 131047 (window closed) comes back in the send response or only as a "failed" status
   webhook: run check 1 when you have not written to the test number for more than 24 hours. If
   "send free-form text" prints `FAIL ... meta_131047`, Meta answers in the response; if it
@@ -862,7 +927,7 @@ Details to look at during check 2 (not settled by Meta's docs):
    **Pass:** a text with two quick replies, "seen" and typing.
 
 2. A real conversation on both platforms: point both webhooks (step 10) at the deployment (or
-   `pnpm dev` behind `cloudflared tunnel --url http://localhost:3000`) and connect the test Page
+   `pnpm dev` behind the tunnel of step 29) and connect the test Page
    to a test business:
 
    ```
@@ -909,7 +974,7 @@ Details to look at during check 2:
 1. An IMAP/SMTP inbox you own (the password is asked for on standard input):
 
    ```
-   pnpm --filter @repo/channel-email live:check --address office@yourdomain.com --imap-host imap.yourdomain.com --smtp-host smtp.yourdomain.com --to you@gmail.com
+   pnpm --filter @repo/channel-email live:check --address office@yourdomain.com --imap-host imap.yourdomain.com --smtp-host smtp.yourdomain.com --to <an address of yours at another provider>
    ```
 
    It logs in to both servers with the app's address and TLS rules, finds the Sent folder and
@@ -1063,7 +1128,7 @@ it to the receiver (Zapier and Make ignore it; your own system should verify it 
 `docs/INTEGRATIONS.md` shows).
 
 What the checks settle: GoHighLevel's `Version` value (if `v3` is refused use `2021-07-28`,
-`GHL_API_VERSION`); **Jobber**, part of which was written from memory because its Developer
+a developer changes `GHL_API_VERSION` in `packages/integrations/src/connectors/gohighlevel.ts`); **Jobber**, part of which was written from memory because its Developer
 Center could not be read: the token endpoint and refresh-token rotation, and whether
 `requestCreate` needs `customFormInput` in version 2025-04-16 (a developer fixes
 `packages/integrations/src/connectors/jobber.ts` from the GraphiQL explorer if anything
@@ -1074,7 +1139,13 @@ lists, per vendor, what was read in the docs and what was written from memory.
 ### 35. Error reports, retention and backups
 
 1. Sentry on a staging deployment (or `pnpm dev` with `SENTRY_DSN` set): sign in, then stop the
-   database (on a developer computer `pnpm services:down`) and open the inbox. **Pass:** the
+   database (on a developer computer, the command below) and open the inbox.
+
+   ```
+   pnpm services:down
+   ```
+
+   **Pass:** the
    request errors arrive in Sentry tagged with the route (`/inbox`), with no customer data,
    email address, phone number or token in them, and a database error reads "Failed query: …
    params: [removed]". The envelope format was written from Sentry's protocol as remembered,
@@ -1176,11 +1247,33 @@ follow the daily checks of `docs/RUNBOOK.md`. Onboard further businesses with
 
 ## Local development
 
-Not a launch step, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
-`CREDENTIALS_ENCRYPTION_KEY` (`openssl rand -base64 48` and `openssl rand -base64 32`), then:
+Not a launch step, a reminder. In `.env.local` (step 2), set `LOCAL_AUTH_SECRET` to the
+output of the first command and `CREDENTIALS_ENCRYPTION_KEY` to the output of the second:
 
 ```
-pnpm services:up && pnpm db:migrate && pnpm db:seed && pnpm dev
+openssl rand -base64 48
+```
+
+```
+openssl rand -base64 32
+```
+
+Then, one after the other:
+
+```
+pnpm services:up
+```
+
+```
+pnpm db:migrate
+```
+
+```
+pnpm db:seed
+```
+
+```
+pnpm dev
 ```
 
 The seed prints the four demo users; their password is in `packages/db/src/seed/demo.ts`.
@@ -1208,7 +1301,6 @@ for Playwright once per computer):
 ```
 pnpm --filter @repo/web exec playwright install chromium
 ```
-
 
 ```
 pnpm e2e -- --trace off

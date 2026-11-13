@@ -382,12 +382,18 @@ export function createDirectory(connection: Connection): Directory {
     },
 
     async findUserByEmail(email) {
+      const wanted = email.trim().toLowerCase();
       const rows = await db
         .select({ id: users.id, email: users.email })
         .from(users)
-        .where(eq(sql`lower(${users.email})`, email.trim().toLowerCase()))
-        .limit(1);
-      return rows[0] ?? null;
+        .where(eq(sql`lower(${users.email})`, wanted))
+        .orderBy(users.createdAt)
+        .limit(10);
+      // PostgreSQL's lower() folds a few non-ASCII letters into ASCII (the Kelvin sign "K"
+      // becomes "k"): an account registered under such a look-alike must never be taken for
+      // the plain address an admin typed (C18 review, people management).
+      const ascii = (value: string) => /^[\x20-\x7e]*$/.test(value);
+      return rows.find((row) => !ascii(wanted) || ascii(row.email)) ?? null;
     },
   };
 }

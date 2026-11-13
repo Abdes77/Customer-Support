@@ -57,7 +57,16 @@ import {
   type Logger,
   NotFoundError,
 } from "@repo/core";
-import { type DeploymentInfo, deploymentInfo, type Env, getEnv, hasEnv } from "@repo/core/env";
+import {
+  type DeploymentInfo,
+  deploymentInfo,
+  type Env,
+  getEnv,
+  hasEnv,
+  isLoopbackUrl,
+  type NodeEnv,
+  nodeEnv,
+} from "@repo/core/env";
 import { type BusinessTenant, type Database, getDatabase } from "@repo/db";
 import { getTenantStorage, type TenantStorage } from "@repo/db/storage";
 import {
@@ -293,18 +302,22 @@ function storageMediaReader(storage: (tenant: BusinessTenant) => TenantStorage):
 /**
  * Fakes of outside services on this machine, for the browser tests (C18): Meta's Graph API
  * at `DEV_META_GRAPH_URL`, and a mail server on 127.0.0.1 (`DEV_LOCAL_MAIL_PORTS`, its
- * certificate in `DEV_LOCAL_MAIL_CA_FILE`). Only ever on a developer machine: on a deployment
- * the variables are ignored, so Meta is always graph.facebook.com and mail servers must be
- * public. Exported for its test.
+ * certificate in `DEV_LOCAL_MAIL_CA_FILE`). Only ever on a developer machine, under the rule of
+ * local sign-in: `deploymentInfo()` "local", and a production build only while APP_URL is this
+ * machine (the browser tests). The fake Graph API must itself be on this machine. Anywhere else
+ * the variables are ignored (and the readiness check fails while they are set), so Meta is
+ * always graph.facebook.com and mail servers must be public. Exported for its test.
  */
 export function localServiceFakes(
   env: Env,
   deployment: DeploymentInfo,
+  runtime: NodeEnv = nodeEnv(),
 ): { readonly graphBaseUrl?: string; readonly mailPolicy?: MailNetworkPolicy } {
   if (deployment.environment !== "local") return {};
+  if (runtime === "production" && !isLoopbackUrl(env.APP_URL)) return {};
   const ports = env.DEV_LOCAL_MAIL_PORTS?.split(",").map(Number) ?? [];
   return {
-    ...(env.DEV_META_GRAPH_URL === undefined
+    ...(env.DEV_META_GRAPH_URL === undefined || !isLoopbackUrl(env.DEV_META_GRAPH_URL)
       ? {}
       : { graphBaseUrl: env.DEV_META_GRAPH_URL.replace(/\/$/, "") }),
     ...(ports.length === 0 || env.DEV_LOCAL_MAIL_CA_FILE === undefined

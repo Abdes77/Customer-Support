@@ -130,7 +130,13 @@ test("the agency's people: admins add and remove, never themselves; members only
 
   // The audit log names who did it.
   await page.goto(`${APP_URL}/audit?action=agency_membership.`);
-  await expect(page.getByTestId("audit-row").first()).toContainText("agency_membership.revoke");
+  const latest = page.getByTestId("audit-row").first();
+  await expect(latest).toContainText("agency_membership.revoke");
+  // The actor is the signed-in admin (the demo admin's name).
+  await expect(latest).toContainText("Avery Admin");
+  // The person removed is no longer on the team, so no address is shown for them.
+  await expect(latest).toContainText("a person no longer on the team");
+  await expect(latest).not.toContainText(email);
 
   // A member sees the team and no controls.
   await page.context().clearCookies();

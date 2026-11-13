@@ -75,6 +75,11 @@ export function developmentSwitches(facts: ReadinessFacts): DevelopmentSwitches 
     processTestChannelSecret: facts.testChannel && env.TEST_CHANNEL_SECRET === undefined,
     processWidgetSecret: facts.widget && env.WIDGET_SESSION_SECRET === undefined,
     inngestDev: inngestDevAllowed(env, deployment),
+    // Set at all: on a deployment they are ignored, but they have no business being there.
+    localServiceFakes:
+      env.DEV_META_GRAPH_URL !== undefined ||
+      env.DEV_LOCAL_MAIL_PORTS !== undefined ||
+      env.DEV_LOCAL_MAIL_CA_FILE !== undefined,
   };
 }
 

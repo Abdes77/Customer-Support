@@ -37,6 +37,11 @@ describe("load test (C18)", () => {
     ).toMatch(/not this machine/);
     expect(
       loadTestRefusal({
+        TEST_DATABASE_URL: "postgresql://u:p@127.0.0.1:5432/x?host=db.example.com",
+      }),
+    ).toMatch(/\?host=/);
+    expect(
+      loadTestRefusal({
         TEST_DATABASE_URL: "postgresql://hsrb:hsrb@127.0.0.1:5432/hsrb_dev",
         DATABASE_URL: "postgresql://hsrb:hsrb@127.0.0.1:5432/hsrb_dev",
       }),

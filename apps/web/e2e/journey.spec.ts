@@ -42,7 +42,7 @@ test("a customer qualifies on the test channel and the team finds the lead, its 
   page,
 }, testInfo) => {
   test.setTimeout(240_000);
-  const { businessId } = state();
+  const { businessId, businessName } = state();
   const tag = `${testInfo.project.name}-${Date.now().toString(36)}`;
   await signIn(page, "admin@brightline.test");
   await page.goto(`${APP_URL}/dev/chat?business=${businessId}`);
@@ -72,6 +72,9 @@ test("a customer qualifies on the test channel and the team finds the lead, its 
   await page.waitForURL(/\/inbox\/[0-9a-f-]{36}$/);
   const conversationId = /\/inbox\/([0-9a-f-]{36})$/.exec(page.url())![1]!;
   const panel = page.getByTestId("lead-panel");
+  await expect(panel).not.toContainText("No lead yet.");
+  // The score badge: a number, then the band.
+  await expect(panel.getByText(/^\d{1,3}( · \S.*)?$/).first()).toBeVisible();
   await expect(panel.getByRole("heading", { name: "Report" })).toBeVisible();
   await expect(panel).not.toContainText("No report yet.");
 
@@ -83,5 +86,9 @@ test("a customer qualifies on the test channel and the team finds the lead, its 
   const csv = await page.request.get(`${APP_URL}/api/leads/export?business=${businessId}`);
   expect(csv.status()).toBe(200);
   expect(csv.headers()["content-type"]).toContain("text/csv");
+  // The export holds the business's leads, not only its header row.
+  const rows = (await csv.text()).split("\r\n").filter((line) => line.trim() !== "");
+  expect(rows.length).toBeGreaterThan(1);
+  expect(rows.slice(1).some((line) => line.includes(businessName))).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("leads.png") });
 });

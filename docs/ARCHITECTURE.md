@@ -960,20 +960,23 @@ Security and reliability across the system; the threats, their mitigations and p
 ### As built (C18)
 
 - **Unanswered messages** (`countUnansweredMessages`, `packages/pipeline/src/unanswered.ts`,
-  DECISIONS 291): readiness counts, per active business, customer messages 30 minutes to two
-  hours old that no turn dealt with (above `handled_through_seq`, nothing sent after them,
-  reactions excluded) and fails `unanswered` when there are any. It is the one check that does
+  DECISIONS 291, 302): readiness counts, per active business, customer messages 30 minutes to
+  two hours old that no turn dealt with (above `handled_through_seq`, nothing sent after them,
+  no turn of the conversation started after them, reactions excluded) and fails `unanswered`
+  when there are any. A turn that started and failed is not a dead runner and is not counted. It is the one check that does
   not depend on the job runner (THREAT_MODEL 4.16).
 - **Load test** (`pnpm load:test`, `packages/pipeline/src/load`, DECISIONS 294): the real
   pipeline in one process on a throwaway local database; checks one reply turn per burst, order,
   latency beyond the configured wait, no limit at defaults, and a business at its daily reply
-  cap. `loadTestRefusal` refuses non-local servers.
+  cap. `loadTestRefusal` refuses non-local servers (also one named in `?host=`, DECISIONS 305).
 - **Browser journeys on every local channel** (`apps/web/e2e`, DECISIONS 292, 293): the e2e
   server (`e2e/support/app-server.ts`) also starts `e2e/support/fakes.ts` (C9's and C10's fake
   Graph API behind one HTTP server on port 3101, C11's ImapKit mail server, and control routes
   under `/__e2e/`) and points the app at them with the development-only variables
   `DEV_META_GRAPH_URL`, `DEV_LOCAL_MAIL_PORTS` and `DEV_LOCAL_MAIL_CA_FILE`
-  (`localServiceFakes`, ignored unless `deploymentInfo()` is "local"). `channels.spec.ts`:
+  (`localServiceFakes`, honoured only where local sign-in would be: "local", and a loopback
+  `APP_URL` in a production build; the Graph fake on loopback only; readiness fails a reachable
+  production build that has any of them set, DECISIONS 301). `channels.spec.ts`:
   WhatsApp, Messenger, Instagram (signed webhooks) and email (connected through the admin
   panel); `journey.spec.ts`: the test channel to the lead list.
 - **People management** (DECISIONS 297 to 300, THREAT_MODEL 2.12; added after the C17 audit

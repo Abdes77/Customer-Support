@@ -105,7 +105,7 @@ Paste into the review form's "instructions" field, with the values filled in:
 >    with Facebook**, and choose the Page `<test Page name>`, to which we gave your test user a
 >    role. Its Instagram account is `<@test account>`.
 > 4. To see the bot answer: send a WhatsApp message to `<test number>`, or a message to the
->    Page or the Instagram account. Replies arrive within about ten seconds.
+>    Page or the Instagram account. Replies arrive within seconds.
 > 5. To see a person's reply: open **Inbox**, choose the conversation, **Take over**, write a
 >    reply and press **Send reply**.
 >
@@ -121,6 +121,9 @@ To prepare it:
 2. Give Meta's test users the roles the review form asks for on the test Page and the WhatsApp
    test account, and add the reviewer's phone number as a WhatsApp test recipient if Meta
    provides one.
-3. Make sure the test business is answered by the real model (step 24 passed), its emergency
+3. Time a reply on each channel before you write "within seconds" above (the reply waits a few
+   seconds for more messages on purpose, then the model writes; nobody has measured it with the
+   real model yet), and correct the sentence if needed.
+4. Make sure the test business is answered by the real model (step 24 passed), its emergency
    contacts are your own numbers (a reviewer may test "I smell gas"), and its knowledge holds
    nothing private.

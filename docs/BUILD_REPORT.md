@@ -18,7 +18,7 @@ Inngest Cloud, no Sentry project and no hosted deployment.
 What was verified is only what ran on this computer:
 
 1. **`pnpm verify`**: type checking, linting (including the rules on which package may use
-   which) and 3,570 automated tests in 140 test files, many of them against a real local
+   which) and 3,573 automated tests in 140 test files, many of them against a real local
    PostgreSQL database and against fakes of the vendors' APIs built from their documentation.
    It passed uncached (`TURBO_FORCE=true pnpm verify`, exit code 0).
 2. **`pnpm eval --mode mock`**: the evaluation suite's 72 simulated conversations run end to end
@@ -39,7 +39,7 @@ outside service is tried for the first time, and its Part 5 lists those first tr
 
 The system is a TypeScript monorepo: a Next.js app (`apps/web`) for every screen and HTTP route,
 and packages for each part of the logic. `docs/ARCHITECTURE.md` describes the design and has an
-"As built" section for each part; `docs/DECISIONS.md` records 300 decisions made along the way.
+"As built" section for each part; `docs/DECISIONS.md` records 305 decisions made along the way.
 
 ### Foundations
 
@@ -171,8 +171,9 @@ and packages for each part of the logic. `docs/ARCHITECTURE.md` describes the de
 A threat model (`docs/THREAT_MODEL.md`) covering prompt injection through every input, tenant
 isolation, webhook spoofing and replay, secrets and token refresh, personal data in logs,
 server-side request forgery, abuse of the public chat and runaway model spend, each threat with
-its mitigation and the test that proves it; then an independent audit of the whole system whose
-findings were fixed with tests. Added: rate limits and model-spend caps per customer, business
+its mitigation and the test that proves it; then a second, independent pass over the whole
+system (by another AI model reading the code, not by an outside security firm) whose findings
+were fixed with tests. Added: rate limits and model-spend caps per customer, business
 and agency (emergencies still answered, the customer told to call 911); Sentry error reports
 with scrubbing; structured logs with redaction; one trace per customer message; health and
 readiness routes; alerts on failed sends and stuck work; data-retention jobs; backup and restore
@@ -185,12 +186,15 @@ never received an event.
   through correctly signed webhooks and a fake of Meta's Graph API, email through a local mail
   server connected from the admin panel, and the test channel from first message to the lead
   list and its CSV export; the website chat already had its journey. To reach the fakes from a
-  production build, three development-only variables were added that a deployment ignores
-  (DECISIONS 292).
+  production build, three development-only variables were added. They are honoured only on a
+  developer's computer (as the built-in sign-in is), and the readiness route fails a reachable
+  production deployment on which any of them is set (DECISIONS 292, 301).
 - **A readiness check for a job runner that never runs** (THREAT_MODEL 4.16): `/api/health/ready`
-  now fails when customer messages have waited more than 30 minutes without a reply turn. The
-  audit had left this to monitoring; it could be done simply, so it is now a check (DECISIONS
-  291), proven by a database test and a readiness test.
+  now fails when customer messages have waited more than 30 minutes without any reply turn
+  starting. A turn that started and failed does not count (it has its own alert), so one failed
+  turn cannot fail the whole deployment's readiness. The audit had left this to monitoring; it
+  could be done simply, so it is now a check (DECISIONS 291, 302), checked by database tests and
+  a readiness test.
 - **People management** (added at the end of this chunk, **after** the whole-system security
   audit of C17, and covered by this chunk's own review and tests only): a **People** page for
   the agency's admins and members and a **People** tab per business for its client owner and
@@ -210,6 +214,18 @@ never received an event.
   test at both widths in which an agency admin gives a client owner a login, that person signs
   in and sees only their business, and is turned away after removal. Supabase's invitation
   emails were never sent (HUMAN_TODO step 20 has the live check).
+- **A final review of this chunk** before this report: it read people management as an attacker
+  would and found no way to give oneself or anyone else more access than the person has, to
+  reach another agency's or business's people, or to remove an agency's last admin. It fixed
+  four problems, each with a test: an account registered under a look-alike email address (a
+  special "K" character the database treats as "k") could have received access meant for the
+  plain address (low likelihood: it needs an unconfirmed sign-up); the browser tests' fake
+  services could be switched on in a self-hosted production build reachable by others, which
+  would have sent Meta's access tokens elsewhere; one failed reply turn made the readiness route
+  report the whole deployment unhealthy for up to 90 minutes; and the load test's guard missed
+  a database server named in the connection string's options. It also corrected the launch
+  checklist where a step could not pass as written (step 22 needed a business that did not
+  exist yet) or needed a value typed into the terminal first (DECISIONS 301 to 305).
 - **The load test** (below).
 - **Documents:** the launch checklist (`docs/HUMAN_TODO.md`, rewritten as one ordered list of 41
   steps), `docs/RUNBOOK.md` (deploy, rollback, key rotation, reconnecting channels, daily checks,
@@ -220,9 +236,9 @@ never received an event.
 
 | Run | Command | Result on this computer |
 | --- | --- | --- |
-| Type check, lint, tests | `TURBO_FORCE=true pnpm verify` | Exit code 0; 3,570 tests in 140 files passed across 21 packages; package boundaries and formatting checks passed |
+| Type check, lint, tests | `TURBO_FORCE=true pnpm verify` | Exit code 0; 3,573 tests in 140 files passed across 21 packages; package boundaries and formatting checks passed |
 | Evaluation harness, mock | `pnpm eval --mode mock` | Exit code 0: "HARNESS CHECK PASSED", all 72 conversations ran to the end and every rule the engine enforces in code held; a mock run, so no quality score |
-| Browser tests | `pnpm e2e -- --trace off` | 38 passed, 4 skipped (the four channel journeys run at desktop width only), in 4.6 minutes, at 1280×800 and 390×844 |
+| Browser tests | `pnpm e2e -- --trace off` | 38 passed, 4 skipped (the four channel journeys run at desktop width only), in about 5 minutes, at 1280×800 and 390×844; run twice in a row after the final review's changes, both times all passing |
 | Load test | `pnpm load:test` | Passed (numbers below) |
 
 The tests use an injected clock wherever time matters. Vendor calls go to fakes built from each
@@ -245,11 +261,11 @@ business with its daily reply cap at the lowest allowed value (10).
 | Customer messages | 918 (900 in bursts, 18 at the capped business) |
 | Bursts answered | 300 of 300, each by exactly one reply turn; no failed or superseded turn |
 | Order | Every conversation's replies left in the order they were stored |
-| Webhook handling | median 0.03 s, 95th percentile 0.69 s, slowest 0.81 s |
-| From a burst's last message to the reply leaving | median 5.55 s, 95th percentile 7.21 s, slowest 7.29 s, of which 4.0 s is the configured wait (so 1.55 s, 3.21 s and 3.29 s beyond it; the test fails above 30 s beyond it) |
+| Webhook handling | median 0.03 s, 95th percentile 0.66 s, slowest 0.88 s |
+| From a burst's last message to the reply leaving | median 7.64 s, 95th percentile 8.51 s, slowest 8.68 s, of which 4.0 s is the configured wait (so 3.64 s, 4.51 s and 4.68 s beyond it; the test fails above 30 s beyond it). An earlier run on the same computer measured a median of 5.55 s: these numbers move from run to run |
 | Limits at defaults | None tripped |
 | Business at its cap | 10 conversations answered, then 4 stopped conversations each got the notice exactly once (with the 911 sentence) and no model turn; a customer reporting a gas smell was still answered |
-| Duration | 96 seconds |
+| Duration | 99 seconds |
 
 **What these numbers are not:** they come from one computer, with local PostgreSQL, the job
 runner inside the same process instead of Inngest, and a stand-in model that answers instantly.
@@ -316,7 +332,9 @@ Each item says where to read more. The launch checklist turns them into steps.
    people are given access. Supabase's invitation and sign-in emails, with the templates of
    HUMAN_TODO step 5, have never been sent (live check: HUMAN_TODO step 20,
    `pnpm --filter @repo/db live:invite`). A client owner's limits on managing their staff are
-   enforced by the server, not by row-level security (THREAT_MODEL 4.17). The very first agency
+   enforced by the server, not by row-level security (THREAT_MODEL 4.17); the database refuses
+   every direct write of the membership tables by a client user, so this matters only if the
+   server's own checks had a bug (DECISIONS 304). The very first agency
    admin is still made from the command line (`pnpm db:create-admin`). Deleting one customer's
    data on request has no screen yet (`docs/RUNBOOK.md`).
 9. **Smaller known limits:** a service radius cannot be checked (no ZIP-code geography; list ZIP

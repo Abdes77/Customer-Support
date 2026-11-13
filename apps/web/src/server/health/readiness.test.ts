@@ -111,6 +111,26 @@ describe("readiness (C17)", () => {
     ).toBe("ready");
   });
 
+  it("fails a reachable production build that has the browser tests' fake services set (C18)", async () => {
+    const fakes = {
+      DEV_META_GRAPH_URL: "http://127.0.0.1:3101",
+      DEV_LOCAL_MAIL_PORTS: "3993",
+      DEV_LOCAL_MAIL_CA_FILE: "/tmp/ca.pem",
+    };
+    for (const [name, value] of Object.entries(fakes)) {
+      for (const environment of ["production", "local"] as const) {
+        const report = await evaluateReadiness(facts({ environment, vars: { [name]: value } }));
+        expect(statusOf(report, "development_switches")).toBe("fail");
+        expect(report.status).toBe("not_ready");
+      }
+    }
+    // On loopback (the browser tests) they are expected.
+    const tests = await evaluateReadiness(
+      facts({ environment: "local", vars: { ...fakes, APP_URL: "http://127.0.0.1:3100" } }),
+    );
+    expect(statusOf(tests, "development_switches")).toBe("ok");
+  });
+
   it("fails without jobs, without the Claude API, without the database", async () => {
     expect(statusOf(await evaluateReadiness(facts({ jobs: "unconfigured" })), "jobs")).toBe("fail");
     expect(statusOf(await evaluateReadiness(facts({ model: "unconfigured" })), "model")).toBe(

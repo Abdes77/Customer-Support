@@ -281,5 +281,27 @@ describe("fakes of outside services for the browser tests (C18)", () => {
     for (const environment of ["production", "preview", "development"] as const) {
       expect(localServiceFakes(loadEnv(vars), { ...hosted, environment })).toEqual({});
     }
+    // A self-hosted production build with DEVELOPMENT_MODE=1 ("local") that others can reach
+    // ignores them too; only a production build on loopback (the browser tests) uses them.
+    expect(
+      localServiceFakes(
+        loadEnv({ ...vars, APP_URL: "https://bot.example.com" }),
+        local,
+        "production",
+      ),
+    ).toEqual({});
+    expect(localServiceFakes(loadEnv(vars), local, "production")).toEqual({});
+    expect(
+      localServiceFakes(loadEnv({ ...vars, APP_URL: "http://127.0.0.1:3100" }), local, "production")
+        .graphBaseUrl,
+    ).toBe("http://127.0.0.1:3101");
+    // The fake Graph API must be on this machine.
+    expect(
+      localServiceFakes(
+        loadEnv({ ...vars, DEV_META_GRAPH_URL: "https://graph.example.com" }),
+        local,
+        "development",
+      ).graphBaseUrl,
+    ).toBeUndefined();
   });
 });
