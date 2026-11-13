@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { cleanBody } from "./body/clean";
 import { htmlToText } from "./body/html";
-import { classifyEmail, type ClassifyContext, replyAddressOf } from "./classify";
+import { classifyEmail, type ClassifyContext, failedDmarc, replyAddressOf } from "./classify";
 import { composeEmail, personName, replyCore } from "./compose";
 import { buildEmail } from "./mime/build";
 import { parseEmail } from "./mime/parse";
@@ -202,6 +202,22 @@ describe("classifyEmail", () => {
 
   it("answers a person writing to the business", async () => {
     expect(await classify(rawEmail())).toEqual({ kind: "customer" });
+  });
+
+  it("believes only the receiving server's verdict on DMARC, the topmost header (audit)", async () => {
+    // The receiving server puts its Authentication-Results above everything the message
+    // arrived with; a header further down was written by whoever sent the message.
+    const withResults = (top: string, below: string) =>
+      parseEmail(
+        `Authentication-Results: ${top}\r\nAuthentication-Results: ${below}\r\n${rawEmail()}`,
+      );
+    const fail = "mx.receiver.test; spf=fail; dmarc=fail (p=REJECT) header.from=example.com";
+    const pass = "mx.sender.test; spf=pass; dmarc=pass header.from=example.com";
+    expect(failedDmarc(await withResults(fail, pass))).toBe(true);
+    // A sender cannot talk a failure into a pass, and a "fail" it wrote itself counts for
+    // nothing either: only the top one is read.
+    expect(failedDmarc(await withResults(pass, fail))).toBe(false);
+    expect(failedDmarc(await parseEmail(rawEmail()))).toBe(false);
   });
 
   it("ignores out-of-office replies, by RFC 3834 header, by Precedence and by subject", async () => {

@@ -1,3 +1,5 @@
+import { safeErrorMessage, safeErrorStack } from "./errors";
+
 /**
  * Structured JSON logger with redaction. It has no dependencies so it runs in Node, the edge
  * and tests. Process-wide listeners (`addLogListener`) see every record after redaction; C17
@@ -109,8 +111,13 @@ function mustRedact(key: string, value: unknown): boolean {
 }
 
 function serializeError(error: Error, depth: number, ancestors: Set<object>): unknown {
-  const out: Record<string, unknown> = { name: error.name, message: error.message };
-  if (error.stack !== undefined) out["stack"] = error.stack;
+  // A failed database statement names its values in its message and stack: never logged.
+  const out: Record<string, unknown> = {
+    name: error.name,
+    message: safeErrorMessage(error.message),
+  };
+  const stack = safeErrorStack(error.stack, error.message);
+  if (stack !== undefined) out["stack"] = stack;
   for (const key of ["code", "retryable", "provider", "status", "details"] as const) {
     const value = (error as unknown as Record<string, unknown>)[key];
     if (value !== undefined) out[key] = redact(value, depth + 1, ancestors);

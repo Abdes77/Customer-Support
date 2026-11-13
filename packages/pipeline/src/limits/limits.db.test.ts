@@ -13,12 +13,18 @@ import {
   escalations,
   modelCalls,
   takeoverLocks,
+  usageCounters,
 } from "@repo/db";
 import { settingsWith } from "@repo/settings";
 
 import { createHarness, type Harness, message, reply, type TestTenant } from "../testing/harness";
 import { exceededLimit, type LimitUsage, startOfDay, startOfMonth } from "./usage";
-import { mayDescribeEmergency } from "./guard";
+import {
+  EMERGENCY_TURNS_PAST_LIMIT_PER_BUSINESS,
+  LIFE_SAFETY_SENTENCE,
+  limitNoticeText,
+  mayDescribeEmergency,
+} from "./guard";
 
 /*
  * The limits guard (C17) end to end, on a fixed clock: 2026-06-15 12:00 in New York, so the
@@ -29,9 +35,12 @@ const NOW = new Date("2026-06-15T16:00:00.000Z");
 
 let h: Harness;
 let calls: EngineTurnInput[];
+/** The pipeline's clock: NOW, moved by the tests that need a later hour. */
+let now = new Date(NOW);
 
 beforeEach(async () => {
-  h = await createHarness({ clock: () => new Date(NOW) });
+  now = new Date(NOW);
+  h = await createHarness({ clock: () => new Date(now) });
   calls = [];
   h.engine.respond = async (input) => {
     calls.push(input);
@@ -112,6 +121,41 @@ describe("rate limits (C17)", () => {
     expect(rows.filter((row) => row.direction === "inbound")).toHaveLength(7);
     const [conversation] = await h.conversationsOf(tenant);
     expect(conversation!.unreadCount).toBeGreaterThanOrEqual(7);
+
+    // An hour later the customer writes again: they are told again (before the audit they
+    // got nothing more that day), and the agency is not alerted a second time.
+    now = new Date(NOW.getTime() + 61 * 60_000);
+    await h.deliver(tenant, [message("is anyone there")]);
+    await h.idle();
+    expect(calls).toHaveLength(0);
+    expect(notices(await h.messagesOf(tenant))).toHaveLength(2);
+    expect(await limitAlerts(tenant)).toHaveLength(1);
+  });
+
+  it("always tells a stopped customer to call 911, whatever the business wrote in the notice", async () => {
+    const custom = await h.newTenant({
+      "limits.contact_messages_per_hour": 5,
+      "limits.notice_message": "We are very busy today and will write back.",
+    });
+    const empty = await h.newTenant({
+      "limits.contact_messages_per_hour": 5,
+      "limits.notice_message": "",
+    });
+    for (const tenant of [custom, empty]) {
+      await h.deliver(
+        tenant,
+        Array.from({ length: 6 }, (_, index) => message(`question ${index + 1}`)),
+      );
+    }
+    await h.idle();
+    expect(calls).toHaveLength(0);
+    expect(notices(await h.messagesOf(custom)).map((row) => row.text)).toEqual([
+      `We are very busy today and will write back. ${LIFE_SAFETY_SENTENCE}`,
+    ]);
+    expect(notices(await h.messagesOf(empty)).map((row) => row.text)).toEqual([
+      LIFE_SAFETY_SENTENCE,
+    ]);
+    expect(notices(await h.messagesOf(empty))[0]).toMatchObject({ status: "sent" });
   });
 
   it("answers a message that may describe an emergency past a limit, a few times a day", async () => {
@@ -136,6 +180,103 @@ describe("rate limits (C17)", () => {
       status: "skipped",
       skipReason: "limits:contact_messages_per_hour",
     });
+  });
+
+  it("answers an emergency past a limit when it is worded in none of the business's phrases", async () => {
+    const tenant = await h.newTenant({ "limits.contact_messages_per_hour": 5 });
+    await h.deliver(
+      tenant,
+      Array.from({ length: 6 }, (_, index) => message(`spam ${index}`)),
+    );
+    await h.idle();
+    expect(calls).toHaveLength(0);
+    // "something is on fire" is the phrase; this is how a person says it.
+    await h.deliver(tenant, [message("my house is on fire please help")]);
+    await h.idle();
+    expect(calls).toHaveLength(1);
+    expect((await turnsOf(tenant)).at(-1)).toEqual({ status: "replied", skipReason: null });
+  });
+
+  it("does not let the word for an emergency reopen a business's cap through new conversations", async () => {
+    const tenant = await h.newTenant({ "limits.business_daily_spend_usd": 1 });
+    await spend(tenant, 1_000_000);
+    // All but one of today's emergency turns past a limit are used, across the business.
+    await h.t.admin.insert(usageCounters).values({
+      ...tenant.tenant,
+      metric: "limit_emergency_turns",
+      subject: "business",
+      windowStart: new Date("2026-06-15T00:00:00.000Z"),
+      windowSeconds: 86_400,
+      value: EMERGENCY_TURNS_PAST_LIMIT_PER_BUSINESS - 1,
+    });
+    await h.deliver(tenant, [message("there is a fire", { from: "visitor-1" })]);
+    await h.idle();
+    expect(calls).toHaveLength(1);
+
+    // From here on every new conversation that says "fire" gets the notice, not a model
+    // call, and the team is told loudly, once.
+    for (const from of ["visitor-2", "visitor-3"]) {
+      await h.deliver(tenant, [message("there is a fire", { from })]);
+      await h.idle();
+    }
+    expect(calls).toHaveLength(1);
+    const rows = await h.messagesOf(tenant);
+    expect(notices(rows)).toHaveLength(2);
+    expect(notices(rows).every((row) => (row.text ?? "").includes("call 911"))).toBe(true);
+    const raised = await h.t.admin
+      .select({ kind: alerts.kind, severity: alerts.severity })
+      .from(alerts)
+      .where(
+        and(
+          eq(alerts.businessId, tenant.tenant.businessId),
+          eq(alerts.kind, "limit_emergency_allowance"),
+        ),
+      );
+    expect(raised).toEqual([{ kind: "limit_emergency_allowance", severity: "critical" }]);
+    expect(
+      h.logs.filter(
+        (record) =>
+          record.level === "error" && record.msg === "limits.emergency_allowance_exhausted",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("treats the longest conversation as a limit: an emergency is still answered, then the customer is told and a person takes over", async () => {
+    const tenant = await h.newTenant({ "conversation.max_bot_replies": 5 });
+    for (let index = 0; index < 5; index += 1) {
+      await h.deliver(tenant, [message(`question ${index}`)]);
+      await h.idle();
+    }
+    expect(calls).toHaveLength(5);
+
+    // Before the audit the claim stopped here silently, whatever the customer wrote.
+    await h.deliver(tenant, [message("there is smoke coming out of the outlet")]);
+    await h.idle();
+    expect(calls).toHaveLength(6);
+
+    await h.deliver(tenant, [message("and what would new gutters cost")]);
+    await h.idle();
+    expect(calls).toHaveLength(6);
+    expect((await turnsOf(tenant)).at(-1)).toEqual({
+      status: "skipped",
+      skipReason: "limits:conversation_replies",
+    });
+    const rows = await h.messagesOf(tenant);
+    expect(notices(rows)).toHaveLength(1);
+    expect(notices(rows)[0]).toMatchObject({ status: "sent" });
+    expect(notices(rows)[0]!.text).toContain("call 911");
+    const [conversation] = await h.conversationsOf(tenant);
+    const locks = await h.t.admin
+      .select({ source: takeoverLocks.source, reason: takeoverLocks.reason })
+      .from(takeoverLocks)
+      .where(eq(takeoverLocks.conversationId, conversation!.id));
+    expect(locks).toEqual([{ source: "rule", reason: "limit:conversation_replies" }]);
+    expect(h.events.named("handoff.attention_needed").map((event) => event.data.reason)).toEqual([
+      "limit_reached",
+    ]);
+    const [alert] = await limitAlerts(tenant);
+    expect(alert).toMatchObject({ severity: "warning" });
+    expect(alert!.dedupeKey).toMatch(/^limit_reached:conversation_replies:conversation:/);
   });
 
   it("counts the bot's replies per customer per day", async () => {
@@ -270,6 +411,7 @@ describe("spend caps (C17)", () => {
 
 describe("limit rules (pure)", () => {
   const usage: LimitUsage = {
+    conversationReplies: 0,
     contactMessagesLastHour: 0,
     contactRepliesToday: 0,
     businessRepliesToday: 0,
@@ -327,5 +469,53 @@ describe("limit rules (pure)", () => {
     expect(mayDescribeEmergency(["there is a gas leak"], classes)).toBe(true);
     expect(mayDescribeEmergency(["need a quote for gutters"], classes)).toBe(false);
     expect(mayDescribeEmergency([], classes)).toBe(false);
+  });
+
+  it("recognizes an emergency said in a person's own words, with or without phrase lists", () => {
+    const classes = settingsWith({}).values["emergency.classes"];
+    // None of these contains a phrase, a name or a key of a class (the C17 rule missed all).
+    for (const text of [
+      "my house is on fire",
+      "I think I smell something like gas in here",
+      "a tree came down on our house last night",
+      "the outlet is sparking",
+      "water is coming through my ceiling",
+      "my husband got hurt, the ceiling fell",
+      "the basement flooded",
+      "please hurry this is an emergency",
+    ]) {
+      expect(mayDescribeEmergency([text], classes), text).toBe(true);
+      // The danger words hold even for a business that deleted its classes.
+    }
+    expect(mayDescribeEmergency(["my house is on fire"], [])).toBe(true);
+    for (const text of [
+      "can you replace my water heater next month",
+      "what are your hours on saturday",
+      "how much is a new roof",
+      "do you install ceiling fans",
+      "thanks, the house looks great",
+    ]) {
+      expect(mayDescribeEmergency([text], classes), text).toBe(false);
+    }
+  });
+
+  it("puts the instruction to call 911 into every notice", () => {
+    expect(
+      limitNoticeText("Our team will get back to you. If anyone is in danger, call 911."),
+    ).toBe("Our team will get back to you. If anyone is in danger, call 911.");
+    expect(limitNoticeText("  Back soon.  ")).toBe(`Back soon. ${LIFE_SAFETY_SENTENCE}`);
+    expect(limitNoticeText("")).toBe(LIFE_SAFETY_SENTENCE);
+    // A number that merely contains the digits is not the instruction.
+    expect(limitNoticeText("Call 303-555-9110.")).toBe(
+      `Call 303-555-9110. ${LIFE_SAFETY_SENTENCE}`,
+    );
+  });
+
+  it("stops at the longest conversation before any other limit, follow-ups included", () => {
+    const long = { ...usage, conversationReplies: 40 };
+    const defaults = settingsWith({}).values;
+    expect(exceededLimit(long, defaults, "inbound_message")).toBe("conversation_replies");
+    expect(exceededLimit(long, defaults, "follow_up")).toBe("conversation_replies");
+    expect(exceededLimit({ ...usage, conversationReplies: 39 }, defaults, "follow_up")).toBeNull();
   });
 });

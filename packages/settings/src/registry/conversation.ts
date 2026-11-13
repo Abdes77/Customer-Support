@@ -43,7 +43,7 @@ export const conversationSettings = defineCategory("conversation", {
   }),
   "conversation.max_bot_replies": setting({
     label: "Longest conversation",
-    help: "After this many bot replies in one conversation the bot stops and hands it to a person, so a conversation cannot run on forever.",
+    help: "After this many bot replies in one conversation the bot stops and hands it to a person, so a conversation cannot run on forever. The customer is told (the message when a limit stops the bot), the team is alerted, and a message that may describe an emergency is still answered.",
     field: f.integer({ min: 5, max: 200, unit: "replies" }),
     default: 40,
   }),

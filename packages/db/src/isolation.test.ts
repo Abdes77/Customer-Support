@@ -1296,6 +1296,39 @@ describe("audit log", () => {
     expect((outcome as { code: string | null }).code).toBe(PG_ERROR.restrictViolation);
   });
 
+  it("can be purged by no signed-in user, not even the agency's admin, and by no one below the system role (audit)", async () => {
+    // `app.purge_audit_log` (C17) deletes audit entries as its owner. Only `app_system`
+    // may execute it; a signed-in person reaching the database with their own token
+    // (Supabase's REST API runs as `authenticated`) must not be able to erase their traces,
+    // and neither they nor a system scope may call the scope helpers to learn other users.
+    const before = (await t.admin.execute(sql`select count(*)::int as n from audit_log`)) as Rows;
+    for (const user of [world.users.aAdmin, world.users.aMember, world.users.a1Owner]) {
+      await t.db.asUser(user).run(async ({ tx }) => {
+        for (const statement of [
+          sql`select app.purge_audit_log(now() - interval '400 days')`,
+          sql`select app.purge_audit_log('-infinity'::timestamptz)`,
+          sql`select * from app.scope_user_ids()`,
+        ]) {
+          const outcome = await probe(tx, async (inner) => {
+            await inner.execute(statement);
+            return 1;
+          });
+          expect(outcome.ok).toBe(false);
+          expect((outcome as { code: string | null }).code).toBe(PG_ERROR.insufficientPrivilege);
+        }
+      });
+    }
+    const granted = (await t.admin.execute(sql`
+      select r.rolname as role
+        from pg_roles r
+       where r.rolname in ('public', 'anon', 'authenticated', 'app_system')
+         and has_function_privilege(r.oid, 'app.purge_audit_log(timestamptz)', 'execute')
+       order by 1`)) as Rows;
+    expect(granted).toEqual([{ role: "app_system" }]);
+    const after = (await t.admin.execute(sql`select count(*)::int as n from audit_log`)) as Rows;
+    expect(after).toEqual(before);
+  });
+
   it("keeps its entries when the acting user is deleted", async () => {
     const temp = await t.db.localAuth.upsertUser({ email: "leaver@world.test" });
     const { a1 } = world.businesses;

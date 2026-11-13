@@ -25,6 +25,9 @@ import { resolveAuthMode } from "../auth/mode";
  * switch is on in a production build that others can reach. Warnings (still 200): Sentry is
  * off in a production build; businesses whose emergencies reach nobody (by id); stuck work
  * alerted in the last day.
+ *
+ * The route is public. Without `HEALTH_CHECK_TOKEN` it answers "ready" or "not_ready" and
+ * nothing else, and one evaluation serves every request for a few seconds.
  */
 
 export interface ReadinessFacts {
@@ -166,23 +169,72 @@ export function authorizedForDetails(request: Request, env: Env): boolean {
 }
 
 /**
- * What the route answers: the verdict always; each check's name and status always (they
- * say nothing about a tenant); the details (which variables, which businesses) only with
- * the token, or on a developer machine.
+ * Who may read the checks: the holder of the health check token, or anyone on a developer
+ * machine (a development server, or a production build whose `APP_URL` is this machine, as
+ * the browser tests run it). A production build that others can reach never shows them
+ * without the token, even when `DEVELOPMENT_MODE=1` made it "local": that is the very
+ * misconfiguration the check reports, and its details name businesses and missing variables.
+ */
+export function mayReadDetails(
+  request: Request,
+  facts: Pick<ReadinessFacts, "env" | "deployment" | "runtime">,
+): boolean {
+  if (authorizedForDetails(request, facts.env)) return true;
+  return (
+    facts.deployment.environment === "local" &&
+    (facts.runtime !== "production" || isLoopbackUrl(facts.env.APP_URL))
+  );
+}
+
+/**
+ * What the route answers. Without the token: the verdict and nothing else, which is all a
+ * load balancer needs. The names and statuses of the checks say which protection is off
+ * (a development switch such as unsigned job calls, error reporting, a business whose
+ * emergencies reach nobody), which is a map for an attacker, so they are for operators:
+ * with the token, or on a developer machine, every check with its detail.
  */
 export function readinessBody(
   report: ReadinessReport,
   detailed: boolean,
 ): {
   readonly status: ReadinessReport["status"];
-  readonly checks: readonly { name: string; status: CheckStatus; detail?: string }[];
+  readonly checks?: readonly { name: string; status: CheckStatus; detail: string }[];
 } {
+  if (!detailed) return { status: report.status };
   return {
     status: report.status,
-    checks: report.checks.map((item) =>
-      detailed
-        ? { name: item.name, status: item.status, detail: item.detail }
-        : { name: item.name, status: item.status },
-    ),
+    checks: report.checks.map((item) => ({
+      name: item.name,
+      status: item.status,
+      detail: item.detail,
+    })),
+  };
+}
+
+/** How long one evaluation answers every request of this process. */
+export const READINESS_CACHE_MS = 15_000;
+
+/**
+ * Readiness reads the database once per active business, and the route is public: without
+ * a bound, every anonymous request would cost that many transactions. One evaluation
+ * therefore serves all requests for `ttlMs` (and all that arrive while it runs); an
+ * evaluation that throws is not kept.
+ */
+export function createReadinessCache(options: {
+  readonly evaluate: () => Promise<ReadinessReport>;
+  readonly now: () => number;
+  readonly ttlMs?: number;
+}): () => Promise<ReadinessReport> {
+  const ttlMs = options.ttlMs ?? READINESS_CACHE_MS;
+  let cached: { readonly at: number; readonly report: Promise<ReadinessReport> } | null = null;
+  return () => {
+    const at = options.now();
+    if (cached !== null && at - cached.at < ttlMs && at >= cached.at) return cached.report;
+    const entry = { at, report: options.evaluate() };
+    cached = entry;
+    entry.report.catch(() => {
+      if (cached === entry) cached = null;
+    });
+    return entry.report;
   };
 }

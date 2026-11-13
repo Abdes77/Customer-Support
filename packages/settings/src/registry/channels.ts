@@ -246,7 +246,7 @@ export const channelsSettings = defineCategory("channels", {
     }),
     "channels.email.reply_to": setting({
       label: "Reply to",
-      help: "Who gets the bot's reply when the customer's email had other people in copy. Only the sender by default: the others may be other contractors the customer wrote to, or strangers.",
+      help: "Who gets the bot's reply when the customer's email had other people in copy. Only the sender by default: the others may be other contractors the customer wrote to, or strangers. With \"Everyone on the email\", the bot copies the others from the customer's first reply to one of its emails on, never on its first answer: until then nothing proves who wrote.",
       field: f.select([
         ["all", "Everyone on the email"],
         ["sender", "Only the sender"],
@@ -255,7 +255,7 @@ export const channelsSettings = defineCategory("channels", {
     }),
     "channels.email.quote_original": setting({
       label: "Quote the customer's email",
-      help: "The customer's message is quoted below the reply, as mail programs do.",
+      help: "The customer's message is quoted below the reply, as mail programs do, once the customer has replied to one of the bot's emails. A first email is never quoted back: its sender is not proven.",
       field: f.boolean(),
       default: true,
     }),

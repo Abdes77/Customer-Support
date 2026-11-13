@@ -63,7 +63,9 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 - Secrets: never print, log or commit one. Tenant credentials are encrypted before storage and
   never sent to the browser or put in a job payload.
 - Logging: `logger.child({ traceId, businessId })` from `@repo/core`. Never log message text,
-  contact details or tokens.
+  contact details or tokens, and never build an error message from a statement's values or a
+  customer's words: error text goes to logs, Sentry, Inngest and stored rows (`@repo/db`
+  strips a failed statement's parameters; `safeErrorMessage` in `@repo/core`).
 - Jobs: `JobDefinition`s from `@repo/jobs` (ARCHITECTURE §4), registered in
   `apps/web/src/server/pipeline`; payloads carry ids only; handlers are idempotent; side
   effects sit in their own step. Pipeline tests: `src/testing/harness.ts` in `packages/pipeline`.

@@ -318,3 +318,30 @@ describe("IMAP and SMTP against a local mail server", () => {
     );
   });
 });
+
+describe("Microsoft Graph state links (audit)", () => {
+  it("reads a stored delta or next link only from Graph's own host: the token goes nowhere else", async () => {
+    const calls: string[] = [];
+    const client = createGraphMailClient(async (input) => {
+      calls.push(String(input));
+      return Response.json({ value: [] });
+    });
+    for (const link of [
+      "https://evil.example/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=x",
+      "https://graph.microsoft.com.evil.example/v1.0/me/messages/delta",
+      "http://graph.microsoft.com/v1.0/me/messages/delta",
+      "https://graph.microsoft.com:8443/v1.0/me/messages/delta",
+      "not a url",
+    ]) {
+      await expect(
+        Promise.resolve().then(() => client.deltaNext("graph-token", link)),
+      ).rejects.toThrow();
+    }
+    expect(calls).toEqual([]);
+    await client.deltaNext(
+      "graph-token",
+      "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=abc",
+    );
+    expect(calls).toHaveLength(1);
+  });
+});

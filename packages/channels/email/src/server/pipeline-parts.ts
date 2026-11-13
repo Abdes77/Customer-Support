@@ -11,6 +11,7 @@ import {
   eq,
   gt,
   gte,
+  inArray,
   messages,
   ne,
   notInArray,
@@ -34,6 +35,8 @@ import { EmailConnectionConfig } from "../config";
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
+
+const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
 const EmailAddressList = (value: unknown): { address: string; name: string | null }[] =>
   Array.isArray(value)
@@ -132,29 +135,39 @@ export function createEmailComposer() {
           .join("\n")
           .trim();
 
-      // The bot never quotes the very first email of an address (C17: reflection). From is
-      // not authenticated: whoever forges someone's address would otherwise get their own
-      // text delivered to that person from the business's inbox. Once the address has written
-      // again (in reply to us, so from the real mailbox), quoting is safe.
-      const [written] =
-        conversation === undefined || input.author !== "bot"
+      // What the bot may repeat or copy to others depends on proof that the sender receives
+      // our mail (C17 and its audit: reflection). From and Reply-To are not authenticated:
+      // whoever writes "as" someone else's address would otherwise have their own text, and a
+      // list of addresses of their choosing, served by the business's inbox. The proof is an
+      // In-Reply-To or References entry naming a message we sent to this very contact: our
+      // Message-IDs are unguessable and only its recipient has seen one. Counting the
+      // address's emails is no proof (a forger can send two). A person's manual reply is the
+      // person's own decision and is not restricted.
+      const envelope = asRecord(asRecord(lastInbound?.payload)["email"]);
+      const cited = [envelope["inReplyTo"], ...asList(envelope["references"])]
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+        .slice(0, 30);
+      const [answered] =
+        conversation === undefined || input.author !== "bot" || cited.length === 0
           ? []
           : await ctx.tx
-              .select({ total: sql<number>`count(*)::int` })
+              .select({ id: messages.id })
               .from(messages)
               .innerJoin(conversations, eq(conversations.id, messages.conversationId))
               .where(
                 and(
+                  eq(messages.channelConnectionId, conversation.connectionId),
                   eq(conversations.contactId, conversation.contactId),
-                  eq(messages.direction, "inbound"),
+                  eq(messages.direction, "outbound"),
+                  inArray(messages.externalMessageId, cited),
                 ),
-              );
-      const firstContact = written !== undefined && written.total <= 1;
-      const envelope = asRecord(asRecord(lastInbound?.payload)["email"]);
+              )
+              .limit(1);
+      const provenCorrespondent = input.author !== "bot" || answered !== undefined;
       const from = asRecord(envelope["from"]);
       const quote =
         values["channels.email.quote_original"] &&
-        !firstContact &&
+        provenCorrespondent &&
         lastInbound !== undefined &&
         (lastInbound.text ?? "").trim().length > 0
           ? {
@@ -177,9 +190,11 @@ export function createEmailComposer() {
       });
 
       // Reply to all: everyone the customer's last email went to, except the inbox (and the
-      // customer, whom the adapter addresses directly).
+      // customer, whom the adapter addresses directly). The bot copies nobody until the
+      // sender is a proven correspondent: the Cc list of an unauthenticated first email is
+      // up to twenty addresses of a stranger's choosing.
       const copied =
-        values["channels.email.reply_to"] === "all"
+        values["channels.email.reply_to"] === "all" && provenCorrespondent
           ? [...EmailAddressList(envelope["to"]), ...EmailAddressList(envelope["cc"])].filter(
               (item, index, list) =>
                 item.address !== inbox &&

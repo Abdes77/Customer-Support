@@ -69,6 +69,14 @@ Format of an entry:
      `<APP_URL>/auth/callback` and `<APP_URL>/auth/confirm` to Redirect URLs. The default
      Magic Link email template works as it is.
   5. Storage: create a **private** bucket named `attachments`. Add no policies to it.
+  6. Project Settings, API (Data API): remove `public` from "Exposed schemas" (or switch the
+     Data API off). The app never uses Supabase's REST or GraphQL API: it reads and writes
+     through its own database connection. Left on, any signed-in person can query the tables
+     row-level security lets them read with their own session, past the admin panel's finer
+     permissions: a client user can read every conversation, lead and lead report of their
+     own business whatever `client_portal.*` says (THREAT_MODEL 2.2 and 4.14), and agency
+     staff can write business-level setting rows the store never validated (they are ignored
+     when read, DECISIONS 42). Auth, Storage and Realtime do not need the Data API.
 - **Variables:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
   `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL` (transaction pooler),
   `DATABASE_URL_DIRECT` (direct), `SUPABASE_STORAGE_BUCKET` (only if the bucket has another
@@ -87,6 +95,10 @@ Format of an entry:
     `app_system`, that every table has forced row-level security, and that privileges match
     the policies.
   - Sign in at `<APP_URL>/sign-in` with a password and with an emailed link (after entry 5).
+  - The Data API is closed: `curl -s "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/conversations?select=id&limit=1"
+    -H "apikey: $NEXT_PUBLIC_SUPABASE_ANON_KEY"` must not answer with rows or `[]` (expect an
+    error saying the schema is not exposed). Then sign in again and open the inbox: live
+    updates (Realtime) must still arrive (entry 18).
   - File storage: no command yet. The first attachment sent through the test chat (C3) or
     the widget (C8) exercises upload and signed links.
   - Optional, on a staging project only: `SEED_USER_PASSWORD=<12+ characters> pnpm db:seed`
@@ -655,6 +667,12 @@ Format of an entry:
      rewrote the headers: tell the team, threading of customers' replies then rests on
      Gmail's thread id and Outlook's conversation id), no `takeover_locks` row with source
      `provider_inbox` exists for the thread, and the bot answers the customer's next email.
+     The same header decides quoting and copying (C17 audit, DECISIONS 288): the bot quotes
+     the customer, and copies the people in Cc with `channels.email.reply_to` = all, only
+     when the customer's email names one of our Message-IDs in In-Reply-To or References. Check
+     on each provider that the bot's answer to a customer's *reply* carries the quote; if a
+     provider rewrote our Message-ID it never will (safe, but tell the team: quoting and
+     reply-to-all are then off for that provider).
   2. Whether Graph's `message: delta` with `changeType=created` and the `receivedDateTime ge`
      filter returns new messages only once per folder in practice (duplicates are harmless:
      the Message-ID is the idempotency key).
@@ -763,6 +781,10 @@ Format of an entry:
      alert's code acknowledge an emergency). Calls and status callbacks need no console
      setting: each request names its own callback URLs (only when `APP_URL` is https).
      Optional: a Messaging Service (`TWILIO_MESSAGING_SERVICE_SID`) with the number in it.
+     In the Twilio console set a usage trigger or a monthly spend limit for the account
+     (Billing, Usage triggers): anyone who describes an emergency to a bot pages the
+     escalation chain, the app does not ration emergencies, and a flood of made-up ones is
+     bounded only by the per-customer and per-business limits (THREAT_MODEL 4.1b).
   2. **Alert email**: any SMTP server that may send as `ALERT_EMAIL_FROM` (Postmark, SES,
      Google Workspace relay...), with SPF/DKIM for that domain so alerts do not land in spam.
   3. **WhatsApp alerts** (optional): the agency's own WhatsApp Business number on the Cloud
@@ -968,9 +990,11 @@ Format of an entry:
      unused. `NEXT_PUBLIC_SENTRY_DSN` is not used yet (browser errors are not reported,
      THREAT_MODEL 4.10).
   2. `HEALTH_CHECK_TOKEN`: `openssl rand -base64 32`. Point the uptime monitor at
-     `<APP_URL>/api/health` (liveness) and `<APP_URL>/api/health/ready` (503 when not ready);
-     with `Authorization: Bearer <token>` the readiness answer says which check failed and
-     which businesses' emergencies reach nobody.
+     `<APP_URL>/api/health` (liveness) and `<APP_URL>/api/health/ready` (503 when not ready).
+     Without the token the readiness route answers `{"status":"ready"}` or
+     `{"status":"not_ready"}` and nothing else; with `Authorization: Bearer <token>` it lists
+     every check, says which failed and why, and which businesses' emergencies reach nobody.
+     One evaluation is reused for 15 seconds.
   3. `TRUSTED_PROXY_HOPS`: leave 1 on Vercel alone. Behind a CDN that appends to
      `X-Forwarded-For` (Cloudflare in front of Vercel), set 2, or set `CLIENT_IP_HEADER` to the
      header that CDN overwrites with the visitor's address (`cf-connecting-ip`).
@@ -982,8 +1006,19 @@ Format of an entry:
      `/api/health/ready` fails while it is on and `APP_URL` is not this machine.
   6. Review the defaults of `limits.*` with the agency (`docs/SETTINGS.md`): per customer 60
      messages an hour, 100 bot replies and $5 of model spend a day; per business 3,000 replies
-     and $100 a day; no monthly or agency-wide cap. `limits.notice_message` is what a customer
-     past a limit is told once a day. Retention defaults (`data.*`) are in entry 6.
+     and $100 a day; 40 bot replies per conversation (`conversation.max_bot_replies`); no
+     monthly or agency-wide cap. `limits.notice_message` is what a customer past a limit is
+     told, at most once an hour; "If anyone is in danger right now, call 911." is always part
+     of it. A message that may describe an emergency is still answered past a limit, 3 times
+     per conversation and 100 times per business a day (fixed in code). Know what a cap means
+     before launch (THREAT_MODEL 4.1, 4.1a, 4.15): it is approximate by the turns in flight, and
+     a flood on the website chat or by email that reaches a business's daily cap stops that
+     business's bot on every channel until the next day. Retention defaults (`data.*`) are in
+     entry 6.
+  7. The Supabase Data API must be closed for the `public` schema (entry 3, step 6).
+  8. `/api/health/ready` does not notice a job runner that accepts events and never runs them
+     (THREAT_MODEL 4.16): after every deployment run the live round trip of entry 7, and turn on
+     Inngest's own failure and "function not synced" notifications.
 - **Live checks that were skipped:**
   - Sentry: run `SENTRY_DSN=<dsn> pnpm dev`, sign in, then stop the local database
     (`pnpm services:down` or stop PostgreSQL) and open the inbox: the request errors must
@@ -992,7 +1027,13 @@ Format of an entry:
     was written from Sentry's protocol documentation as remembered; the docs site was not
     consulted from the build VM.
   - Readiness against the deployment: `curl -s -H "authorization: Bearer $HEALTH_CHECK_TOKEN"
-    <APP_URL>/api/health/ready` must answer `"status":"ready"`.
+    <APP_URL>/api/health/ready` must answer `"status":"ready"` with its checks, and the same
+    without the header must answer the status alone.
+  - Security headers on the deployment: `curl -sI <APP_URL>/sign-in` must show
+    `x-frame-options: DENY`, `x-content-type-options: nosniff` and a `referrer-policy`.
+  - Sentry receives no statement values: with `SENTRY_DSN` set on a staging deployment, cause
+    a database error on purpose (for example stop the database during a conversation) and
+    check that the event's message reads "Failed query: … params: [removed]".
   - Retention: after the first night, the Inngest run of `retention-purge` lists what it
     deleted (counts only).
   - Backups and a test restore: `docs/BACKUP_RESTORE.md`.

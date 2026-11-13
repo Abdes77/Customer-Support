@@ -37,7 +37,9 @@ import { raiseInAppAlert } from "../failures";
  *   then the contact when nothing else refers to it. When the conversation's lead must be
  *   kept longer (`data.lead_retention_days` empty, or the lead changed more recently), the
  *   conversation row stays as the lead's anchor and only its messages, files, turns, notes
- *   and model calls go. A conversation with a running emergency or an active takeover waits.
+ *   and model calls go. A conversation with a running emergency or an active takeover waits,
+ *   and one that a customer wrote in after the list was made is left alone
+ *   (`purgeConversationIfDue`).
  * - Leads unchanged for `data.lead_retention_days` are deleted (their fields, reports,
  *   routing and events with them).
  * - Customer files older than `data.attachment_retention_days` are deleted from storage; the
@@ -90,30 +92,109 @@ const EMPTY: PurgeResult = {
 
 const ago = (now: Date, ms: number) => new Date(now.getTime() - ms);
 
+/**
+ * What makes a conversation due: its last activity is older than `before`, it was not
+ * emptied already, nobody holds it and no emergency is running or recent.
+ */
+function dueCondition(before: Date, now: Date): SQL {
+  const holdSince = ago(now, EMERGENCY_HOLD_MS);
+  const due = and(
+    lt(
+      sql`greatest(coalesce(${conversations.lastMessageAt}, ${conversations.createdAt}), coalesce(${conversations.lastOutboundAt}, ${conversations.createdAt}), ${conversations.createdAt})`,
+      sql`${before.toISOString()}::timestamptz`,
+    ),
+    // Already emptied: nothing left to purge but the anchor of a kept lead.
+    sql`not (${conversations.metadata} ? 'purgedAt')`,
+    sql`not exists (select 1 from ${takeoverLocks} tl where tl.conversation_id = ${conversations.id} and tl.released_at is null)`,
+    sql`not exists (select 1 from ${escalations} e where e.conversation_id = ${conversations.id} and (e.status = 'active' or e.started_at > ${holdSince.toISOString()}::timestamptz))`,
+  );
+  // `and` of four conditions is never empty.
+  return due ?? sql`false`;
+}
+
 async function conversationsDue(
   ctx: BusinessContext,
   before: Date,
   now: Date,
 ): Promise<{ id: ConversationId; leadUpdatedAt: Date | null }[]> {
-  const holdSince = ago(now, EMERGENCY_HOLD_MS);
   return ctx.tx
     .select({ id: conversations.id, leadUpdatedAt: leads.updatedAt })
     .from(conversations)
     .leftJoin(leads, eq(leads.conversationId, conversations.id))
-    .where(
-      and(
-        lt(
-          sql`greatest(coalesce(${conversations.lastMessageAt}, ${conversations.createdAt}), coalesce(${conversations.lastOutboundAt}, ${conversations.createdAt}), ${conversations.createdAt})`,
-          sql`${before.toISOString()}::timestamptz`,
-        ),
-        // Already emptied: nothing left to purge but the anchor of a kept lead.
-        sql`not (${conversations.metadata} ? 'purgedAt')`,
-        sql`not exists (select 1 from ${takeoverLocks} tl where tl.conversation_id = ${conversations.id} and tl.released_at is null)`,
-        sql`not exists (select 1 from ${escalations} e where e.conversation_id = ${conversations.id} and (e.status = 'active' or e.started_at > ${holdSince.toISOString()}::timestamptz))`,
-      ),
-    )
+    .where(dueCondition(before, now))
     .orderBy(conversations.createdAt)
     .limit(BATCH);
+}
+
+/**
+ * Purges one conversation that was listed as due, if it still is. The list was read in an
+ * earlier transaction: a customer may have written since (or a person taken the conversation
+ * over), and deleting on the list alone would delete the message that just arrived. So the
+ * row is locked (ingest takes the same lock before it stores a message) and looked at again;
+ * a conversation that is no longer due is left alone, files included.
+ *
+ * The files go after the rows: their paths are first recorded in `stored_uploads`, in the
+ * same transaction that deletes the rows, so a failure between the two leaves known paths
+ * that the housekeeping below removes a day later (no attachment refers to them any more).
+ */
+export async function purgeConversationIfDue(
+  p: PipelineContext,
+  business: BusinessRef,
+  conversation: { readonly id: ConversationId; readonly leadUpdatedAt: Date | null },
+  cutoffs: { readonly before: Date; readonly leadBefore: Date | null; readonly now: Date },
+): Promise<{ readonly outcome: "deleted" | "emptied" | "skipped"; readonly files: number }> {
+  const tenant = { agencyId: business.agencyId, businessId: business.businessId };
+  const scope = p.db.forBusiness(business.businessId, { agencyId: business.agencyId });
+  const keepLead =
+    conversation.leadUpdatedAt !== null &&
+    (cutoffs.leadBefore === null || conversation.leadUpdatedAt >= cutoffs.leadBefore);
+  const files = await scope.run(async (ctx) => {
+    const [still] = await ctx.tx
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.id, conversation.id), dueCondition(cutoffs.before, cutoffs.now)))
+      .for("update")
+      .limit(1);
+    if (still === undefined) return null;
+    const found = await filesOf(
+      ctx,
+      sql`${attachments.messageId} in (select m.id from messages m where m.conversation_id = ${conversation.id}::uuid)`,
+    );
+    if (found.length > 0) {
+      await ctx.tx
+        .insert(storedUploads)
+        .values(found.map((file) => ({ ...ctx.tenant, path: file.path, source: "retention" })))
+        .onConflictDoNothing();
+    }
+    if (keepLead) {
+      await ctx.tx.delete(messages).where(eq(messages.conversationId, conversation.id));
+      await ctx.tx.delete(modelCalls).where(eq(modelCalls.conversationId, conversation.id));
+      await ctx.tx.execute(
+        sql`delete from conversation_turns where conversation_id = ${conversation.id}::uuid`,
+      );
+      await ctx.tx.execute(
+        sql`delete from internal_notes where conversation_id = ${conversation.id}::uuid`,
+      );
+      await ctx.tx
+        .update(conversations)
+        .set({
+          metadata: sql`${conversations.metadata} || jsonb_build_object('purgedAt', ${cutoffs.now.toISOString()}::text)`,
+        })
+        .where(eq(conversations.id, conversation.id));
+    } else {
+      await ctx.tx.delete(conversations).where(eq(conversations.id, conversation.id));
+    }
+    return found;
+  });
+  if (files === null) return { outcome: "skipped", files: 0 };
+  if (files.length > 0) {
+    const paths = files.map((file) => file.path);
+    await p.storage(tenant).remove(paths);
+    await scope.run((ctx) =>
+      ctx.tx.delete(storedUploads).where(inArray(storedUploads.path, paths)),
+    );
+  }
+  return { outcome: keepLead ? "emptied" : "deleted", files: files.length };
 }
 
 async function filesOf(ctx: BusinessContext, where: SQL): Promise<{ id: string; path: string }[]> {
@@ -145,40 +226,14 @@ export async function purgeBusiness(
     const leadBefore = leadDays === null ? null : ago(now, leadDays * DAY_MS);
     const due = await scope.run((ctx) => conversationsDue(ctx, before, now));
     for (const conversation of due) {
-      const keepLead =
-        conversation.leadUpdatedAt !== null &&
-        (leadBefore === null || conversation.leadUpdatedAt >= leadBefore);
-      // Files first: once the rows are gone nothing knows where the files were.
-      const files = await scope.run((ctx) =>
-        filesOf(
-          ctx,
-          sql`${attachments.messageId} in (select m.id from messages m where m.conversation_id = ${conversation.id}::uuid)`,
-        ),
-      );
-      if (files.length > 0) await storage.remove(files.map((file) => file.path));
-      result.filesDeleted += files.length;
-      await scope.run(async (ctx) => {
-        if (keepLead) {
-          await ctx.tx.delete(messages).where(eq(messages.conversationId, conversation.id));
-          await ctx.tx.delete(modelCalls).where(eq(modelCalls.conversationId, conversation.id));
-          await ctx.tx.execute(
-            sql`delete from conversation_turns where conversation_id = ${conversation.id}::uuid`,
-          );
-          await ctx.tx.execute(
-            sql`delete from internal_notes where conversation_id = ${conversation.id}::uuid`,
-          );
-          await ctx.tx
-            .update(conversations)
-            .set({
-              metadata: sql`${conversations.metadata} || jsonb_build_object('purgedAt', ${now.toISOString()}::text)`,
-            })
-            .where(eq(conversations.id, conversation.id));
-          result.conversationsEmptied += 1;
-        } else {
-          await ctx.tx.delete(conversations).where(eq(conversations.id, conversation.id));
-          result.conversationsDeleted += 1;
-        }
+      const purged = await purgeConversationIfDue(p, business, conversation, {
+        before,
+        leadBefore,
+        now,
       });
+      result.filesDeleted += purged.files;
+      if (purged.outcome === "emptied") result.conversationsEmptied += 1;
+      if (purged.outcome === "deleted") result.conversationsDeleted += 1;
     }
     // Contacts with no conversation and no lead left hold nothing but personal data.
     result.contactsDeleted += await scope.run(async (ctx) => {

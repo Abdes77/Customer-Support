@@ -5,6 +5,9 @@ import {
   ConfigError,
   ExternalServiceError,
   isRetryable,
+  safeErrorMessage,
+  safeErrorStack,
+  scrubQueryError,
   TenantAccessError,
   ValidationError,
 } from "./errors";
@@ -63,5 +66,49 @@ describe("isRetryable", () => {
   it("treats unknown errors as transient so jobs retry them", () => {
     expect(isRetryable(new Error("boom"))).toBe(true);
     expect(isRetryable("string failure")).toBe(true);
+  });
+});
+
+describe("errors of failed database statements", () => {
+  // What the database library throws: the statement, then the values it was given.
+  function queryError(values: string): Error {
+    const error = new Error(
+      `Failed query: insert into "messages" ("text") values ($1)\nparams: ${values}`,
+    );
+    (error as { params?: unknown }).params = [values];
+    return error;
+  }
+
+  it("lose the statement's values in the message and in the stack", () => {
+    const values = "My husband fell off the roof,\n    at fake (frame:1:2)\njane@example.com";
+    const error = queryError(values);
+    expect(safeErrorMessage(error.message)).toBe(
+      'Failed query: insert into "messages" ("text") values ($1)\nparams: [removed]',
+    );
+    const stack = safeErrorStack(error.stack, error.message) ?? "";
+    expect(stack).not.toContain("husband");
+    expect(stack).not.toContain("fake (frame");
+    // The real frames are still there.
+    expect(stack).toMatch(/\n\s+at /);
+  });
+
+  it("are scrubbed in place, down the chain of causes, and stay the same objects", () => {
+    const inner = queryError("secret words");
+    const outer = new TenantAccessError("refused", { cause: inner });
+    expect(scrubQueryError(outer)).toBe(outer);
+    expect(outer.cause).toBe(inner);
+    expect(inner.message).not.toContain("secret words");
+    expect(inner.stack ?? "").not.toContain("secret words");
+    expect((inner as { params?: unknown }).params).toEqual([]);
+  });
+
+  it("leave every other message alone", () => {
+    expect(safeErrorMessage("params: 1\nFailed query: no")).toBe("params: 1\nFailed query: no");
+    expect(safeErrorMessage("Twilio refused the message (HTTP 400).")).toBe(
+      "Twilio refused the message (HTTP 400).",
+    );
+    const plain = new Error("plain");
+    expect(safeErrorStack(plain.stack, plain.message)).toBe(plain.stack);
+    expect(scrubQueryError("not an error")).toBe("not an error");
   });
 });

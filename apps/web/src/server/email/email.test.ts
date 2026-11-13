@@ -458,6 +458,88 @@ describe("IMAP/SMTP round trip against a local mail server", () => {
     expect(stored.rows.filter((row) => row.direction === "outbound")).toEqual([]);
   });
 
+  it("never quotes or copies others for an address that has not answered one of our own emails, however often it writes (audit)", async () => {
+    // Someone writes "as" a victim's address, twice, with bystanders in Cc. Counting the
+    // address's emails proves nothing (the C17 rule quoted the second one): the proof is a
+    // reply that names a message we sent to this very address, which a forger never saw.
+    await setSettings({ "channels.email.reply_to": "all" });
+    try {
+      const victim = `victim.${unique()}@example.com`;
+      const bystander = `bystander.${unique()}@example.org`;
+      const ourReplies = async () =>
+        Promise.all(
+          (await thread(victim)).rows
+            .filter((row) => row.direction === "outbound")
+            .map(async (row) => {
+              const raw = mail
+                .messages("INBOX")
+                .find((message) => message.raw.includes(row.externalMessageId!))!;
+              return parseEmail(raw.raw);
+            }),
+        );
+      // A message of ours to somebody else: its id is known to that somebody, not proof here.
+      const [elsewhere] = await t.admin
+        .select({ id: messages.externalMessageId })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.businessId, tenant.businessId),
+            eq(messages.direction, "outbound"),
+            eq(messages.channelConnectionId, connectionId as never),
+          ),
+        )
+        .limit(1);
+      expect(elsewhere?.id).toBeTruthy();
+
+      const forged = (text: string, extra: Partial<Parameters<typeof rawEmail>[0]> = {}) =>
+        rawEmail({
+          from: victim,
+          to: mail.address,
+          cc: bystander,
+          subject: `Quote ${unique()}`,
+          messageId: `<forged-${unique()}@example.com>`,
+          text,
+          ...extra,
+        });
+      mail.deliver(forged("FIRST attacker text: visit evil.example"));
+      await pollAndSettle();
+      mail.deliver(forged("SECOND attacker text: visit evil.example"));
+      await pollAndSettle();
+      mail.deliver(
+        forged("THIRD attacker text: visit evil.example", {
+          inReplyTo: elsewhere!.id!,
+          references: elsewhere!.id!,
+        }),
+      );
+      await pollAndSettle();
+      const unproven = await ourReplies();
+      expect(unproven.length).toBeGreaterThanOrEqual(2);
+      for (const reply of unproven) {
+        expect(reply.text).not.toContain("attacker text");
+        expect(reply.html ?? "").not.toContain("gmail_quote");
+        expect(reply.to.map((item) => item.address)).toEqual([victim]);
+        expect(reply.cc).toEqual([]);
+      }
+
+      // The real person answers one of our emails: now they are quoted and theirs are copied.
+      const ours = unproven[0]!;
+      mail.deliver(
+        forged("Yes please, Tuesday works for both of us.", {
+          subject: `Re: ${ours.subject}`,
+          inReplyTo: ours.messageId!,
+          references: ours.messageId!,
+        }),
+      );
+      await pollAndSettle();
+      const proven = (await ourReplies()).at(-1)!;
+      expect(proven.inReplyTo).not.toBe(ours.inReplyTo);
+      expect(proven.text).toContain("> Yes please, Tuesday works for both of us.");
+      expect(proven.cc.map((item) => item.address)).toEqual([bystander]);
+    } finally {
+      await setSettings({ "channels.email.reply_to": "sender" });
+    }
+  });
+
   it("stops after the daily reply limit of a thread (two auto-responders)", async () => {
     await setSettings({ "channels.email.max_replies_per_thread_per_day": 2 });
     const robot = `helpdesk.${unique()}@example.org`;

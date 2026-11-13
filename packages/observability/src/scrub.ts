@@ -40,8 +40,17 @@ function looksLikeSecret(run: string): boolean {
   return digits >= 4 || run.length >= 32;
 }
 
+/**
+ * The most text the patterns ever look at. Only `MAX_SCRUBBED_LENGTH` characters are kept
+ * afterwards, and a pattern such as the one for email addresses takes time quadratic in the
+ * length of a run without an "@": a megabyte of letters in an error message (a customer can
+ * cause one) would otherwise hold the process for minutes while an event is being built.
+ */
+export const MAX_SCRUB_INPUT = 4 * MAX_SCRUBBED_LENGTH;
+
 /** Replaces emails, phone numbers, credentials and URL queries in free text. */
-export function scrubText(text: string): string {
+export function scrubText(input: string): string {
+  const text = input.length > MAX_SCRUB_INPUT ? input.slice(0, MAX_SCRUB_INPUT) : input;
   let out = text
     .replace(URL_QUERY, `$1?${SCRUBBED.query}`)
     .replace(EMAIL, SCRUBBED.email)
@@ -52,7 +61,9 @@ export function scrubText(text: string): string {
     .replace(INTL_PHONE, SCRUBBED.phone)
     .replace(NANP_PHONE, SCRUBBED.phone)
     .replace(LONG_OPAQUE, (run) => (looksLikeSecret(run) ? SCRUBBED.token : run));
-  if (out.length > MAX_SCRUBBED_LENGTH) out = `${out.slice(0, MAX_SCRUBBED_LENGTH)}…`;
+  if (out.length > MAX_SCRUBBED_LENGTH || input.length > text.length) {
+    out = `${out.slice(0, MAX_SCRUBBED_LENGTH)}…`;
+  }
   return out;
 }
 

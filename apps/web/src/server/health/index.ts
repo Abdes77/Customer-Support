@@ -3,9 +3,14 @@ import { alerts, and, eq, getDatabase, gt, inArray, sql } from "@repo/db";
 
 import { errorReportingEnabled } from "../observability";
 import { getServerPipeline } from "../pipeline";
-import { evaluateReadiness, type ReadinessFacts } from "./readiness";
+import { createReadinessCache, evaluateReadiness, type ReadinessFacts } from "./readiness";
 
-export { authorizedForDetails, evaluateReadiness, readinessBody } from "./readiness";
+export {
+  authorizedForDetails,
+  evaluateReadiness,
+  mayReadDetails,
+  readinessBody,
+} from "./readiness";
 
 /** The readiness facts of this process: its environment, its pipeline and its database. */
 export function readinessFacts(now: () => Date = () => new Date()): ReadinessFacts {
@@ -43,6 +48,12 @@ export function readinessFacts(now: () => Date = () => new Date()): ReadinessFac
   };
 }
 
+const cachedReadiness = createReadinessCache({
+  evaluate: () => evaluateReadiness(readinessFacts()),
+  now: () => Date.now(),
+});
+
+/** This process's readiness, evaluated at most once every few seconds (the route is public). */
 export async function checkReadiness() {
-  return evaluateReadiness(readinessFacts());
+  return cachedReadiness();
 }

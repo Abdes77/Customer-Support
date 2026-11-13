@@ -36,6 +36,7 @@ import { type AppResolvedSettings, channelSetting } from "@repo/settings";
 import { loadSettings } from "@repo/settings/server";
 
 import type { PipelineContext, TurnFacts } from "../deps";
+import { LIMITS_GUARD_NAME } from "../limits/guard";
 
 type ReceivedData = EventPayload<"message.received">;
 type RequestedData = EventPayload<"conversation.turn_requested">;
@@ -381,7 +382,12 @@ async function guardReason(
   traceId: string,
 ): Promise<{ readonly reason: string; readonly events: readonly AnyJobEvent[] } | null> {
   const reason = await builtInGuardReason(ctx, conversation, settings, trigger);
-  if (reason !== null) return { reason, events: [] };
+  // The longest conversation is a limit like the others when the limits guard is registered
+  // (C17 audit): there it still answers a possible emergency, tells the customer, alerts the
+  // team and hands the conversation over, where this check alone stopped silently.
+  const leftToLimits =
+    reason === "max_bot_replies" && p.guards.some((guard) => guard.name === LIMITS_GUARD_NAME);
+  if (reason !== null && !leftToLimits) return { reason, events: [] };
 
   const facts: TurnFacts = {
     tenant: ctx.tenant,

@@ -192,6 +192,61 @@ describe("Outlook calendar events", () => {
   });
 });
 
+describe("links a vendor hands back are followed on the vendor's own host only (audit)", () => {
+  // A paging link comes out of a response body and is fetched with the connection's token.
+  // It is followed only on the API's own host: the token never goes anywhere else.
+  function recordingFetch(pages: Record<string, unknown>) {
+    const calls: { url: string; authorization: string | null }[] = [];
+    const fetch = async (input: string | URL, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      calls.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+      const body = Object.entries(pages).find(([prefix]) => url.startsWith(prefix))?.[1];
+      return Response.json(body ?? {}, { status: body === undefined ? 404 : 200 });
+    };
+    return { fetch: fetch as never, calls };
+  }
+
+  it("Outlook calendar: an @odata.nextLink to another host is not fetched", async () => {
+    const { fetch, calls } = recordingFetch({
+      "https://graph.microsoft.com/": {
+        value: [],
+        "@odata.nextLink": "https://graph.microsoft.com.evil.example/v1.0/me/calendarView?page=2",
+      },
+    });
+    const events = await createMicrosoftCalendarClient(fetch).events("graph-token", {
+      calendarId: "default",
+      from: NOW,
+      to: new Date(NOW.getTime() + 86_400_000),
+      timeZone: "America/Denver",
+    });
+    expect(events).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(calls.every((call) => new URL(call.url).hostname === "graph.microsoft.com")).toBe(true);
+  });
+
+  it("Calendly: a next_page link to another host is not fetched", async () => {
+    const { fetch, calls } = recordingFetch({
+      "https://api.calendly.com/": {
+        collection: [
+          {
+            uri: "https://api.calendly.com/event_types/E1",
+            name: "Estimate",
+            scheduling_url: "https://calendly.com/acme/estimate",
+          },
+        ],
+        pagination: { next_page: "https://api.calendly.com.evil.example/event_types?page=2" },
+      },
+    });
+    const types = await createCalendlyClient(fetch).eventTypes(
+      "calendly-token",
+      "https://api.calendly.com/users/U1",
+    );
+    expect(types).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    expect(calls.every((call) => new URL(call.url).hostname === "api.calendly.com")).toBe(true);
+  });
+});
+
 describe("Calendly", () => {
   it("creates a single-use link for the event type and adds our tracking token", async () => {
     const fake = createFakeCalendarApis();

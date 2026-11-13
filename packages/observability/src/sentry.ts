@@ -127,17 +127,34 @@ function randomHex(): string {
 }
 
 const V8_FRAME = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/;
+const FRAME_EMAIL = /[A-Z0-9._%+-]{1,64}@[A-Z0-9-]{1,63}(?:\.[A-Z0-9-]{1,63}){0,8}\.[A-Z]{2,24}/gi;
+const FRAME_DIGITS = /\+?\d[\d\s().-]{8,}\d/g;
 
-/** V8 stack lines as Sentry frames, oldest call first (Sentry's order). */
-export function parseStack(stack: string | undefined): StackFrame[] {
+/** A function or file name: paths and hashes stay, anything like an address or a number goes. */
+function scrubFrameText(text: string): string {
+  return text.replace(FRAME_EMAIL, "[email]").replace(FRAME_DIGITS, "[number]");
+}
+
+/**
+ * V8 stack lines as Sentry frames, oldest call first (Sentry's order). A stack starts with
+ * the error's message, which can run over several lines and is whatever the error quoted:
+ * with `message` given, only what follows it is read, so a line of the message that happens
+ * to look like a frame ("    at <a phone number> (<an address>:1:2)") never becomes one.
+ * Function and file names are scrubbed like any other text that leaves the process.
+ */
+export function parseStack(stack: string | undefined, message?: string): StackFrame[] {
   if (stack === undefined) return [];
+  const at = message === undefined || message.length === 0 ? -1 : stack.indexOf(message);
+  const lines =
+    at === -1 ? stack.split("\n").slice(1) : stack.slice(at + (message ?? "").length).split("\n");
   const frames: StackFrame[] = [];
-  for (const line of stack.split("\n").slice(1, 60)) {
+  for (const line of lines.slice(0, 60)) {
+    if (line.length > 1000) continue;
     const match = V8_FRAME.exec(line);
     if (match === null) continue;
-    const filename = match[2] ?? "";
+    const filename = scrubFrameText(match[2] ?? "");
     frames.push({
-      ...(match[1] === undefined ? {} : { function: match[1].slice(0, 200) }),
+      ...(match[1] === undefined ? {} : { function: scrubFrameText(match[1]).slice(0, 200) }),
       filename: filename.slice(0, 300),
       lineno: Number(match[3]),
       colno: Number(match[4]),
@@ -171,7 +188,7 @@ function exceptionValues(error: unknown): ExceptionValue[] {
     const type = typeof like.name === "string" && like.name.length > 0 ? like.name : "Error";
     const message = typeof like.message === "string" ? like.message : "";
     const code = typeof like.code === "string" ? ` [${like.code}]` : "";
-    const frames = parseStack(typeof like.stack === "string" ? like.stack : undefined);
+    const frames = parseStack(typeof like.stack === "string" ? like.stack : undefined, message);
     values.push({
       type: type.slice(0, 100),
       value: scrubText(`${message}${code}`),
@@ -276,7 +293,9 @@ export function createSentryClient(options: SentryClientOptions): SentryClient |
       ...(traceId !== undefined && /^[0-9a-f]{32}$/.test(traceId)
         ? { contexts: { trace: { trace_id: traceId, span_id: traceId.slice(0, 16) } } }
         : {}),
-      ...(context?.fingerprint === undefined ? {} : { fingerprint: [...context.fingerprint] }),
+      ...(context?.fingerprint === undefined
+        ? {}
+        : { fingerprint: context.fingerprint.map((part) => scrubText(part).slice(0, 200)) }),
     };
   }
 

@@ -130,8 +130,10 @@ pipeline entry point, `ingest(parsed)`, which performs steps 4 to 6.
 10. **Guards.** Stop without replying when a human has taken over, the contact opted out (C13:
     a follow-up, a check-in or a lone opt-out word; what an opted-out customer writes still
     gets a turn that may answer only an emergency, by `follow_up.opt_out_scope`), the
-    conversation is closed, or a rate limit or spend cap is hit (C17). Messages are still
-    stored and visible in the inbox.
+    conversation is closed, or a rate limit, a spend cap or the longest conversation is hit
+    (C17: the customer is told, with the instruction to call 911, the team is alerted, and a
+    message that may describe an emergency is still answered). Messages are still stored and
+    visible in the inbox.
 11. **Prepare.** Download attachments into private storage, resolve settings (one snapshot per
     turn; its `version` is recorded), load the business, playbook, lead and history.
 12. **Engine.** `engine.respond(input, ports)` builds the prompt, calls Claude and runs the
@@ -929,6 +931,31 @@ Security and reliability across the system; the threats, their mitigations and p
 - **Findings fixed** (THREAT_MODEL §3): profiles readable by a business scope (migration
   0015), widget client address and per-address limits, forged bounces and reflection on email,
   abandoned calendar holds, GoHighLevel duplicates after a lost answer, reactions as replies.
+- **After the independent audit** (THREAT_MODEL §6, DECISIONS 286 to 290):
+  - *Error text.* A failed database statement's values never leave `@repo/db` in an error:
+    `scrubQueryError` (`@repo/core`) rewrites the library's "Failed query … params: …"
+    message, stack and `params` for every `run()` and the cross-tenant helpers; the logger
+    and `describeJobError` apply `safeErrorMessage` again. Write nothing that puts a
+    statement's parameters back into an error.
+  - *Limits.* The guard also enforces `conversation.max_bot_replies` (limit
+    `conversation_replies`, always with a takeover; the claim's own check is the backstop
+    when no limits guard is registered). `mayDescribeEmergency` is a danger word, a phrase,
+    name or key of an emergency class, or two telling words of a phrase; exempt turns are
+    bounded per conversation (3 a day) and per business (100 a day). The notice
+    (`limitNoticeText`) always carries "If anyone is in danger right now, call 911." and goes
+    out at most once per conversation and hour.
+  - *Email.* The composer quotes the customer and copies the people in Cc only for a proven
+    correspondent: the email answered names one of our Message-IDs sent to that contact.
+  - *Retention.* `purgeConversationIfDue` locks the conversation and checks again before it
+    deletes; file paths are recorded in `stored_uploads` in the same transaction and removed
+    after it.
+  - *Health.* `/api/health/ready` answers an anonymous caller with the verdict only; the
+    checks need `HEALTH_CHECK_TOKEN` or a developer machine; one evaluation is reused for 15
+    seconds. It does not notice a job runner that accepts events and never runs them
+    (THREAT_MODEL 4.16).
+  - *Edges.* Every response carries `X-Frame-Options: DENY`, `nosniff` and a referrer policy
+    (`apps/web/next.config.ts`); Graph's notification route bounds its lookups; the Sentry
+    scrubber reads a bounded part of a string and takes stack frames only after the message.
 
 ### Invariants (each needs a test in the chunk that owns it)
 
@@ -1040,7 +1067,7 @@ on a private channel bound to their signed session and can read no table.
 | Cross-tenant access | RLS for users and for jobs (the system context is confined to one tenant by PostgreSQL), foreign keys that include `business_id`, branded id types (`BusinessId` is not `ConversationId`), isolation tests over every table. |
 | Webhook spoofing and replay | Signature over raw bytes, constant-time compare, provider timestamp tolerance where one exists, idempotent storage keyed by provider message id. |
 | Secret leakage | Application-layer encryption, redacting logger, no secrets or message text in job payloads, secrets never serialized to the browser. |
-| Personal data in logs | The logger redacts message bodies, contact details and credentials by field name; full model inputs and outputs go to a tenant-scoped table with a retention setting, not to logs. |
+| Personal data in logs | The logger redacts message bodies, contact details and credentials by field name; full model inputs and outputs go to a tenant-scoped table with a retention setting, not to logs. A failed database statement's values are removed from its error before it leaves `@repo/db` (C17 audit). |
 | SSRF from the website crawler and media downloads | One guarded fetcher (`createSafeFetcher` in `@repo/knowledge`, C6): http(s) only, no credentials, default ports, DNS resolved once and the connection pinned to the checked address, private, loopback, link-local and reserved ranges refused (IPv6 forms that wrap an IPv4 address included), every redirect checked again, size, time and content-type limits. Media downloads go through the channel adapters to the providers' own hosts. |
 | Widget abuse | Per-business allowed origins, signed visitor sessions, rate limits per IP, session and business, upload type and size limits. |
 | Runaway model spend | Debounce, one turn at a time per conversation, per-contact and per-business rate limits and daily spend caps checked before every model call (C17: the limits guard). |

@@ -20,7 +20,24 @@ const workspacePackages = Object.keys(packageJson.dependencies).filter((name) =>
   name.startsWith("@repo/"),
 );
 
+/**
+ * Headers on every response (C17 audit). No page of this app is meant to be shown inside
+ * another site's frame: the admin panel's buttons (take over, release, pause a business,
+ * rotate a secret) must not be clickable through one, whatever the session cookie's SameSite
+ * rule is in a given browser. The website chat is a script on the customer's page, not a
+ * frame, so it is not affected. Responses also never have their type guessed, and a link out
+ * of the panel tells the other site our origin at most, never a conversation's address.
+ * Routes that set a stricter policy of their own (customer files, the acknowledgement page)
+ * keep it.
+ */
+export const SECURITY_HEADERS = [
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+] as const;
+
 const nextConfig: NextConfig = {
+  headers: async () => [{ source: "/:path*", headers: [...SECURITY_HEADERS] }],
   transpilePackages: workspacePackages,
   // The IMAP and SMTP clients (C11) load parts of themselves at run time (worker threads,
   // optional modules): run them from node_modules instead of bundling them.

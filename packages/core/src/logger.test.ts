@@ -186,6 +186,23 @@ describe("redact", () => {
   });
 });
 
+describe("errors of failed database statements", () => {
+  it("are logged without the statement's values, in the message, the stack and the cause", () => {
+    const { records, logger: log } = capture();
+    const failed = new Error(
+      'Failed query: update "contacts" set "display_name" = $1 where "id" = $2\nparams: Jane Roe,+13035550142',
+    );
+    log.error("turn.failed", {
+      error: new ExternalServiceError("wrapped", { provider: "db", cause: failed }),
+    });
+    log.error("turn.failed", { error: failed });
+    const text = JSON.stringify(records);
+    expect(text).toContain("Failed query");
+    expect(text).not.toContain("Jane Roe");
+    expect(text).not.toContain("3035550142");
+  });
+});
+
 describe("log listeners", () => {
   it("see every record after redaction, and a failing listener changes nothing", () => {
     const seen: LogRecord[] = [];

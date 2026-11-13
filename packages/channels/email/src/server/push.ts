@@ -138,6 +138,9 @@ const GraphNotification = z
 
 const GraphNotifications = z.object({ value: z.array(GraphNotification).max(1000) });
 
+/** Unknown or forged notifications looked up in one body before the rest is dropped. */
+export const MAX_UNMATCHED_NOTIFICATIONS = 20;
+
 /**
  * `POST /api/webhooks/email/microsoft`: Microsoft Graph change and lifecycle notifications.
  *
@@ -171,16 +174,31 @@ export function createGraphNotificationHandler(deps: EmailServerDeps) {
     }
     const byConnection = new Map<string, { ref: ChannelConnectionRef; lifecycle: boolean }>();
     let invalid = 0;
+    // The route is public and each subscription id costs a database lookup before anything
+    // proves the sender (the proof is the connection's client state): one lookup per distinct
+    // id, and no more once a body has named this many ids that are unknown or forged. Graph
+    // batches notifications of subscriptions we hold; a body full of others is not Graph's.
+    const lookups = new Map<string, ChannelConnectionRef | null>();
+    let unmatched = 0;
     for (const item of parsed.value) {
-      const ref = await deps.db.directory.findChannelConnectionBySubscription(
-        "email",
-        item.subscriptionId,
-      );
+      if (unmatched >= MAX_UNMATCHED_NOTIFICATIONS) break;
+      let ref = lookups.get(item.subscriptionId);
+      if (ref === undefined) {
+        ref = await deps.db.directory.findChannelConnectionBySubscription(
+          "email",
+          item.subscriptionId,
+        );
+        lookups.set(item.subscriptionId, ref);
+      }
       // A subscription we no longer know (an inbox disconnected while Graph still had it):
       // acknowledged and ignored, so Graph stops retrying it.
-      if (ref === null) continue;
+      if (ref === null) {
+        unmatched += 1;
+        continue;
+      }
       if (!clientStateMatches(secret, ref.connectionId, item.clientState)) {
         invalid += 1;
+        unmatched += 1;
         continue;
       }
       if (!RECEIVING.has(ref.status)) continue;

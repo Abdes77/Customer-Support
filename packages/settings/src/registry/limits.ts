@@ -5,8 +5,10 @@ import { f } from "../fields";
  * Rate limits and spend caps. Consumed by the pipeline's limits guard (C17,
  * `packages/pipeline/src/limits`); the widget's own limits are used by C8. A limit that is hit
  * never drops a message: the message is stored and shown in the inbox, only the bot's reply
- * is withheld, the customer gets `limits.notice_message` once a day and the agency an alert.
- * A message that may describe an emergency is still answered.
+ * is withheld, the customer gets `limits.notice_message` (at most once an hour, always with
+ * the instruction to call 911) and the agency an alert. A message that may describe an
+ * emergency is still answered, a few times a day. The longest conversation
+ * (`conversation.max_bot_replies`) is handled the same way.
  */
 export const limitsSettings = defineCategory("limits", {
   "limits.contact_messages_per_hour": setting({
@@ -63,7 +65,7 @@ export const limitsSettings = defineCategory("limits", {
   }),
   "limits.notice_message": setting({
     label: "Message when a limit stops the bot",
-    help: "Sent once a day to a customer whose conversation a limit or spend cap has stopped, so nobody is left without an answer. Leave empty to send nothing. A message that may describe an emergency is still answered by the bot, with its safety instructions, whatever the limits.",
+    help: 'Sent to a customer whose conversation a limit or spend cap has stopped, at most once an hour while they keep writing, so nobody is left without an answer. The sentence "If anyone is in danger right now, call 911." is added when the message does not mention 911, and is sent alone when the message is empty. A message that may describe an emergency is still answered by the bot, with its safety instructions, a few times a day.',
     field: f.text({ maxLength: 400, multiline: true }),
     default:
       "Thanks for your message. Our team will get back to you as soon as they can. If anyone is in danger right now, call 911.",

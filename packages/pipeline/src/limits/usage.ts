@@ -15,6 +15,7 @@ import type { AppSettings } from "@repo/settings";
  */
 
 export const LIMIT_KEYS = [
+  "conversation_replies",
   "contact_messages_per_hour",
   "contact_replies_per_day",
   "business_replies_per_day",
@@ -32,7 +33,12 @@ export const CONTACT_LIMITS: ReadonlySet<LimitKey> = new Set([
   "contact_daily_spend",
 ]);
 
+/** The limit that counts one conversation (`conversation.max_bot_replies`). */
+export const CONVERSATION_LIMITS: ReadonlySet<LimitKey> = new Set(["conversation_replies"]);
+
 export interface LimitUsage {
+  /** The bot's replies in this conversation, ever (`conversation.max_bot_replies`). */
+  readonly conversationReplies: number;
   readonly contactMessagesLastHour: number;
   readonly contactRepliesToday: number;
   readonly businessRepliesToday: number;
@@ -46,6 +52,7 @@ export interface LimitUsage {
 
 export type LimitValues = Pick<
   AppSettings,
+  | "conversation.max_bot_replies"
   | "limits.contact_messages_per_hour"
   | "limits.contact_replies_per_day"
   | "limits.business_replies_per_day"
@@ -60,13 +67,18 @@ const MICRO = 1_000_000;
 /**
  * The first limit the usage has reached, or null. Pure. The per-hour message limit counts
  * what the customer wrote, so it applies to a turn their message started only; a follow-up
- * the bot starts itself is never stopped by it.
+ * the bot starts itself is never stopped by it. The longest conversation
+ * (`conversation.max_bot_replies`) is a limit like the others: before the audit of C17 the
+ * claim stopped such a conversation silently, emergencies included.
  */
 export function exceededLimit(
   usage: LimitUsage,
   values: LimitValues,
   trigger: TurnTrigger,
 ): LimitKey | null {
+  if (usage.conversationReplies >= values["conversation.max_bot_replies"]) {
+    return "conversation_replies";
+  }
   if (
     trigger === "inbound_message" &&
     usage.contactMessagesLastHour > values["limits.contact_messages_per_hour"]
@@ -188,8 +200,16 @@ export async function measureUsage(
             where e.business_id = mc.business_id and e.trace_id = mc.trace_id
          )`,
   );
+  const conversationRows = await ctx.tx.execute(
+    sql`select count(*)::int as replies
+          from messages m
+         where m.conversation_id = ${input.conversationId}::uuid
+           and m.direction = 'outbound' and m.author = 'bot'
+           and m.status not in ('superseded', 'failed')`,
+  );
   const utcDay = new Date(`${input.now.toISOString().slice(0, 10)}T00:00:00.000Z`);
   return {
+    conversationReplies: numberOf(conversationRows, "replies"),
     contactMessagesLastHour: numberOf(messageRows, "contact_inbound"),
     contactRepliesToday: numberOf(messageRows, "contact_replies"),
     businessRepliesToday: numberOf(messageRows, "business_replies"),

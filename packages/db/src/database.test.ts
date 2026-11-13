@@ -6,7 +6,10 @@ import {
   type AgencyId,
   type BusinessId,
   type ChannelConnectionId,
+  type ContactId,
   type ConversationId,
+  createLogger,
+  type LogRecord,
   NotFoundError,
   TenantAccessError,
   type UserId,
@@ -214,6 +217,75 @@ describe("forBusiness", () => {
       { readOnly: true },
     );
     await expect(attempt).rejects.toSatisfy((error) => pgErrorCode(error) === "25006");
+  });
+});
+
+describe("errors of failed statements", () => {
+  // The database library words a failed statement as "Failed query: <sql> params: <values>".
+  // The values are customer data; an error's text goes to logs, Sentry, the job runner's run
+  // history and stored error messages, so they must be gone before the error leaves `run()`.
+  const NAME = "Priya Private-Person";
+  const EMAIL = "priya.private@example.com";
+  const PHONE = "+13035550142";
+
+  function everyText(error: unknown): string {
+    const parts: string[] = [];
+    for (let current = error, depth = 0; depth < 6 && current instanceof Error; depth += 1) {
+      parts.push(current.message, current.stack ?? "", JSON.stringify(current));
+      current = current.cause;
+    }
+    return parts.join("\n");
+  }
+
+  function logged(error: unknown): string {
+    const records: LogRecord[] = [];
+    createLogger({ sink: (record) => records.push(record) }).error("job.failed", { error });
+    return JSON.stringify(records);
+  }
+
+  it("never carry the statement's values, whatever refused the statement", async () => {
+    const { a1, b1 } = world.businesses;
+    const id = "5a0c7b1e-3f2d-4e6a-9b8c-7d6e5f4a3b2c" as ContactId;
+    const row = { id, displayName: NAME, email: EMAIL, phone: PHONE };
+    const scope = t.db.forBusiness(a1.tenant.businessId);
+    await scope.run(({ tx }) => tx.insert(contacts).values({ ...a1.tenant, ...row }));
+
+    // A constraint (the same id again), and row-level security (another agency's tenant).
+    const failures = [
+      () => scope.run(({ tx }) => tx.insert(contacts).values({ ...a1.tenant, ...row })),
+      () =>
+        scope.run(({ tx }) =>
+          tx.insert(contacts).values({ ...b1.tenant, ...row, id: UNKNOWN_ID as never }),
+        ),
+    ];
+    const errors: unknown[] = [];
+    for (const failure of failures) {
+      await failure().catch((error: unknown) => errors.push(error));
+    }
+    expect(errors).toHaveLength(2);
+    expect(pgErrorCode(errors[0])).toBe(PG_ERROR.uniqueViolation);
+    expect(errors[1]).toBeInstanceOf(TenantAccessError);
+    for (const error of errors) {
+      const text = `${everyText(error)}\n${logged(error)}`;
+      // Still says which statement failed, without what it was given.
+      expect(text).toContain("Failed query");
+      expect(text).toContain('insert into "contacts"');
+      for (const leak of [NAME, "Private-Person", EMAIL, PHONE]) {
+        expect(text, leak).not.toContain(leak);
+      }
+    }
+  });
+
+  it("holds for the cross-tenant helpers too", async () => {
+    const value = "not-an-id-but-a-customer's-words";
+    const error = await t.db.directory
+      .findBusiness(value as BusinessId)
+      .then(() => null)
+      .catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("Failed query");
+    expect((error as Error).message).not.toContain(value);
+    expect((error as Error).stack ?? "").not.toContain(`params: ${value}`);
   });
 });
 

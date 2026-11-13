@@ -1,4 +1,4 @@
-import { AppError, ExternalServiceError } from "@repo/core";
+import { AppError, ExternalServiceError, safeErrorMessage } from "@repo/core";
 
 import type { JobError } from "./definition";
 
@@ -25,13 +25,17 @@ export function retryAfterMs(error: unknown): number | null {
   return null;
 }
 
-/** A log-safe description of an error: name, message and code, nothing else. */
+/**
+ * A log-safe description of an error: name, message and code, nothing else. The message of a
+ * failed database statement loses the statement's values (`safeErrorMessage`): this
+ * description is logged, stored in dead letters and handed to the job runner.
+ */
 export function describeJobError(error: unknown): JobError {
   if (error instanceof AppError) {
-    return { name: error.name, message: error.message, code: error.code };
+    return { name: error.name, message: safeErrorMessage(error.message), code: error.code };
   }
   if (error instanceof Error) {
-    return { name: error.name, message: error.message, code: null };
+    return { name: error.name, message: safeErrorMessage(error.message), code: null };
   }
-  return { name: "Error", message: String(error), code: null };
+  return { name: "Error", message: safeErrorMessage(String(error)), code: null };
 }

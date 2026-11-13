@@ -65,12 +65,16 @@ export { SWEEPER_FUNCTION_ID, type SweepResult } from "./sweeper";
 export {
   purgeAuditLog,
   purgeBusiness,
+  purgeConversationIfDue,
   type PurgeResult,
   RETENTION_FUNCTION_ID,
 } from "./retention/purge";
 export {
   createLimitsGuard,
   EMERGENCY_TURNS_PAST_LIMIT,
+  EMERGENCY_TURNS_PAST_LIMIT_PER_BUSINESS,
+  LIFE_SAFETY_SENTENCE,
+  limitNoticeText,
   mayDescribeEmergency,
 } from "./limits/guard";
 export { exceededLimit, LIMIT_KEYS, type LimitKey, type LimitUsage } from "./limits/usage";

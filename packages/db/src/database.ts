@@ -5,6 +5,7 @@ import {
   type BusinessId,
   ConfigError,
   NotFoundError,
+  scrubQueryError,
   TenantAccessError,
 } from "@repo/core";
 import { getEnv } from "@repo/core/env";
@@ -92,8 +93,36 @@ async function inTransaction<T>(
   try {
     return await connection.db.transaction(fn, transactionConfig(options));
   } catch (error) {
-    throw translateDbError(error);
+    // A failed statement's error names the statement's values (customer text, contact
+    // details): they are removed before the error leaves this package, so they reach no log,
+    // error report, job history or stored error message.
+    throw translateDbError(scrubQueryError(error));
   }
+}
+
+/**
+ * The cross-tenant helpers run on the connection itself, not inside `run()`: their errors
+ * lose the statement's values the same way.
+ */
+function withScrubbedErrors<T extends object>(target: T): T {
+  return new Proxy(target, {
+    get(object, property, receiver) {
+      const value: unknown = Reflect.get(object, property, receiver);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]): unknown => {
+        try {
+          const result: unknown = (value as (...inner: unknown[]) => unknown).apply(object, args);
+          return result instanceof Promise
+            ? result.catch((error: unknown) => {
+                throw scrubQueryError(error);
+              })
+            : result;
+        } catch (error) {
+          throw scrubQueryError(error);
+        }
+      };
+    },
+  });
 }
 
 function firstRow(result: unknown): Record<string, unknown> | undefined {
@@ -218,10 +247,10 @@ export function createDatabase(options: DatabaseOptions): Database {
       assertUuid(agencyId, "The agency id");
       return new AgencyScopeImpl(connection, agencyId);
     },
-    directory: createDirectory(connection),
-    platform: createPlatform(connection),
+    directory: withScrubbedErrors(createDirectory(connection)),
+    platform: withScrubbedErrors(createPlatform(connection)),
     secrets: createSecretStores(getKeyring),
-    localAuth: createLocalAuthStore(connection),
+    localAuth: withScrubbedErrors(createLocalAuthStore(connection)),
     async ping() {
       await connection.client`select 1`;
     },

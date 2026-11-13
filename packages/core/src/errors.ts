@@ -99,3 +99,65 @@ export class ExternalServiceError extends AppError {
 export function isRetryable(error: unknown): boolean {
   return error instanceof AppError ? error.retryable : true;
 }
+
+/** What replaces the parameter values of a failed database statement in an error's text. */
+export const REMOVED_QUERY_PARAMS = "[removed]";
+
+const QUERY_ERROR = /^(Failed query: [\s\S]*?)\nparams: [\s\S]*$/;
+const MAX_QUERY_TEXT = 2000;
+
+/**
+ * An error message without the values of the statement that failed. The database library
+ * words a failed statement as "Failed query: <sql>\nparams: <values>", and the values are
+ * whatever the statement was given: a customer's message, a name, an address, a phone number,
+ * an encrypted credential. An error's text travels to the logs, to Sentry, to the job runner's
+ * run history and into rows the admin panel shows (dead letters, a connection's last error),
+ * so the values are cut here and the statement's own text (placeholders only) is kept.
+ */
+export function safeErrorMessage(message: string): string {
+  const match = QUERY_ERROR.exec(message);
+  if (match === null) return message;
+  const statement = match[1] ?? "Failed query";
+  const shown =
+    statement.length > MAX_QUERY_TEXT ? `${statement.slice(0, MAX_QUERY_TEXT)}…` : statement;
+  return `${shown}\nparams: ${REMOVED_QUERY_PARAMS}`;
+}
+
+/**
+ * The stack of an error whose message `safeErrorMessage` changes: V8 starts a stack with the
+ * message, so the same values would otherwise survive there.
+ */
+export function safeErrorStack(stack: string | undefined, message: string): string | undefined {
+  if (stack === undefined) return undefined;
+  const safe = safeErrorMessage(message);
+  if (safe === message) return stack;
+  const at = stack.indexOf(message);
+  if (at !== -1) return `${stack.slice(0, at)}${safe}${stack.slice(at + message.length)}`;
+  // The stack does not repeat the message word for word: keep the frames only.
+  const frames = stack.split("\n").filter((line) => /^\s+at \S/.test(line) && line.length < 400);
+  return [safe, ...frames].join("\n");
+}
+
+/**
+ * Removes the statement's values from a database error and from the errors that caused it,
+ * in place (the same object is thrown on, so `instanceof` and error codes keep working).
+ * Returns the error it was given.
+ */
+export function scrubQueryError<T>(error: T): T {
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && current instanceof Error; depth += 1) {
+    const safe = safeErrorMessage(current.message);
+    if (safe !== current.message) {
+      try {
+        const stack = safeErrorStack(current.stack, current.message);
+        current.message = safe;
+        if (stack !== undefined) current.stack = stack;
+        if ("params" in current) (current as { params?: unknown }).params = [];
+      } catch {
+        // A frozen error keeps its text; the logger removes the values again when it writes.
+      }
+    }
+    current = current.cause;
+  }
+  return error;
+}

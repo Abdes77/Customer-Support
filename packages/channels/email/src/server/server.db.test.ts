@@ -28,7 +28,11 @@ import { createEmailConnectionService } from "./connections";
 import type { EmailServerDeps } from "./deps";
 import { googleKeySource, type JsonWebKeySet, verifyGoogleOidcToken } from "./oidc";
 import { createEmailSendThrottle } from "./pipeline-parts";
-import { createGmailPushHandler, createGraphNotificationHandler } from "./push";
+import {
+  createGmailPushHandler,
+  createGraphNotificationHandler,
+  MAX_UNMATCHED_NOTIFICATIONS,
+} from "./push";
 import { saveState, syncBatch } from "./sync";
 import { createAccessTokens } from "./tokens";
 import { ensurePush, graphClientState } from "./watch";
@@ -538,6 +542,58 @@ describe("Microsoft 365: OAuth, subscription and delta sync", () => {
     });
     await handler({ headers: {}, query: {}, rawBody: lifecycle });
     expect(h.events.at(-1)?.data).toMatchObject({ reason: "lifecycle" });
+  });
+});
+
+describe("Graph notifications from strangers (audit)", () => {
+  it("looks up a bounded number of subscriptions for a body nothing vouches for", async () => {
+    // Anyone can post to the notification route. Each subscription id is looked up in the
+    // database before the client state can prove anything: a body of a thousand made-up ids
+    // must not cost a thousand queries.
+    let lookups = 0;
+    const h = harness(
+      createFakeGraph({ address: `ms-${randomUUID().slice(0, 6)}@acme-roofing.com` }),
+    );
+    const directory = h.deps.db.directory;
+    const counted = new Proxy(directory, {
+      get(target, property, receiver) {
+        if (property !== "findChannelConnectionBySubscription") {
+          return Reflect.get(target, property, receiver) as unknown;
+        }
+        return (channel: "email", id: string) => {
+          lookups += 1;
+          return target.findChannelConnectionBySubscription(channel, id);
+        };
+      },
+    });
+    const handler = createGraphNotificationHandler({
+      ...h.deps,
+      db: new Proxy(h.deps.db, {
+        get: (target, property, receiver) =>
+          property === "directory" ? counted : (Reflect.get(target, property, receiver) as unknown),
+      }),
+    });
+    const body = (ids: string[]) =>
+      JSON.stringify({
+        value: ids.map((subscriptionId) => ({ subscriptionId, clientState: "guess" })),
+      });
+    const before = h.events.length;
+    const flood = await handler({
+      headers: {},
+      query: {},
+      rawBody: body(Array.from({ length: 1000 }, (_, index) => `made-up-${index}`)),
+    });
+    expect(flood.status).toBe(202);
+    expect(lookups).toBe(MAX_UNMATCHED_NOTIFICATIONS);
+    // The same id a thousand times is one lookup.
+    lookups = 0;
+    await handler({
+      headers: {},
+      query: {},
+      rawBody: body(Array.from({ length: 1000 }, () => "same")),
+    });
+    expect(lookups).toBe(1);
+    expect(h.events.length).toBe(before);
   });
 });
 

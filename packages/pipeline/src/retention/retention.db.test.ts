@@ -19,7 +19,7 @@ import {
 } from "@repo/db";
 
 import { createHarness, type Harness, message, type TestTenant } from "../testing/harness";
-import { purgeAuditLog, purgeBusiness } from "./purge";
+import { purgeAuditLog, purgeBusiness, purgeConversationIfDue } from "./purge";
 
 /*
  * Retention (C17) on a fixed clock. Rows are made by the pipeline (real timestamps) and then
@@ -117,11 +117,96 @@ describe("retention (C17)", () => {
       .where(eq(contacts.id, old.conversation.contactId));
     expect(contact).toBeUndefined();
 
+    // The paths recorded while the rows were deleted are forgotten once the files are gone.
+    expect(
+      await h.t.admin
+        .select({ path: storedUploads.path })
+        .from(storedUploads)
+        .where(eq(storedUploads.businessId, tenant.tenant.businessId)),
+    ).toEqual([]);
+
     // A second run has nothing left to do.
     expect(await purgeBusiness(h.pipeline.context, ref(tenant))).toMatchObject({
       conversationsDeleted: 0,
       filesDeleted: 0,
     });
+  });
+
+  it("leaves alone a conversation the customer wrote in after it was listed as due (audit)", async () => {
+    const tenant = await h.newTenant({
+      "data.conversation_retention_days": 30,
+      "data.lead_retention_days": 30,
+    });
+    const old = await conversationAged(tenant, "returning-visitor", 45);
+    // The job listed it as due... and before it got to deleting, the customer wrote again.
+    // Deleting on the list alone would delete the message that just arrived.
+    const listed = { id: old.conversation.id, leadUpdatedAt: daysAgo(45) };
+    const cutoffs = { before: daysAgo(30), leadBefore: daysAgo(30), now: new Date(NOW) };
+    await h.deliver(tenant, [
+      message("hello again, are you still in business?", { from: "returning-visitor" }),
+    ]);
+    await h.idle();
+
+    for (const candidate of [listed, { ...listed, leadUpdatedAt: new Date(NOW) }]) {
+      expect(
+        await purgeConversationIfDue(h.pipeline.context, ref(tenant), candidate, cutoffs),
+      ).toEqual({ outcome: "skipped", files: 0 });
+    }
+    const kept = await h.t.admin
+      .select({ text: messages.text })
+      .from(messages)
+      .where(eq(messages.conversationId, old.conversation.id));
+    expect(kept.map((row) => row.text)).toContain("hello again, are you still in business?");
+    expect(kept.map((row) => row.text)).toContain("hello from returning-visitor");
+    expect(await exists(tenant, old.path)).toBe(true);
+    // And the whole job agrees.
+    expect(await purgeBusiness(h.pipeline.context, ref(tenant))).toMatchObject({
+      conversationsDeleted: 0,
+      conversationsEmptied: 0,
+      filesDeleted: 0,
+    });
+  });
+
+  it("finds the files of a deleted conversation again when storage failed after the rows were gone (audit)", async () => {
+    const tenant = await h.newTenant({
+      "data.conversation_retention_days": 30,
+      "data.lead_retention_days": 30,
+    });
+    const old = await conversationAged(tenant, "unlucky-visitor", 45);
+    const real = h.pipeline.context;
+    const failing = {
+      ...real,
+      storage: (owner: Parameters<typeof real.storage>[0]) => ({
+        ...real.storage(owner),
+        remove: async () => {
+          throw new Error("storage is down");
+        },
+      }),
+    } as typeof real;
+    await expect(
+      purgeConversationIfDue(
+        failing,
+        ref(tenant),
+        { id: old.conversation.id, leadUpdatedAt: daysAgo(45) },
+        { before: daysAgo(30), leadBefore: daysAgo(30), now: new Date(NOW) },
+      ),
+    ).rejects.toThrow("storage is down");
+    // The rows are gone, the file is not, and its path is on record.
+    expect(await h.conversationsOf(tenant)).toEqual([]);
+    expect(await exists(tenant, old.path)).toBe(true);
+    const recorded = await h.t.admin
+      .select({ path: storedUploads.path, source: storedUploads.source })
+      .from(storedUploads)
+      .where(eq(storedUploads.businessId, tenant.tenant.businessId));
+    expect(recorded).toEqual([{ path: old.path, source: "retention" }]);
+
+    // A day later the housekeeping pass deletes what nothing refers to.
+    await h.t.admin
+      .update(storedUploads)
+      .set({ createdAt: daysAgo(2) })
+      .where(eq(storedUploads.businessId, tenant.tenant.businessId));
+    expect(await purgeBusiness(real, ref(tenant))).toMatchObject({ uploadsDeleted: 1 });
+    expect(await exists(tenant, old.path)).toBe(false);
   });
 
   it("keeps a lead the business keeps longer, emptying its conversation instead", async () => {
@@ -291,6 +376,9 @@ describe("retention (C17)", () => {
 
   it("purges the audit log only in an agency-wide scope and never younger than 90 days", async () => {
     const tenant = await h.newTenant({});
+    // Another agency with an entry just as old: its log is not this purge's to touch.
+    const other = await h.newTenant({});
+    expect(other.tenant.agencyId).not.toBe(tenant.tenant.agencyId);
     await h.t.admin.insert(auditLog).values([
       {
         agencyId: tenant.tenant.agencyId,
@@ -299,8 +387,19 @@ describe("retention (C17)", () => {
         createdAt: new Date("2020-01-01T00:00:00Z"),
       },
       { agencyId: tenant.tenant.agencyId, actorType: "system", action: "recent.entry" },
+      {
+        agencyId: other.tenant.agencyId,
+        actorType: "system",
+        action: "old.entry.elsewhere",
+        createdAt: new Date("2020-01-01T00:00:00Z"),
+      },
     ] as never);
     expect(await purgeAuditLog(h.pipeline.context, tenant.tenant.agencyId, 365)).toBe(1);
+    const elsewhere = await h.t.admin
+      .select({ action: auditLog.action })
+      .from(auditLog)
+      .where(eq(auditLog.agencyId, other.tenant.agencyId));
+    expect(elsewhere.map((row) => row.action)).toContain("old.entry.elsewhere");
     const left = await h.t.admin
       .select({ action: auditLog.action })
       .from(auditLog)

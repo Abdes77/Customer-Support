@@ -41,6 +41,22 @@ const CSV = [
   "licenses,License,Licensed by the Texas Department of Agriculture.",
 ].join("\n");
 
+test("no page of the app may be framed by another site, and the readiness route answers", async ({
+  request,
+}) => {
+  // C17 audit: the headers of next.config.ts reach pages and route handlers of the built app.
+  for (const path of ["/sign-in", "/api/health"]) {
+    const response = await request.get(`${APP_URL}${path}`);
+    expect(response.headers()["x-frame-options"], path).toBe("DENY");
+    expect(response.headers()["x-content-type-options"], path).toBe("nosniff");
+    expect(response.headers()["referrer-policy"], path).toBe("strict-origin-when-cross-origin");
+  }
+  // The readiness route of the built app evaluates and answers with a verdict.
+  const ready = await request.get(`${APP_URL}/api/health/ready`);
+  expect([200, 503]).toContain(ready.status());
+  expect(["ready", "not_ready"]).toContain(((await ready.json()) as { status: string }).status);
+});
+
 test("an agency admin onboards a new business through the wizard", async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   const suffix = testInfo.project.name === "desktop" ? "D" : "M";

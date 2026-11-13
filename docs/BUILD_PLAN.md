@@ -405,6 +405,18 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   no limit to trip for 50 businesses' bursts; the browser tests run with `DEVELOPMENT_MODE=1`
   (`apps/web/e2e/support/app-server.ts`).
 
+- **After the C17 audit, for C18:** read `docs/THREAT_MODEL.md` sections 4 and 6 before
+  writing the runbook and the launch checklist. The checklist must carry: the Supabase Data
+  API closed for `public` (HUMAN_TODO 3, step 6; THREAT_MODEL 4.14); what a spend cap does
+  and does not do (4.1a, 4.15); a Twilio spend limit (4.1b); the live round trip after every
+  deployment and Inngest's own alerts, because readiness cannot see a job runner that never
+  runs (4.16: a check that reads the oldest unanswered customer message would close it); the
+  email quoting check per provider (HUMAN_TODO 14). The load test should include one business
+  at its daily cap (every stopped conversation gets the notice once, emergencies are answered)
+  and must not expect `/api/health/ready` to list checks without the token. Candidates the
+  audit left as product work: a spend budget per channel; row-level security that follows
+  `client_portal.*`.
+
 ### C18 · End-to-end tests and launch preparation
 
 - **Owns:** `apps/web/e2e` journeys, the load test, `docs/RUNBOOK.md`, `docs/ONBOARDING.md`,

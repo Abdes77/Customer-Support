@@ -5,7 +5,7 @@ import { createLogger, ValidationError } from "@repo/core";
 import { createMemoryRateLimiter } from "./limiter";
 import { developmentSwitchCheck, emergencyReadinessCheck, summarize } from "./readiness";
 import { installErrorReporting } from "./reporting";
-import { scrubPath, scrubText, scrubValue } from "./scrub";
+import { MAX_SCRUB_INPUT, scrubPath, scrubText, scrubValue } from "./scrub";
 import { createSentryClient, parseDsn, parseStack } from "./sentry";
 import { createFakeSentryTransport } from "./testing";
 
@@ -48,6 +48,20 @@ describe("scrubText", () => {
 
   it("cuts long text", () => {
     expect(scrubText("a".repeat(2000)).length).toBeLessThanOrEqual(501);
+  });
+
+  it("looks at a bounded part of the text, however long it is", () => {
+    // Two megabytes of letters, as a customer could put into an error message. The email
+    // pattern alone would take time quadratic in that length (minutes; the test would time
+    // out): only the first MAX_SCRUB_INPUT characters are ever matched.
+    const huge = `${"a".repeat(2_000_000)} jane@example.com`;
+    const out = scrubText(huge);
+    expect(out.length).toBeLessThanOrEqual(501);
+    expect(out.endsWith("…")).toBe(true);
+    // What is inside the bound is still scrubbed.
+    const inside = scrubText(`${"word ".repeat(300)}jane@example.com ${"b".repeat(5000)}`);
+    expect(inside).not.toContain("jane@example.com");
+    expect(MAX_SCRUB_INPUT).toBeLessThanOrEqual(4000);
   });
 });
 
@@ -155,6 +169,38 @@ describe("Sentry client", () => {
     expect(client.stats()).toEqual({ sent: 0, dropped: 1, failed: 2 });
     now = new Date(now.getTime() + 60_000);
     expect(client.captureMessage("four")).not.toBeNull();
+  });
+
+  it("never takes a line of the error's message for a stack frame, and scrubs the fingerprint", async () => {
+    const fake = createFakeSentryTransport();
+    const client = createSentryClient({ dsn: DSN, transport: fake.transport, now: FIXED })!;
+    // A message over several lines, one of which reads like a frame; V8 puts the message at
+    // the top of the stack.
+    const error = new Error(
+      "Could not store the note:\n    at 303-555-0142 (jane@example.com:1:2)\n    at Jane Roe (12 Elm St:3:4)",
+    );
+    client.captureException(error, {
+      fingerprint: ["turn.failed for jane@example.com", "pipeline"],
+    });
+    await client.flush();
+    const event = fake.envelopes[0]!.event;
+    const frames = (
+      event["exception"] as {
+        values: { stacktrace?: { frames: { function?: string; filename: string }[] } }[];
+      }
+    ).values[0]!.stacktrace!.frames;
+    expect(frames.length).toBeGreaterThan(0);
+    for (const frame of frames) {
+      expect(`${frame.function ?? ""} ${frame.filename}`).not.toMatch(/Jane Roe|Elm St|555-0142/);
+    }
+    const raw = fake.raw();
+    for (const leak of ["jane@example.com", "303-555-0142", "Jane Roe", "12 Elm St"]) {
+      // The message itself is scrubbed of the address and the number; the name and the
+      // street are free text no pattern knows, and they must not be repeated as frames.
+      const times = raw.split(leak).length - 1;
+      expect(times, leak).toBeLessThanOrEqual(leak === "Jane Roe" || leak === "12 Elm St" ? 1 : 0);
+    }
+    expect(event["fingerprint"]).toEqual(["turn.failed for [email]", "pipeline"]);
   });
 
   it("reads V8 stack frames, oldest call first", () => {

@@ -5,7 +5,9 @@ import type { BusinessTenant } from "@repo/db";
 
 import {
   authorizedForDetails,
+  createReadinessCache,
   evaluateReadiness,
+  mayReadDetails,
   type ReadinessFacts,
   readinessBody,
 } from "./readiness";
@@ -157,9 +159,64 @@ describe("readiness (C17)", () => {
     const report = await evaluateReadiness(
       facts({ emergencyReady: async () => ({ enabled: true, ready: false }) }),
     );
+    // Without the token: the verdict, and nothing that says which protection is off.
     const open = readinessBody(report, false);
-    expect(JSON.stringify(open)).not.toContain(TENANT.businessId);
-    expect(open.checks.every((check) => check.detail === undefined)).toBe(true);
+    expect(open).toEqual({ status: "ready" });
+    const failing = readinessBody(await evaluateReadiness(facts({ jobs: "unconfigured" })), false);
+    expect(failing).toEqual({ status: "not_ready" });
     expect(JSON.stringify(readinessBody(report, true))).toContain(TENANT.businessId);
+  });
+
+  it("shows the checks without a token on a developer machine only, never on a reachable production build", () => {
+    const anonymous = new Request("https://bot.example.com/api/health/ready");
+    const who = (
+      environment: "local" | "production",
+      runtime: "production" | "development",
+      url: string,
+    ) =>
+      mayReadDetails(anonymous, {
+        env: loadEnv({ ...PRODUCTION, APP_URL: url }),
+        deployment: { environment, commitSha: null, region: null },
+        runtime,
+      });
+    // `pnpm dev`, and the browser tests' production build on loopback.
+    expect(who("local", "development", "https://bot.example.com")).toBe(true);
+    expect(who("local", "production", "http://127.0.0.1:3100")).toBe(true);
+    // DEVELOPMENT_MODE=1 on a server others can reach: the misconfiguration itself.
+    expect(who("local", "production", "https://bot.example.com")).toBe(false);
+    expect(who("production", "production", "https://bot.example.com")).toBe(false);
+    expect(who("production", "production", "http://127.0.0.1:3100")).toBe(false);
+  });
+
+  it("evaluates once for all requests of a few seconds, and again after that", async () => {
+    let now = 1_000_000;
+    let evaluations = 0;
+    let fail = false;
+    const cached = createReadinessCache({
+      now: () => now,
+      ttlMs: 15_000,
+      evaluate: async () => {
+        evaluations += 1;
+        if (fail) throw new Error("database down");
+        return evaluateReadiness(facts());
+      },
+    });
+    // A burst of anonymous requests costs one evaluation (one database read per business).
+    const burst = await Promise.all(Array.from({ length: 50 }, () => cached()));
+    expect(new Set(burst).size).toBe(1);
+    expect(evaluations).toBe(1);
+    now += 14_999;
+    await cached();
+    expect(evaluations).toBe(1);
+    now += 2;
+    await cached();
+    expect(evaluations).toBe(2);
+    // A failed evaluation is not kept: the next request tries again.
+    now += 20_000;
+    fail = true;
+    await expect(cached()).rejects.toThrow("database down");
+    fail = false;
+    expect((await cached()).status).toBe("ready");
+    expect(evaluations).toBe(4);
   });
 });
