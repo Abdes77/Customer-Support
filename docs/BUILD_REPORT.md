@@ -73,7 +73,8 @@ and packages for each part of the logic. `docs/ARCHITECTURE.md` describes the de
 
 - **Conversation engine.** For every turn it assembles the business's profile and knowledge,
   the trade's playbook, the resolved settings, the lead so far and the history, and asks the
-  Claude API (the product's default reply model is the setting `claude-fable-5-2`) for a reply
+  Claude API (the reply model and its effort are the settings `model.reply.model` and
+  `model.reply.effort`, with their defaults in `docs/SETTINGS.md`) for a reply
   plus structured actions through tools: update the lead, ask for or analyze a photo, offer
   times or book, escalate an emergency, hand off, mark not a fit, schedule a follow-up, end the
   conversation. A guard checks the reply against the settings (prices, promises, links) before
