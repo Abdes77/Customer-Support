@@ -1,0 +1,39 @@
+{
+  "name": "@repo/pipeline",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "live:roundtrip": "tsx scripts/live-roundtrip.ts",
+    "trace": "tsx scripts/trace.ts",
+    "load:test": "tsx scripts/load-test.ts"
+  },
+  "dependencies": {
+    "@repo/ai": "workspace:*",
+    "@repo/core": "workspace:*",
+    "@repo/db": "workspace:*",
+    "@repo/jobs": "workspace:*",
+    "@repo/knowledge": "workspace:*",
+    "@repo/leads": "workspace:*",
+    "@repo/handoff": "workspace:*",
+    "@repo/scheduling": "workspace:*",
+    "@repo/settings": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@inngest/test": "catalog:",
+    "@repo/channel-test": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "inngest": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

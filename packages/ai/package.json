@@ -1,0 +1,30 @@
+{
+  "name": "@repo/ai",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "live:conversations": "tsx scripts/live-conversations.ts",
+    "prompt:fingerprint": "tsx scripts/prompt-fingerprint.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "catalog:",
+    "@repo/core": "workspace:*",
+    "@repo/settings": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

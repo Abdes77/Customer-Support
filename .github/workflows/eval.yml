@@ -1,0 +1,137 @@
+name: eval
+
+# The evaluation suite (`pnpm eval`): simulated customers against the reply bot, graded.
+# It runs when something changes that decides what the bot says: the engine and its
+# prompts, the playbooks and knowledge code, lead scoring, the settings registry and its
+# defaults, the composition, and the harness itself.
+#
+# With the repository secret ANTHROPIC_API_KEY it is a live run: the Claude API writes the
+# replies, plays the customers and judges them, and the job fails when a scenario does not
+# pass or quality dropped against packages/evals/baseline/live.json. A live run costs money
+# on every push to such a pull request; set the repository variable EVAL_ARGS to "--core"
+# to run the 24-scenario selection instead of all 72.
+#
+# Without the secret (a fork, or a repository that has none yet) it is a mock run: stand-ins
+# for all three models. It still fails when the harness breaks or when a rule the engine
+# enforces in code stops holding, and it says in the job summary that it measured no quality.
+
+on:
+  pull_request:
+    paths:
+      - "packages/ai/**"
+      - "packages/evals/**"
+      - "packages/knowledge/**"
+      - "packages/leads/**"
+      - "packages/settings/**"
+      - "packages/pipeline/src/**"
+      - "packages/core/src/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/eval.yml"
+  workflow_dispatch:
+    inputs:
+      args:
+        description: 'Extra arguments for pnpm eval, for example "--suite roofing" or "--reps 2"'
+        required: false
+        default: ""
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    name: pnpm eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The sandbox of an evaluation is a throwaway database on this server.
+      DATABASE_URL: postgresql://hsrb:hsrb@127.0.0.1:5432/hsrb_dev
+      DATABASE_URL_DIRECT: postgresql://hsrb:hsrb@127.0.0.1:5432/hsrb_dev
+      TEST_DATABASE_URL: postgresql://hsrb:hsrb@127.0.0.1:5432/hsrb_test
+      # Whether the secret exists (it does not for pull requests from forks). The key itself is
+      # given to the evaluation step only, never to the install step and its package scripts.
+      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      EVAL_ARGS: ${{ vars.EVAL_ARGS }}
+      EXTRA_ARGS: ${{ inputs.args }}
+      TURBO_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare the database role and databases
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE hsrb LOGIN PASSWORD 'hsrb' CREATEDB CREATEROLE BYPASSRLS;
+          CREATE DATABASE hsrb_dev OWNER hsrb;
+          CREATE DATABASE hsrb_test OWNER hsrb;
+          SQL
+
+      - name: Say which kind of run this is
+        run: |
+          if [ "$HAS_ANTHROPIC_KEY" != "true" ]; then
+            echo "::warning title=Mock evaluation::ANTHROPIC_API_KEY is not available to this run. The suite runs against stand-ins: it checks the harness and the rules the engine enforces in code, and measures no reply quality."
+          else
+            echo "::notice title=Live evaluation::The Claude API writes the replies, plays the customers and judges them."
+          fi
+
+      - name: Evaluate
+        # The arguments come from a repository variable and a manual input; they reach the
+        # shell as environment variables, never as text pasted into the script.
+        env:
+          # Empty when the secret does not exist: the run is then a mock run.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Split the arguments into words, but never expand them as file patterns.
+          set -f
+          # shellcheck disable=SC2086
+          pnpm eval --out evals-output/ci $EVAL_ARGS $EXTRA_ARGS
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f evals-output/ci/summary.md ]; then
+            cat evals-output/ci/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The evaluation wrote no summary." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the report, the results and the transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: evals-output/ci
+          if-no-files-found: ignore
+          retention-days: 30

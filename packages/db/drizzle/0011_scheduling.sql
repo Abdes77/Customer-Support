@@ -1,0 +1,4 @@
+-- C12: one active booking per conversation (a retried tool call never books twice), and the
+-- key in a Calendly webhook URL names exactly one integration connection.
+CREATE UNIQUE INDEX "bookings_active_conversation_key" ON "bookings" USING btree ("conversation_id") WHERE "bookings"."conversation_id" is not null and "bookings"."status" in ('pending', 'confirmed');--> statement-breakpoint
+CREATE UNIQUE INDEX "integration_connections_webhook_key" ON "integration_connections" USING btree ("provider",("config" ->> 'webhookKey')) WHERE ("integration_connections"."config" ->> 'webhookKey') is not null;

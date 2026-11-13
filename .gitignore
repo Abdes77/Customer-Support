@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# caches
+.turbo/
+.eslintcache
+coverage/
+
+# env and secrets (never commit real values; .env.example is the only tracked env file)
+.env
+.env.*
+!.env.example
+
+# test and tooling output
+playwright-report/
+test-results/
+blob-report/
+evals-output/
+
+# local services
+.local/
+
+# editor and OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.log

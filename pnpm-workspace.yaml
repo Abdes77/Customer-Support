@@ -1,0 +1,58 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "packages/channels/*"
+
+# One version per shared dependency for the whole repo. Reference these from a package with
+# "<name>": "catalog:". Change a version here only, and add a line to docs/DECISIONS.md.
+catalog:
+  # Language and tooling
+  typescript: ~6.0.3
+  "@types/node": ^22.19.0
+  turbo: ^2.11.11
+  eslint: ^10.14.0
+  "@eslint/js": ^10.0.1
+  typescript-eslint: ^8.72.2
+  eslint-config-prettier: ^10.1.8
+  eslint-plugin-react-hooks: ^7.1.1
+  "@next/eslint-plugin-next": 16.4.6
+  globals: ^17.14.0
+  prettier: ^3.10.0
+  vitest: ^5.1.0
+  tsx: ^4.23.15
+  "@playwright/test": ^1.65.0
+  esbuild: ^0.28.2
+
+  # Runtime stack (docs/SPEC.md "Stack")
+  zod: ^4.6.7
+  next: 16.4.6
+  react: ^19.3.1
+  react-dom: ^19.3.1
+  "@types/react": ^19.3.0
+  "@types/react-dom": ^19.3.0
+  tailwindcss: ^4.3.5
+  "@tailwindcss/postcss": ^4.3.5
+  postcss: ^8.5.32
+  drizzle-orm: ^0.45.4
+  drizzle-kit: ^0.31.11
+  postgres: ^4.1.1
+  "@supabase/supabase-js": ^2.119.0
+  "@supabase/ssr": ^0.12.7
+  inngest: ^4.26.2
+  "@inngest/test": ^1.0.0
+  "@anthropic-ai/sdk": ^1.8.0
+  htmlparser2: ^12.0.0
+
+  # Email (C11): MIME parsing and building, IMAP and SMTP clients; test servers for the round trip
+  postal-mime: ^4.2.1
+  nodemailer: ^10.5.0
+  imapflow: ^2.11.0
+  smtp-server: ^3.21.4
+  imapkit: ^5.3.1
+
+# pnpm 10 blocks dependency install scripts unless they are listed here.
+onlyBuiltDependencies:
+  - "@tailwindcss/oxide"
+  - esbuild
+  - sharp
+  - unrs-resolver

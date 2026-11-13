@@ -1,0 +1,23 @@
+# Generated or vendored
+node_modules
+.next
+.turbo
+dist
+coverage
+pnpm-lock.yaml
+next-env.d.ts
+**/drizzle/**
+**/migrations/**
+**/fixtures/**
+**/__fixtures__/**
+**/__snapshots__/**
+playwright-report
+test-results
+evals-output
+
+# Prose is not reflowed by Prettier: docs are written for people and diffed by hand
+*.md
+autobuild
+
+# Generated from packages/core/src/env/spec.ts (pnpm env:example)
+.env.example

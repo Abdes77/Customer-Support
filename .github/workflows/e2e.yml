@@ -1,0 +1,80 @@
+name: e2e
+
+# Browser tests (`pnpm e2e`, Playwright in apps/web/e2e) against a production build of the app
+# (`next build`, then `next start`, both started by apps/web/e2e/support/app-server.ts) on a
+# fresh local database. No vendor account: jobs run in-process and the offline model answers.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: pnpm e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql://hsrb:hsrb@127.0.0.1:5432/hsrb_test
+      NEXT_TELEMETRY_DISABLED: "1"
+      TURBO_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for Playwright
+        run: pnpm --filter @repo/web exec playwright install --with-deps chromium
+
+      - name: Prepare the database role and databases
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE hsrb LOGIN PASSWORD 'hsrb' CREATEDB CREATEROLE BYPASSRLS;
+          CREATE DATABASE hsrb_test OWNER hsrb;
+          SQL
+
+      - name: End-to-end tests
+        run: pnpm e2e
+
+      - name: Keep screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 7

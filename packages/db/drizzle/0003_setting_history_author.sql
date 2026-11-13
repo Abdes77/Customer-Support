@@ -1,0 +1,1 @@
+ALTER POLICY "setting_versions_insert_user" ON "setting_versions" TO authenticated WITH CHECK ((((scope = 'business' and agency_id in (select app.staff_agency_ids())) or agency_id in (select app.admin_agency_ids())) and changed_by = (select auth.uid())));
