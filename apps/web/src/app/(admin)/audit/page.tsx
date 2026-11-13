@@ -79,7 +79,7 @@ export default async function AuditPage({
     <div>
       <PageHeader
         title="Audit log"
-        description="Every change to settings, knowledge, playbooks, businesses, connections and conversations."
+        description="Every change to settings, knowledge, playbooks, businesses, connections, conversations and who has access."
       />
       <AgencySwitcher agencies={agencies} current={session.agencyId} path="/audit" />
       <form method="get" className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -138,7 +138,15 @@ export default async function AuditPage({
                 </span>
               </div>
               {row.summary !== null && (
-                <p className="text-sm break-words text-slate-800">{row.summary}</p>
+                <p className="text-sm break-words text-slate-800">
+                  {row.summary}
+                  {row.targetType === "user" && (
+                    <span className="text-slate-600">
+                      {" "}
+                      · {row.targetName ?? "a person no longer on the team"}
+                    </span>
+                  )}
+                </p>
               )}
               {(row.before !== null || row.after !== null) && (
                 <p className="text-xs break-all text-slate-500">

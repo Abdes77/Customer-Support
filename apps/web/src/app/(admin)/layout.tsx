@@ -33,6 +33,7 @@ export default async function AdminLayout({ children }: { readonly children: Rea
       items: [
         { href: "/businesses", label: "Businesses" },
         { href: "/playbooks", label: "Playbooks" },
+        { href: "/people", label: "People" },
         { href: "/settings", label: "Agency settings" },
       ],
     });

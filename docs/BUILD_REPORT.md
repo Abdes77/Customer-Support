@@ -18,7 +18,7 @@ Inngest Cloud, no Sentry project and no hosted deployment.
 What was verified is only what ran on this computer:
 
 1. **`pnpm verify`**: type checking, linting (including the rules on which package may use
-   which) and 3,523 automated tests in 138 test files, many of them against a real local
+   which) and 3,570 automated tests in 140 test files, many of them against a real local
    PostgreSQL database and against fakes of the vendors' APIs built from their documentation.
    It passed uncached (`TURBO_FORCE=true pnpm verify`, exit code 0).
 2. **`pnpm eval --mode mock`**: the evaluation suite's 72 simulated conversations run end to end
@@ -39,11 +39,11 @@ outside service is tried for the first time, and its Part 5 lists those first tr
 
 The system is a TypeScript monorepo: a Next.js app (`apps/web`) for every screen and HTTP route,
 and packages for each part of the logic. `docs/ARCHITECTURE.md` describes the design and has an
-"As built" section for each part; `docs/DECISIONS.md` records 296 decisions made along the way.
+"As built" section for each part; `docs/DECISIONS.md` records 300 decisions made along the way.
 
 ### Foundations
 
-- **Data, tenancy and sign-in.** One PostgreSQL schema (16 migrations) for agencies, businesses,
+- **Data, tenancy and sign-in.** One PostgreSQL schema (17 migrations) for agencies, businesses,
   people and roles (agency admin, agency member, client owner, client staff), customers,
   conversations, messages, leads, settings with their history, integrations, alerts and an audit
   log. Row-level security in the database confines every query to what the person or job may
@@ -191,6 +191,25 @@ never received an event.
   now fails when customer messages have waited more than 30 minutes without a reply turn. The
   audit had left this to monitoring; it could be done simply, so it is now a check (DECISIONS
   291), proven by a database test and a readiness test.
+- **People management** (added at the end of this chunk, **after** the whole-system security
+  audit of C17, and covered by this chunk's own review and tests only): a **People** page for
+  the agency's admins and members and a **People** tab per business for its client owner and
+  staff. Agency admins add someone by email with a role, change roles and remove access; agency
+  members only see the lists; a client owner manages their own staff only if the business turns
+  on `client_portal.owner_manages_staff` (off by default). With Supabase, adding sends
+  Supabase's invitation (or a sign-in link to an existing account; the screen answers the same
+  either way) through its server-side admin API; with the local sign-in the page shows the link.
+  Nobody can change their own access, an agency always keeps one admin (a database trigger,
+  safe under concurrent changes), and the database refuses direct writes of the membership
+  tables by anyone but an agency admin of that agency, never on their own row. Removing access
+  takes effect on the person's next request. At most 20 invitations per person a day; every
+  change is in the audit log with who made it; no email address is logged (DECISIONS 297 to
+  300, THREAT_MODEL 2.12 and 4.17). _Rests on:_ `pnpm verify` (database tests of every role
+  writing the membership tables directly, the last-admin rule under concurrency, removal on
+  the next request; action tests as every role across agencies and businesses), and a browser
+  test at both widths in which an agency admin gives a client owner a login, that person signs
+  in and sees only their business, and is turned away after removal. Supabase's invitation
+  emails were never sent (HUMAN_TODO step 20 has the live check).
 - **The load test** (below).
 - **Documents:** the launch checklist (`docs/HUMAN_TODO.md`, rewritten as one ordered list of 41
   steps), `docs/RUNBOOK.md` (deploy, rollback, key rotation, reconnecting channels, daily checks,
@@ -201,9 +220,9 @@ never received an event.
 
 | Run | Command | Result on this computer |
 | --- | --- | --- |
-| Type check, lint, tests | `TURBO_FORCE=true pnpm verify` | Exit code 0; 3,523 tests in 138 files passed across 21 packages; package boundaries and formatting checks passed |
+| Type check, lint, tests | `TURBO_FORCE=true pnpm verify` | Exit code 0; 3,570 tests in 140 files passed across 21 packages; package boundaries and formatting checks passed |
 | Evaluation harness, mock | `pnpm eval --mode mock` | Exit code 0: "HARNESS CHECK PASSED", all 72 conversations ran to the end and every rule the engine enforces in code held; a mock run, so no quality score |
-| Browser tests | `pnpm e2e -- --trace off` | 34 passed, 4 skipped (the four channel journeys run at desktop width only), in 4.8 minutes, at 1280×800 and 390×844 |
+| Browser tests | `pnpm e2e -- --trace off` | 38 passed, 4 skipped (the four channel journeys run at desktop width only), in 4.6 minutes, at 1280×800 and 390×844 |
 | Load test | `pnpm load:test` | Passed (numbers below) |
 
 The tests use an injected clock wherever time matters. Vendor calls go to fakes built from each
@@ -291,10 +310,15 @@ Each item says where to read more. The launch checklist turns them into steps.
    compliance adviser (TCPA, carrier and Meta rules); quiet hours and data retention. **Both
    emergency escalation chains (the business's and the agency's fallback) start empty**: until
    someone is entered, an emergency alerts nobody by phone.
-8. **No screen adds people.** Apart from the first agency admin (`pnpm db:create-admin`, which
-   can be repeated for more admins), agency members and client logins can only be added by a
-   developer in the database (DECISIONS 296, HUMAN_TODO step 20). Deleting one customer's data on
-   request also has no screen yet (`docs/RUNBOOK.md`).
+8. **People management is new and less reviewed than the rest.** It was added after the
+   independent security audit (THREAT_MODEL section 6) and has been covered by C18's own review
+   and tests only (THREAT_MODEL 2.12); it deserves the same independent reading before many
+   people are given access. Supabase's invitation and sign-in emails, with the templates of
+   HUMAN_TODO step 5, have never been sent (live check: HUMAN_TODO step 20,
+   `pnpm --filter @repo/db live:invite`). A client owner's limits on managing their staff are
+   enforced by the server, not by row-level security (THREAT_MODEL 4.17). The very first agency
+   admin is still made from the command line (`pnpm db:create-admin`). Deleting one customer's
+   data on request has no screen yet (`docs/RUNBOOK.md`).
 9. **Smaller known limits:** a service radius cannot be checked (no ZIP-code geography; list ZIP
    codes instead, HUMAN_TODO step 38); the Supabase Realtime code for the website chat and the
    inbox was written from memory of the protocol; several vendor details listed under each live

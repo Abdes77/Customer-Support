@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-350 settings in 22 categories.
+351 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -152,7 +152,7 @@ placeholder a setting does not list is a validation error.
 | [Channels](#channels) | 37 | Options of the website widget, WhatsApp, Instagram, Messenger and email. |
 | [CRM and webhooks](#integrations) | 16 | When leads are pushed to a CRM, field mapping and outgoing webhooks. |
 | [Knowledge](#knowledge) | 7 | How business knowledge is gathered and used in replies. |
-| [Client portal](#client_portal) | 9 | What the business's own users may see and do when they have a login. |
+| [Client portal](#client_portal) | 10 | What the business's own users may see and do when they have a login. |
 | [Model and effort](#model) | 14 | Which Claude model does each task, and how hard it thinks. |
 | [Limits and spend caps](#limits) | 14 | Rate limits and model-spend caps that stop floods and runaway cost. |
 | [Data retention](#data) | 6 | How long conversations, files and model records are kept. |
@@ -1522,6 +1522,7 @@ What the business's own users may see and do when they have a login.
 | `client_portal.view_analytics` | **See analytics.** Who may see the business's analytics. | one of: `nobody`, `owner`, `owner_and_staff` | `"owner"` | all |  |
 | `client_portal.edit_knowledge` | **Edit knowledge.** Who may edit the business's knowledge: services, hours, warranties and the rest. | one of: `nobody`, `owner`, `owner_and_staff` | `"nobody"` | all |  |
 | `client_portal.edit_settings` | **Edit settings.** Who may change the settings that are marked "client may edit", such as business hours, alert recipients and the bot's name. Every other setting stays with the agency. | one of: `nobody`, `owner`, `owner_and_staff` | `"owner"` | all |  |
+| `client_portal.owner_manages_staff` | **Owner manages staff logins.** The business owner may add, change and remove the logins of their own staff (client staff only: never another owner, never themselves). When off, only agency admins manage the business's logins. | yes / no | `false` | all |  |
 
 <a id="model"></a>
 

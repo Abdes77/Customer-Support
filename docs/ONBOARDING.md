@@ -85,8 +85,9 @@ changes it for this business only, "Reset" returns to the inherited value. Revie
   channel.
 - **Handoff:** when a person takes over and when the bot takes the conversation back.
 - **Client portal:** whether the client gets logins (`client_portal.enabled`) and what owners
-  and staff may see and do (conversations, leads, reports, export, analytics, replying).
-  Client logins are created by a developer for now (no screen yet).
+  and staff may see and do (conversations, leads, reports, export, analytics, replying), and
+  whether the owner may manage their own staff's logins (`client_portal.owner_manages_staff`,
+  off by default). The logins themselves are added on the business's People tab (section 9).
 
 ## 4. Connecting the channels
 
@@ -170,3 +171,35 @@ The business's **Integrations** page.
 - A customer asks to stop messages: the bot records the opt-out word and confirms once;
   follow-ups stop for good. What the bot does with their later messages depends on the agency's
   opt-out setting (HUMAN_TODO step 37).
+
+## 9. People and logins
+
+Who may use the admin panel, and how to give or take away access. Every addition, role change
+and removal is in the audit log with the name of the person who made it.
+
+**The agency's team** (**People** in the menu): agency admins and agency members. A member works
+on every business; an admin also manages people, API keys and agency-wide settings and reads
+the audit log. Agency admins add someone by email with a role, change a role and remove access;
+members see the list only.
+
+**A business's client logins** (the business's **People** tab): its owner and staff, who see
+this business only and only what its client-portal settings allow. Agency admins add, change
+and remove them. When `client_portal.owner_manages_staff` is on, the business's owner can add
+and remove their own staff (never another owner, never a role change). Agency members see the
+list only. Logins work only while `client_portal.enabled` is on; the tab warns when it is off.
+
+How it works:
+
+- **Adding:** type the email and pick the role, then "Add and invite". The person gets an email
+  with a link that signs them in: an invitation if they are new, a sign-in link if they
+  already have an account (for example with another agency). The screen answers the same in
+  both cases. Each person can add at most 20 people a day.
+- **Changing a role:** pick the new role in the person's row.
+- **Removing:** "Remove", then "Confirm removal". Their access ends with their next click, not
+  at the end of their session.
+- **Your own access:** nobody can change or remove their own. Keep a second agency admin so
+  that one can always fix the other's; an agency always keeps at least one agency admin (the
+  last one cannot be removed or made a member).
+- **Before giving a client logins**, read `docs/HUMAN_TODO.md` step 5.6: until the Supabase Data
+  API is closed, a client login can read more than the portal shows.
+

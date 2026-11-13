@@ -114,6 +114,12 @@ export interface AuditRow {
   readonly action: string;
   readonly targetType: string | null;
   readonly targetId: string | null;
+  /**
+   * For an entry about a person (people management, C18): their email while the reader can
+   * still see the person (row-level security on profiles), otherwise null. Entries store the
+   * user id only.
+   */
+  readonly targetName: string | null;
   readonly summary: string | null;
   readonly before: unknown;
   readonly after: unknown;
@@ -159,6 +165,9 @@ export async function listAuditLog(
       action: auditLog.action,
       targetType: auditLog.targetType,
       targetId: auditLog.targetId,
+      targetName: sql<
+        string | null
+      >`(select u.email from ${users} u where ${auditLog.targetType} = 'user' and u.id::text = ${auditLog.targetId})`,
       summary: auditLog.summary,
       before: auditLog.before,
       after: auditLog.after,

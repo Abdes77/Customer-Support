@@ -70,4 +70,10 @@ export const clientPortalSettings = defineCategory("client_portal", {
     field: f.select(WHO),
     default: "owner",
   }),
+  "client_portal.owner_manages_staff": setting({
+    label: "Owner manages staff logins",
+    help: "The business owner may add, change and remove the logins of their own staff (client staff only: never another owner, never themselves). When off, only agency admins manage the business's logins.",
+    field: f.boolean(),
+    default: false,
+  }),
 });

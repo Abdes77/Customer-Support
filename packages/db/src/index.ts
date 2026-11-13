@@ -42,6 +42,7 @@ export type {
 } from "./directory";
 export type { Platform } from "./platform";
 export type { LocalAuthStore, LocalAuthUser } from "./local-auth";
+export { createSupabaseAuthAdmin, type SupabaseAuthAdmin } from "./supabase-auth-admin";
 
 // Schema: tables, vocabularies and the policy builders for tables added by later chunks
 export * from "./schema";
@@ -160,6 +161,27 @@ export {
   redactAuditValue,
   recordUserAudit,
 } from "./repositories/audit";
+
+// People management: memberships and their audit entries (C18)
+export {
+  type AgencyRoleName,
+  changeAgencyRole,
+  changeBusinessRole,
+  type ClientRoleName,
+  explainMembershipError,
+  findAgencyRole,
+  findBusinessRole,
+  grantAgencyAccess,
+  grantBusinessAccess,
+  LAST_ADMIN_CONSTRAINT,
+  LAST_ADMIN_MESSAGE,
+  listAgencyPeople,
+  listBusinessPeople,
+  type PeopleActor,
+  type PersonView,
+  revokeAgencyAccess,
+  revokeBusinessAccess,
+} from "./repositories/people";
 
 // Errors
 export {

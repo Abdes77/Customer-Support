@@ -19,7 +19,8 @@
     "seed": "tsx scripts/seed.ts",
     "reset": "tsx scripts/reset.ts",
     "doctor": "tsx scripts/doctor.ts",
-    "create-admin": "tsx scripts/create-admin.ts"
+    "create-admin": "tsx scripts/create-admin.ts",
+    "live:invite": "tsx scripts/live-invite.ts"
   },
   "dependencies": {
     "@repo/core": "workspace:*",

@@ -14,6 +14,7 @@ import type { Connection } from "./internal/client";
 import {
   alerts,
   apiKeys,
+  auditLog,
   businesses,
   channelConnections,
   escalations,
@@ -153,6 +154,13 @@ export interface Directory {
    * count against a cap). The caller passes the agency it is already confined to.
    */
   agencyModelSpendSince(agencyId: AgencyId, since: Date): Promise<number>;
+
+  /**
+   * How many people `userId` gave access to since `since`, in every agency (C18: the limit
+   * on invitations a person can send). One number, read from the audit log's grant entries
+   * by the exact actor id; nothing else about the entries leaves this function.
+   */
+  countAccessGrantsSince(userId: UserId, since: Date): Promise<number>;
 }
 
 export function createDirectory(connection: Connection): Directory {
@@ -357,6 +365,20 @@ export function createDirectory(connection: Connection): Directory {
                )`,
       );
       return Number((rows[0] as { total?: string } | undefined)?.total ?? 0);
+    },
+
+    async countAccessGrantsSince(userId, since) {
+      const rows = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.actorUserId, userId),
+            inArray(auditLog.action, ["agency_membership.grant", "business_membership.grant"]),
+            sql`${auditLog.createdAt} >= ${since.toISOString()}::timestamptz`,
+          ),
+        );
+      return rows[0]?.n ?? 0;
     },
 
     async findUserByEmail(email) {

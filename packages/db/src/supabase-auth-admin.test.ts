@@ -61,4 +61,52 @@ describe("createSupabaseAuthAdmin", () => {
       admin.ensureUser(fakeDatabase(null), { email: "c@example.com" }),
     ).rejects.not.toThrow(/service-role-key/);
   });
+
+  it("invites a new person with the redirect, and reports an address that has an account", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "u-3" }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 422, error_code: "email_exists", msg: "x" }), {
+          status: 422,
+        }),
+      );
+    const admin = createSupabaseAuthAdmin({ ...options, fetch: fetchMock });
+    const redirectTo = "https://app.example.com/auth/confirm";
+    expect(await admin.inviteUser({ email: "new@example.com", redirectTo })).toEqual({
+      id: "u-3",
+    });
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe(
+      "https://project.supabase.co/auth/v1/invite?redirect_to=https%3A%2F%2Fapp.example.com%2Fauth%2Fconfirm",
+    );
+    expect((init?.headers as Record<string, string>)["apikey"]).toBe("service-role-key");
+    expect(JSON.parse(init?.body as string)).toEqual({ email: "new@example.com" });
+    expect(await admin.inviteUser({ email: "taken@example.com", redirectTo })).toBe("exists");
+  });
+
+  it("sends a sign-in link without creating a user", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 429, headers: { "retry-after": "60" } }))
+      .mockResolvedValueOnce(new Response("boom", { status: 500 }));
+    const admin = createSupabaseAuthAdmin({ ...options, fetch: fetchMock });
+    const redirectTo = "https://app.example.com/auth/confirm";
+    await admin.sendSignInLink({ email: "known@example.com", redirectTo });
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url as string).toMatch(/\/auth\/v1\/otp\?redirect_to=/);
+    expect(JSON.parse(init?.body as string)).toEqual({
+      email: "known@example.com",
+      create_user: false,
+    });
+    const failure = admin.sendSignInLink({ email: "known@example.com", redirectTo });
+    await expect(failure).rejects.toMatchObject({ code: "rate_limited", retryAfterSeconds: 60 });
+    const outage = await admin
+      .inviteUser({ email: "x@example.com", redirectTo })
+      .catch((error: unknown) => error as Error);
+    expect(outage).toBeInstanceOf(Error);
+    expect((outage as Error).message).toMatch(/HTTP 500/);
+    expect((outage as Error).message).not.toMatch(/x@example\.com|service-role-key/);
+  });
 });

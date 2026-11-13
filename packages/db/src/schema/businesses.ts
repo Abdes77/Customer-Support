@@ -28,6 +28,7 @@ import {
   CURRENT_USER,
   IN_AGENCY_WIDE_SCOPE,
   IN_BUSINESS_SCOPE,
+  NOT_CURRENT_USER,
   STAFF_OF_AGENCY,
   sharedPolicies,
   systemPolicies,
@@ -156,11 +157,15 @@ export const businessMemberships = pgTable(
     check("business_memberships_role_check", oneOf(t.role, CLIENT_ROLES)),
     // A user always sees their own membership (so the app can explain "client logins are
     // switched off for your business"); an owner sees the team; staff see everything.
+    // Only agency admins write, never their own row. A client owner who may manage their
+    // staff (`client_portal.owner_manages_staff`) does it through the server, which checks
+    // the setting and writes in the business's system scope: no client user writes here
+    // directly, whatever the settings say (C18, people management).
     ...userPolicies("business_memberships", {
       select: `(${STAFF_OF_AGENCY} or user_id = ${CURRENT_USER} or business_id in (select app.client_owner_business_ids()))`,
-      insert: ADMIN_OF_AGENCY,
-      update: ADMIN_OF_AGENCY,
-      delete: ADMIN_OF_AGENCY,
+      insert: `(${ADMIN_OF_AGENCY} and ${NOT_CURRENT_USER})`,
+      update: `(${ADMIN_OF_AGENCY} and ${NOT_CURRENT_USER})`,
+      delete: `(${ADMIN_OF_AGENCY} and ${NOT_CURRENT_USER})`,
     }),
     ...systemPolicies("business_memberships", {
       read: IN_BUSINESS_SCOPE,

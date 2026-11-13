@@ -92,6 +92,11 @@ export interface MatrixEntry {
     readonly delete?: (actor: MatrixActor, fixtureAuthorId: UserId) => boolean;
   };
   readonly system: "read_write" | "append_only" | "read_only";
+  /**
+   * The row grants access to its `user_id` (the membership tables, C18): nobody may insert,
+   * update or delete a row about themselves as a signed-in user, whatever their role.
+   */
+  readonly grantsAccess?: true;
   /** "shared" tables: a business scope also reads the agency-level rows. */
   readonly businessScopeReadsAgencyRows?: boolean;
 }
@@ -141,7 +146,10 @@ export const ISOLATION_MATRIX: readonly MatrixEntry[] = [
     worldFixture: true,
     row: (r) => ({ agencyId: r.tenant.agencyId, userId: r.spareUserId, role: "agency_member" }),
     change: { column: "role", value: "agency_member" },
+    // Admins write, never their own row, and the last admin stays (C18): proven in
+    // src/people.test.ts. The fixture row is the member's, so the plain levels hold here.
     user: { read: "staff", insert: "admin", update: "admin", delete: "admin" },
+    grantsAccess: true,
     system: "read_write",
   },
   {
@@ -215,7 +223,9 @@ export const ISOLATION_MATRIX: readonly MatrixEntry[] = [
     row: (r) => ({ ...r.tenant, userId: r.spareUserId, role: "client_staff" }),
     change: { column: "role", value: "client_staff" },
     // Client users see their own membership (and an owner sees the team): "clientRead".
+    // Admins write, never their own row (C18, src/people.test.ts); no client user writes.
     user: { read: "staff", clientRead: true, insert: "admin", update: "admin", delete: "admin" },
+    grantsAccess: true,
     system: "read_write",
   },
   {

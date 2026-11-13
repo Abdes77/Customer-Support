@@ -4,7 +4,17 @@ import { check, index, pgPolicy, pgTable, text, uniqueIndex, uuid } from "drizzl
 import { AGENCY_ROLES, type AgencyId, type UserId } from "@repo/core";
 
 import { createdAt, oneOf, updatedAt } from "./columns";
-import { agencyPolicies, authenticatedRole, systemRole, userPolicies } from "./policies";
+import {
+  ADMIN_OF_AGENCY,
+  authenticatedRole,
+  NOT_CURRENT_USER,
+  IN_AGENCY_SCOPE,
+  IN_AGENCY_WIDE_SCOPE,
+  STAFF_OF_AGENCY,
+  systemPolicies,
+  systemRole,
+  userPolicies,
+} from "./policies";
 
 /** The agency that operates the system for its client businesses. Top of the tenancy tree. */
 export const agencies = pgTable(
@@ -89,11 +99,18 @@ export const agencyMemberships = pgTable(
     uniqueIndex("agency_memberships_agency_user_key").on(t.agencyId, t.userId),
     index("agency_memberships_user_idx").on(t.userId),
     check("agency_memberships_role_check", oneOf(t.role, AGENCY_ROLES)),
-    // Staff see who else is on the team; only admins change it.
-    ...agencyPolicies("agency_memberships", {
-      insert: "admin",
-      update: "admin",
-      delete: "admin",
+    // Staff see who else is on the team; only admins change it, and never their own row (an
+    // admin cannot demote or remove themselves, so a second admin has to). Migration 0016 adds
+    // the trigger that keeps at least one agency_admin per agency (C18, people management).
+    ...userPolicies("agency_memberships", {
+      select: STAFF_OF_AGENCY,
+      insert: `(${ADMIN_OF_AGENCY} and ${NOT_CURRENT_USER})`,
+      update: `(${ADMIN_OF_AGENCY} and ${NOT_CURRENT_USER})`,
+      delete: `(${ADMIN_OF_AGENCY} and ${NOT_CURRENT_USER})`,
+    }),
+    ...systemPolicies("agency_memberships", {
+      read: IN_AGENCY_SCOPE,
+      write: IN_AGENCY_WIDE_SCOPE,
     }),
   ],
 );

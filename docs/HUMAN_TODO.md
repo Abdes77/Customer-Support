@@ -97,8 +97,22 @@ for syntax only and has never run on GitHub: open any pull request and confirm t
   3. Authentication, Sign In / Providers: keep Email enabled and switch **off** "Allow new
      users to sign up". Accounts are created by the agency; there is no public sign-up.
   4. Authentication, URL Configuration: set Site URL to `<APP_URL>` and add
-     `<APP_URL>/auth/callback` and `<APP_URL>/auth/confirm` to Redirect URLs. The default
-     Magic Link email template works as it is.
+     `<APP_URL>/auth/callback` and `<APP_URL>/auth/confirm` to Redirect URLs.
+     Then, in Authentication, Emails (the admin panel's People screens send these; a link
+     must come back to the app's `/auth/confirm` with a token hash, because an invitation is
+     sent by the server and the person's browser holds no sign-in code to finish another kind
+     of link):
+     - Templates, **Invite user:** make the link
+       `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite`, and let the text
+       say which agency invites them and that the link expires (Supabase's default is 24 hours).
+     - Templates, **Magic Link:** make the link
+       `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email`. The sign-in
+       form's emailed link and the People screens' link for someone who already has an account
+       both use it.
+     - SMTP Settings: set up your own email sender (the alert sender of step 14 will do).
+       Supabase's built-in sender is for trials and sends only a few emails an hour, which runs
+       out with the first invitations. The app limits each person to 20 invitations a day on
+       its own.
   5. Storage: create a **private** bucket named `attachments`. Add no policies to it.
   6. Project Settings, API (Data API): remove `public` from "Exposed schemas" (or switch the
      Data API off). The app never uses Supabase's REST or GraphQL API: it reads and writes
@@ -116,7 +130,9 @@ for syntax only and has never run on GitHub: open any pull request and confirm t
   8. Database, Backups: keep the scheduled backups on, and turn on point-in-time recovery if
      the agency can afford it (`docs/BACKUP_RESTORE.md`).
 - **Variables:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
-  `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL` (the transaction pooler
+  `SUPABASE_SERVICE_ROLE_KEY` (server only: it bypasses row-level security; the app uses it on
+  the server for file storage and to invite people, and it must never get a `NEXT_PUBLIC_`
+  name), `SUPABASE_JWT_SECRET`, `DATABASE_URL` (the transaction pooler
   string), `DATABASE_URL_DIRECT` (the direct string), `SUPABASE_STORAGE_BUCKET` (only if the
   bucket has another name).
 - **Proved by:** steps 17, 20, 21 and 27.
@@ -465,11 +481,32 @@ pnpm db:create-admin --agency "Your Agency" --slug your-agency --email you@examp
 **Pass:** you can sign in at `<APP_URL>/sign-in` with the password, and again with an emailed
 link (sign out, enter only the email).
 
-Other people: the admin panel has **no screen for adding people yet**. A colleague who should
-be an agency admin is added the same way (a Supabase user, then the same command with their
-email and your agency's slug). Agency members with fewer rights and client logins (client owner,
-client staff) can only be added by a developer, directly in the database, until such a screen
-exists (`docs/BUILD_REPORT.md`, open items).
+Other people are added in the admin panel (`docs/ONBOARDING.md`, "People and logins"): agency
+admins and members on **People**, a business's client owner and staff on that business's
+**People** tab. Each gets an email from Supabase (step 5.4): an invitation, or a sign-in link
+if they already have an account. Agency admins add, change and remove; members only see the
+lists. A second agency admin is worth having from the start: nobody can change their own access,
+so only another admin can.
+
+1. The invitation emails, without giving anyone access (an address of yours that has no
+   account yet; run it twice to see both emails):
+
+   ```
+   pnpm --filter @repo/db live:invite --email you+invite@example.com
+   ```
+
+   **Pass:** the first run says Supabase sent the "Invite user" email, the second the "Magic
+   Link" email; each link lands on `<APP_URL>/auth/confirm` and ends on the sign-in page with
+   "not linked to an agency or business yet" (the address belongs to nothing).
+2. In the admin panel, **People**: add a colleague (or a second address of yours) as agency
+   member. **Pass:** the email arrives, the link signs them in, they see every business and the
+   People page without its add form. Then remove them: **pass** when their next click ends on
+   the sign-in page.
+3. The audit log (**Audit log**, action `agency_membership.`) lists the grant and the removal
+   with your name.
+
+The built-in sender limits and the templates of step 5 are what fail most often here: if no
+email arrives, check Supabase's Authentication logs.
 
 ### 21. Check the deployment from outside
 
@@ -540,6 +577,10 @@ Follow `docs/ONBOARDING.md` for one real client business, with these limits unti
   and until someone is entered an emergency alerts nobody by phone (a critical alert appears in
   the admin panel only, readiness lists the business, and the wizard asks for an explicit
   acknowledgement).
+- Client logins (optional): switch on `client_portal.enabled` in the business's settings,
+  then add the client's owner on the business's **People** tab. **Pass:** they sign in with the
+  emailed link and see this business only, with what `client_portal.*` allows. Read step 5.6
+  first: until the Data API is closed, a client login reads more than the portal shows.
 - Website chat: put every address the business's site is served from on its allowed list
   (`channels.widget.allowed_origins`, for example `https://www.example.com` and
   `https://example.com`); with an empty list the chat shows nowhere.
@@ -712,7 +753,8 @@ reason. Give the agency's lead-generation tool the first URL.
 
 ### 27. Supabase sign-in, file storage and live updates
 
-- **Sign-in:** step 20 proved password and emailed-link sign-in.
+- **Sign-in:** step 20 proved password and emailed-link sign-in, and the invitations of the
+  People screens; step 23 gives a client owner a login.
 - **File storage:** send a photo through the website chat (step 28). **Pass:** the photo shows
   in the conversation in the admin panel (it is stored in the private bucket and shown through a
   short-lived link).
@@ -1186,7 +1228,7 @@ it meets the real thing for the first time.
 | Claude API (replies)                       | That `claude-fable-5-2` accepts the request as built (ten strict tools, three cached system blocks, a system message after the customer's turn, server-side fallbacks with the beta header `server-side-fallback-2026-07-01`); cache reads; how the bot writes; photo analysis; the prices | 24, 25     |
 | Claude API (web search, playbooks, facts)  | That `web_search_20260209` with `allowed_callers: ["direct"]` is accepted next to a strict tool; research step duration; citations; cache reads between steps; playbook quality; fact extraction                                                                          | 26         |
 | Claude API (evaluation)                    | The judge's tool calls and quotes, the calibration faults, how real the simulated customers sound, cost, rate limits at six conversations at once                                                                                                                       | 25         |
-| Supabase                                   | Roles, row-level security and grants on a real project; Auth (password, magic link); Storage; Realtime for the inbox and the website chat; the Auth admin API                                                                                                            | 17, 20, 27, 28 |
+| Supabase                                   | Roles, row-level security and grants on a real project; Auth (password, magic link); the Auth admin API's invitation (`/auth/v1/invite`) and sign-in link (`/auth/v1/otp`) with our email templates; Storage; Realtime for the inbox and the website chat                  | 17, 20, 23, 27, 28 |
 | Inngest Cloud                              | Signed calls, the Vercel integration, production debounce timing                                                                                                                                                                                                         | 19, 22     |
 | Meta                                       | WhatsApp, Messenger and Instagram payloads, sends, statuses, Embedded Signup, Facebook Login                                                                                                                                                                             | 29, 30, 36 |
 | Google, Microsoft                          | Gmail and Graph mail, headers kept on send, push notifications, calendars                                                                                                                                                                                               | 31, 32     |

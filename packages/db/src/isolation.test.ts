@@ -1136,6 +1136,49 @@ describe("users (profiles)", () => {
   });
 });
 
+describe.each(
+  ISOLATION_MATRIX.filter((entry) => entry.grantsAccess === true).map(
+    (entry) => [entry.name, entry] as const,
+  ),
+)("nobody writes their own access: %s", (_name, entry) => {
+  it.each(CAST)("as %s", async (actorName) => {
+    const actor = world.users[actorName];
+    const targets =
+      entry.kind === "agency"
+        ? allAgencies().map((agency) => ({
+            where: sql`agency_id = ${agency.agencyId}::uuid and user_id = ${actor.id}::uuid`,
+            row: { agencyId: agency.agencyId, userId: actor.id, role: "agency_admin" },
+          }))
+        : allBusinesses().map((business) => ({
+            where: sql`business_id = ${business.tenant.businessId}::uuid and user_id = ${actor.id}::uuid`,
+            row: { ...business.tenant, userId: actor.id, role: "client_owner" },
+          }));
+    await t.db.asUser(actor).run(async ({ tx }) => {
+      for (const target of targets) {
+        const insert = await probe(tx, async (inner) => {
+          await insertRow(inner, entry, target.row);
+          return 1;
+        });
+        expect(insert.ok, `${actorName} inserts own ${entry.name}`).toBe(false);
+        const update = await probe(tx, async (inner) => {
+          const rows = (await inner.execute(
+            sql`update ${tableOf(entry)} set role = ${target.row.role} where ${target.where} returning 1 as one`,
+          )) as unknown as Rows;
+          return rows.length;
+        });
+        expect(refused(update), `${actorName} updates own ${entry.name}`).toBe(true);
+        const remove = await probe(tx, async (inner) => {
+          const rows = (await inner.execute(
+            sql`delete from ${tableOf(entry)} where ${target.where} returning 1 as one`,
+          )) as unknown as Rows;
+          return rows.length;
+        });
+        expect(refused(remove), `${actorName} deletes own ${entry.name}`).toBe(true);
+      }
+    });
+  });
+});
+
 describe("memberships cannot be used to climb", () => {
   const tryInsert = (actorName: CastName, values: Record<string, unknown>, table: PgTable) =>
     t.db.asUser(world.users[actorName]).run(({ tx }) =>

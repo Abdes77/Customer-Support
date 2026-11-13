@@ -426,7 +426,11 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 - **Delivered:** browser journeys for WhatsApp, Messenger, Instagram, email and the test
   channel (`apps/web/e2e/channels.spec.ts`, `journey.spec.ts`) on fakes reached through
   development-only variables; `pnpm load:test`; the `unanswered` readiness check; the
-  documents above. ARCHITECTURE §2 "As built (C18)" has the rest.
+  documents above. Then, because "finish the system" could not leave clients without a way in,
+  people management (an exception to "must not change behaviour", DECISIONS 296 to 300):
+  `apps/web/src/server/people`, the People screens, `packages/db/src/repositories/people.ts`,
+  migration 0016, the setting `client_portal.owner_manages_staff`. ARCHITECTURE §2 "As built
+  (C18)" has the rest.
 
 ## Who registers what in the pipeline
 

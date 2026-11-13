@@ -359,6 +359,8 @@ export const auditLog = pgTable(
     index("audit_log_agency_created_idx").on(t.agencyId, t.createdAt),
     index("audit_log_business_created_idx").on(t.businessId, t.createdAt),
     index("audit_log_target_idx").on(t.targetType, t.targetId),
+    // The invitation limit counts a person's recent grants (C18, people management).
+    index("audit_log_actor_created_idx").on(t.actorUserId, t.createdAt),
     check("audit_log_actor_type_check", oneOf(t.actorType, AUDIT_ACTOR_TYPES)),
     ...userPolicies("audit_log", {
       select: ADMIN_OF_AGENCY,

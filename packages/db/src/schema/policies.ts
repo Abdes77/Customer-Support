@@ -55,6 +55,8 @@ export const STAFF_OF_AGENCY = "agency_id in (select app.staff_agency_ids())";
 export const ADMIN_OF_AGENCY = "agency_id in (select app.admin_agency_ids())";
 export const CLIENT_OF_BUSINESS = "business_id in (select app.client_business_ids())";
 export const CURRENT_USER = "(select auth.uid())";
+/** The row is about someone else: nobody grants, changes or removes their own access. */
+export const NOT_CURRENT_USER = `user_id <> ${CURRENT_USER}`;
 
 const SCOPE_AGENCY = "(select app.scope_agency_id())";
 const SCOPE_AGENCY_WIDE = "(select app.scope_agency_wide_id())";

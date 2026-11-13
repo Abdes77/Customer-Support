@@ -64,7 +64,9 @@ Where things are:
 
    Expect exactly one reply to the three test messages.
 
-Weekly: the database dump and the file copy of `docs/BACKUP_RESTORE.md` ("Routine backups"); the
+Weekly: who has access (**People**, and the People tab of businesses with client logins) and the
+audit log's `agency_membership.` and `business_membership.` entries; the database dump and the
+file copy of `docs/BACKUP_RESTORE.md` ("Routine backups"); the
 Claude API, Twilio and Inngest usage pages against the month's budget; `retention-purge` ran
 every night (Inngest), with counts only.
 
@@ -171,7 +173,7 @@ everything; rotating it needs care.
 | `WIDGET_SESSION_SECRET` | Set a new value, redeploy | Every website visitor starts a new chat |
 | `TEST_CHANNEL_SECRET` | Set a new value, redeploy | The test chat reconnects |
 | `HEALTH_CHECK_TOKEN` | Set a new value, redeploy, update the uptime monitor | The monitor sees only "ready" or "not_ready" |
-| `SUPABASE_SERVICE_ROLE_KEY`, anon key, JWT secret | Supabase, Project Settings, API (new API keys or a JWT secret rotation); set them, redeploy | A JWT secret rotation signs everyone out |
+| `SUPABASE_SERVICE_ROLE_KEY`, anon key, JWT secret | Supabase, Project Settings, API (new API keys or a JWT secret rotation); set them, redeploy | A JWT secret rotation signs everyone out. The service-role key also sends the People screens' invitations: after rotating, add someone and check the email arrives |
 | Database password | Supabase, Database settings, reset; update both connection strings, redeploy | The app cannot reach the database between the reset and the deployment |
 | A business's own credentials (page token, IMAP password, CRM key) | Reconnect on the business's connection page | That channel or CRM stops until reconnected |
 
@@ -252,6 +254,22 @@ pnpm --filter @repo/pipeline trace <business id> <message id>
 
 It prints the turn that answered the message, its model calls (tokens, cost, time), its actions
 and the replies with their delivery status: ids and numbers, never message text.
+
+### Someone leaves, or a login may be misused
+
+On **People** (agency staff) or the business's **People** tab (client logins), "Remove" and
+"Confirm removal". The person's next request is turned away, whatever their session; nothing
+else needs to happen for the app. If the account itself may be compromised (a stolen password),
+also delete or ban the user in Supabase, Authentication, Users, which ends their sessions with
+Supabase too. The audit log (action `agency_membership.` or `business_membership.`) shows who
+gave and took access, and when. An agency always keeps one agency admin: to remove the last
+one, make someone else admin first. If no admin can sign in at all, run
+`pnpm db:create-admin` from the command computer (`docs/HUMAN_TODO.md` step 20).
+
+Invitations do not arrive: Supabase, Authentication, Logs; the usual causes are the built-in
+email sender's hourly limit and an email template whose link does not go to `/auth/confirm`
+(HUMAN_TODO step 5.4). "You have added 20 people in the last 24 hours" is the app's own limit
+per person; another admin can continue.
 
 ### A customer asks for their data to be deleted
 

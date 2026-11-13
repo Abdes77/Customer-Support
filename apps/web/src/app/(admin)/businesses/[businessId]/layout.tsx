@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { StatusBadge } from "@/components/business/status";
 import { type NavItem, TabNav } from "@/components/shell/nav";
 import { requireBusinessPage } from "@/server/admin";
+import { businessPeopleAccess } from "@/server/people";
 
 /**
  * The frame of one business: its name, status and the tabs. A business the person may not
@@ -16,7 +17,13 @@ export default async function BusinessLayout({
   readonly params: Promise<{ businessId: string }>;
 }) {
   const { businessId } = await params;
-  const { business, staff } = await requireBusinessPage(businessId);
+  const page = await requireBusinessPage(businessId);
+  const { business, staff } = page;
+  // Client logins: agency staff always; a client owner only when the settings let them manage
+  // their staff (C18).
+  const people =
+    staff ||
+    (page.role === "client_owner" && (await businessPeopleAccess(page, business.id)) !== null);
   const base = `/businesses/${business.id}`;
   const tabs: NavItem[] = [
     { href: base, label: "Overview", exact: true },
@@ -27,6 +34,7 @@ export default async function BusinessLayout({
     ...(staff ? [{ href: `${base}/playbook`, label: "Playbook" }] : []),
     { href: `${base}/alerts`, label: "Alert contacts" },
     { href: `${base}/settings`, label: "Settings" },
+    ...(people ? [{ href: `${base}/people`, label: "People" }] : []),
     ...(staff
       ? [
           { href: `${base}/channels`, label: "Channels" },

@@ -976,6 +976,22 @@ Security and reliability across the system; the threats, their mitigations and p
   (`localServiceFakes`, ignored unless `deploymentInfo()` is "local"). `channels.spec.ts`:
   WhatsApp, Messenger, Instagram (signed webhooks) and email (connected through the admin
   panel); `journey.spec.ts`: the test channel to the lead list.
+- **People management** (DECISIONS 297 to 300, THREAT_MODEL 2.12; added after the C17 audit
+  and reviewed within C18 only). Screens: `/people` (the agency's admins and members, with the
+  agency switcher) and `/businesses/[id]/people` (client owner and staff), both on
+  `components/people/people-manager.tsx`. Server: `apps/web/src/server/people`
+  (`createPeopleActions`, testable without Next.js, behind `"use server"` wrappers in
+  `_actions/people.ts`; `businessPeopleAccess` decides who sees and manages a business's
+  logins from the session, row-level security and `client_portal.enabled` /
+  `client_portal.owner_manages_staff`); `inviter.ts` lets the person know: with Supabase,
+  `createSupabaseAuthAdmin` (`@repo/db`, service-role key, server only) invites a new address
+  or emails a sign-in link to an existing account; with local sign-in the link is returned and
+  shown. Data: `packages/db/src/repositories/people.ts` (list, grant, change, revoke, each
+  audited by user id in the same transaction; a client owner's writes run in the business's
+  system scope), `directory.countAccessGrantsSince` for the 20-a-day limit. Database
+  (migration 0016): membership writes by an agency admin of the agency only, never on their
+  own row; `app.keep_one_agency_admin` keeps one admin per agency under a lock on the agency.
+  Removal needs nothing else: memberships are read on every request and in every policy.
 - **Launch documents:** `docs/HUMAN_TODO.md` (the numbered checklist), `docs/RUNBOOK.md`,
   `docs/ONBOARDING.md`, `docs/META_APP_REVIEW.md`, `docs/BUILD_REPORT.md`.
 
@@ -1020,8 +1036,8 @@ What signed-in users may do:
 
 - **Agency staff** read everything in their agency. They write configuration (businesses,
   knowledge, playbooks, message templates, notes, business-scope settings); `agency_admin`
-  additionally manages memberships, API keys, agency-wide and segment settings, deletes, and
-  reads the audit log. A playbook version can be added and switched on or off, never changed
+  additionally manages memberships (never their own row; one admin always remains, C18),
+  API keys, agency-wide and segment settings, deletes, and reads the audit log. A playbook version can be added and switched on or off, never changed
   or deleted (migration 0006); playbook generation runs are written by the system scope only.
 - **Client users** only read, only their own business, only while `businesses.client_portal_enabled`
   is true (the per-business switch for client logins, a column because RLS reads it), and only
