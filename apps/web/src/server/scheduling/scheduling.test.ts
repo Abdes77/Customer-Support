@@ -45,7 +45,7 @@ import {
  * Scheduling through the app (C12), without Google, Microsoft or Calendly: their fakes sit
  * behind the server pipeline's `schedulingFetch`. The connect routes, the Calendly webhook
  * route, the jobs and the action handlers of the pipeline's composition are the real ones.
- * The live checks are in HUMAN_TODO 15.
+ * The live checks are in HUMAN_TODO 32.
  */
 
 const local: DeploymentInfo = { environment: "local", commitSha: null, region: null };

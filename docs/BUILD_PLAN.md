@@ -22,7 +22,7 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
    | `packages/settings` registry | Declare the settings your feature needs in your category, with defaults, then regenerate `docs/SETTINGS.md`. Do not hard-code a tunable. |
    | `packages/pipeline/src/composition` | Register your `ActionHandler`s and ports. Do not change the turn flow unless you own it. |
    | `apps/web/src/server` | Register your channel adapter and export your Inngest functions to the `/api/inngest` route. |
-   | `docs/HUMAN_TODO.md`, `docs/DECISIONS.md` | Append entries. C18 rewrites HUMAN_TODO as the launch checklist. |
+   | `docs/HUMAN_TODO.md`, `docs/DECISIONS.md` | Append to DECISIONS. HUMAN_TODO is the launch checklist (C18): add a step where it belongs in the order and renumber every reference to the steps after it (search for `HUMAN_TODO` and `HUMAN_TODO.md`). |
    | `CLAUDE.md` | Add a command when you add one. Keep it under 80 lines. |
    | `eslint.config.mjs`, `tsconfig.base.json`, `turbo.json`, `.github/workflows/verify.yml` | Change only with a DECISIONS line. Never loosen a check to make code pass. |
 
@@ -158,7 +158,7 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   `packages/evals/src/simulate/conversation.ts`; a chunk that adds a setting the bot must
   obey adds it to the judge's rules (`packages/evals/src/grade/rules.ts`) and, where code
   can check it, to `packages/evals/src/grade/checks.ts`. No live baseline exists yet
-  (HUMAN_TODO 10).
+  (HUMAN_TODO 25).
 
 ### C8 · Website chat widget
 
@@ -380,7 +380,7 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
     (the topmost one, added by Gmail or Exchange Online for this mailbox) showing
     `dmarc=pass` for the business's domain, or the colleague's own mailbox connected too.
   - Own-send recognition without headers (DECISIONS 194) falls back to matching the words of
-    our reply on Graph. Once HUMAN_TODO 14's live check shows whether Gmail and Exchange keep
+    our reply on Graph. Once HUMAN_TODO 31's live check shows whether Gmail and Exchange keep
     `Message-ID` and `X-HSRB-Loop`, decide whether Graph should send through a draft
     (`POST /me/messages` with MIME, then `/send`) to get an id, and whether
     `email.own_send_without_marker` should alert.
@@ -399,7 +399,7 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   `pnpm --filter @repo/pipeline trace`, `/api/health/ready`, stuck-work alerts, migration 0015
   (`stored_uploads`, narrowed `app.scope_user_ids`, `app.purge_audit_log`), new variables
   `DEVELOPMENT_MODE`, `HEALTH_CHECK_TOKEN`, `TRUSTED_PROXY_HOPS`, `CLIENT_IP_HEADER`, the
-  setting `limits.notice_message`, HUMAN_TODO 19. **For C18:** the runbook should cover
+  setting `limits.notice_message`, HUMAN_TODO 8, 21, 35 and 39 (one entry before C18 renumbered them). **For C18:** the runbook should cover
   `/api/health/ready`, Sentry, the trace command, retention and the restore test of
   `docs/BACKUP_RESTORE.md`; the load test should leave `limits.*` at their defaults and expect
   no limit to trip for 50 businesses' bursts; the browser tests run with `DEVELOPMENT_MODE=1`
@@ -407,11 +407,11 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 
 - **After the C17 audit, for C18:** read `docs/THREAT_MODEL.md` sections 4 and 6 before
   writing the runbook and the launch checklist. The checklist must carry: the Supabase Data
-  API closed for `public` (HUMAN_TODO 3, step 6; THREAT_MODEL 4.14); what a spend cap does
+  API closed for `public` (HUMAN_TODO 5, sub-step 6; THREAT_MODEL 4.14); what a spend cap does
   and does not do (4.1a, 4.15); a Twilio spend limit (4.1b); the live round trip after every
   deployment and Inngest's own alerts, because readiness cannot see a job runner that never
   runs (4.16: a check that reads the oldest unanswered customer message would close it); the
-  email quoting check per provider (HUMAN_TODO 14). The load test should include one business
+  email quoting check per provider (HUMAN_TODO 31). The load test should include one business
   at its daily cap (every stopped conversation gets the notice once, emergencies are answered)
   and must not expect `/api/health/ready` to list checks without the token. Candidates the
   audit left as product work: a spend budget per channel; row-level security that follows
@@ -423,6 +423,10 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
   the Meta App Review pack, the final `docs/HUMAN_TODO.md` and `docs/BUILD_REPORT.md`.
 - **Must not:** deploy, migrate production or change behaviour beyond fixing failures the
   tests expose.
+- **Delivered:** browser journeys for WhatsApp, Messenger, Instagram, email and the test
+  channel (`apps/web/e2e/channels.spec.ts`, `journey.spec.ts`) on fakes reached through
+  development-only variables; `pnpm load:test`; the `unanswered` readiness check; the
+  documents above. ARCHITECTURE §2 "As built (C18)" has the rest.
 
 ## Who registers what in the pipeline
 

@@ -51,6 +51,7 @@ function facts(
     activeBusinesses: async () => [TENANT],
     emergencyReady: async () => ({ enabled: true, ready: true }),
     stuckWork: async () => 0,
+    unansweredMessages: async () => 0,
     ...rest,
   };
 }
@@ -141,6 +142,26 @@ describe("readiness (C17)", () => {
     });
     expect(statusOf(report, "stuck_work")).toBe("warn");
     expect(statusOf(report, "error_reporting")).toBe("warn");
+  });
+
+  it("fails when customer messages wait without a reply turn: a job runner that never runs (C18)", async () => {
+    const report = await evaluateReadiness(facts({ unansweredMessages: async () => 3 }));
+    expect(report.status).toBe("not_ready");
+    expect(statusOf(report, "unanswered")).toBe("fail");
+    expect(report.checks.find((item) => item.name === "unanswered")?.detail).toContain(
+      "3 customer messages have waited more than 30 minutes",
+    );
+    // The jobs check alone says "ok": the keys are set. Only the count notices.
+    expect(statusOf(report, "jobs")).toBe("ok");
+    const unknown = await evaluateReadiness(
+      facts({
+        unansweredMessages: async () => {
+          throw new Error("timeout");
+        },
+      }),
+    );
+    expect(statusOf(unknown, "unanswered")).toBe("warn");
+    expect(unknown.status).toBe("ready");
   });
 
   it("shows details only to the holder of the health check token", async () => {

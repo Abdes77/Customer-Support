@@ -290,7 +290,7 @@ export function contactForm(): string {
 let rewriteCounter = 0;
 
 /**
- * What a provider that rewrites headers would leave in Sent (C11 review, HUMAN_TODO 14): a
+ * What a provider that rewrites headers would leave in Sent (C11 review, HUMAN_TODO 31): a
  * new Message-ID of its own and no loop marker. Used by the fakes' `rewriteSentHeaders`.
  */
 export function withRewrittenHeaders(raw: string, domain = "mail.provider.example"): string {

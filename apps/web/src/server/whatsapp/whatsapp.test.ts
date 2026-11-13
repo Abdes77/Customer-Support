@@ -50,7 +50,7 @@ import { createEmbeddedSignupHandler } from "./routes";
 /*
  * WhatsApp end to end, without Meta: recorded-style webhooks signed with the app secret go
  * through the real route, pipeline, jobs, engine (the offline model) and adapter, which talks
- * to a fake Graph API. The live version of this is HUMAN_TODO 12.
+ * to a fake Graph API. The live version of this is HUMAN_TODO 29.
  */
 
 const local: DeploymentInfo = { environment: "local", commitSha: null, region: null };

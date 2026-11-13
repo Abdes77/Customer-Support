@@ -79,6 +79,7 @@ export {
 } from "./limits/guard";
 export { exceededLimit, LIMIT_KEYS, type LimitKey, type LimitUsage } from "./limits/usage";
 export { type MessageTrace, traceMessage } from "./trace";
+export { countUnansweredMessages, UNANSWERED_AFTER_MS, UNANSWERED_WINDOW_MS } from "./unanswered";
 export { splitText } from "./send/split";
 export { optionsAsText, textToHtml } from "./send/prepare";
 export { messagingWindow } from "./send/window";

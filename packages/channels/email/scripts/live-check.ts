@@ -1,5 +1,5 @@
 /**
- * Live check of an IMAP/SMTP inbox (HUMAN_TODO 14), with the same address rules, TLS checks
+ * Live check of an IMAP/SMTP inbox (HUMAN_TODO 31), with the same address rules, TLS checks
  * and MIME building as the app. The password is read from standard input, never from the
  * command line, and never printed.
  *

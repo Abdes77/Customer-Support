@@ -15,9 +15,11 @@
  * the offline model answers (AI_MODEL_MODE=offline).
  */
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { localCertificate } from "@repo/channel-email/testing";
 import { ensureWidgetConnection } from "@repo/channel-widget/server";
 import {
   type BusinessTenant,
@@ -30,7 +32,17 @@ import { seedDemoData } from "@repo/db/seed";
 import { createTestDatabase, type TestDatabase, TEST_ENCRYPTION_KEY } from "@repo/db/testing";
 import { applySettingChanges } from "@repo/settings/server";
 
-import { APP_PORT, APP_URL, type E2eState, SITE_URL, STATE_FILE } from "./config";
+import {
+  APP_PORT,
+  APP_URL,
+  type E2eState,
+  FAKES_PORT,
+  FAKES_URL,
+  META_APP_SECRET,
+  SITE_URL,
+  STATE_FILE,
+} from "./config";
+import { type RunningFakes, startFakes } from "./fakes";
 
 const ALL_DAY = [{ open: "00:00", close: "23:59" }];
 const APP_DIR = path.resolve(import.meta.dirname, "../..");
@@ -57,7 +69,7 @@ function appEnv(): NodeJS.ProcessEnv {
     // stored (C16). No Embedded Signup or Facebook Login configuration: those flows need a
     // real Meta app, and the pages must say so.
     META_APP_ID: "100000000000000",
-    META_APP_SECRET: "e2e-meta-app-secret-0123456789",
+    META_APP_SECRET,
     META_WEBHOOK_VERIFY_TOKEN: "e2e-meta-verify-token",
   };
   for (const name of [
@@ -172,9 +184,122 @@ async function storeConnectionStates(t: TestDatabase, tenant: BusinessTenant): P
   );
 }
 
+const CHANNEL_IDS = {
+  whatsappPhoneNumberId: "300000000000001",
+  whatsappBusinessAccountId: "300000000000002",
+  pageId: "400000000000001",
+  instagramAccountId: "400000000000002",
+} as const;
+
+/**
+ * The business of the channel journeys (C18), with WhatsApp, Messenger and Instagram connected
+ * as the connect flows of C9 and C10 leave them (tokens encrypted), every channel answering
+ * without a wait, open around the clock. Its email inbox is connected by the journey itself,
+ * through the admin panel.
+ */
+async function createChannelBusiness(
+  t: TestDatabase,
+  summit: { readonly agencyId: string; readonly segmentId: string | null },
+): Promise<{ readonly businessId: string; readonly businessName: string }> {
+  const businessName = "Northside Roofing & Gutters";
+  const [row] = await t.admin
+    .insert(businesses)
+    .values({
+      agencyId: summit.agencyId as never,
+      segmentId: summit.segmentId as never,
+      name: businessName,
+      slug: "northside-roofing",
+      status: "active",
+    })
+    .returning({ id: businesses.id });
+  const businessId = row!.id;
+  const tenant = { agencyId: summit.agencyId, businessId } as BusinessTenant;
+  await t.db.forBusiness(tenant.businessId, { agencyId: tenant.agencyId }).run(async (ctx) => {
+    const connectedAt = new Date();
+    const pageConfig = {
+      pageId: CHANNEL_IDS.pageId,
+      pageName: `${businessName} Page`,
+      instagramAccountId: CHANNEL_IDS.instagramAccountId,
+      instagramUsername: "northsideroofing",
+    };
+    const rows = await ctx.tx
+      .insert(channelConnections)
+      .values([
+        {
+          ...ctx.tenant,
+          channel: "whatsapp",
+          externalAccountId: CHANNEL_IDS.whatsappPhoneNumberId,
+          displayName: "+1 612-555-0100",
+          status: "active",
+          config: {
+            businessAccountId: CHANNEL_IDS.whatsappBusinessAccountId,
+            phoneNumberId: CHANNEL_IDS.whatsappPhoneNumberId,
+            displayPhoneNumber: "+1 612-555-0100",
+            verifiedName: businessName,
+          },
+          connectedAt,
+        },
+        {
+          ...ctx.tenant,
+          channel: "messenger",
+          externalAccountId: CHANNEL_IDS.pageId,
+          displayName: pageConfig.pageName,
+          status: "active",
+          config: pageConfig,
+          connectedAt,
+        },
+        {
+          ...ctx.tenant,
+          channel: "instagram",
+          externalAccountId: CHANNEL_IDS.instagramAccountId,
+          displayName: "@northsideroofing",
+          status: "active",
+          config: pageConfig,
+          connectedAt,
+        },
+      ])
+      .returning({ id: channelConnections.id, channel: channelConnections.channel });
+    for (const connection of rows) {
+      await t.db.secrets.channel.write(
+        ctx,
+        connection.id,
+        connection.channel === "whatsapp"
+          ? { accessToken: "EAAG-e2e-whatsapp-token" }
+          : { pageAccessToken: "EAAPage-e2e-token" },
+      );
+    }
+    await applySettingChanges(ctx, {
+      target: { scope: "business", ...ctx.tenant },
+      changes: [
+        { key: "persona.bot_name", value: "Jo" },
+        { key: "conversation.reply_wait_seconds.whatsapp", value: 0 },
+        { key: "conversation.reply_wait_seconds.messenger", value: 0 },
+        { key: "conversation.reply_wait_seconds.instagram", value: 0 },
+        { key: "conversation.reply_wait_seconds.email", value: 0 },
+        {
+          key: "hours.weekly",
+          value: {
+            monday: ALL_DAY,
+            tuesday: ALL_DAY,
+            wednesday: ALL_DAY,
+            thursday: ALL_DAY,
+            friday: ALL_DAY,
+            saturday: ALL_DAY,
+            sunday: ALL_DAY,
+          },
+        },
+        { key: "hours.us_federal_holidays", value: false },
+      ],
+      actor: { type: "system", label: "e2e setup" },
+    });
+  });
+  return { businessId, businessName };
+}
+
 /** The running child (the build, then the server), stopped with this script. */
 let child: ChildProcess | undefined;
 let dispose: (() => Promise<void>) | undefined;
+let fakes: RunningFakes | undefined;
 let stopping = false;
 
 async function stop(code: number): Promise<never> {
@@ -182,6 +307,7 @@ async function stop(code: number): Promise<never> {
     stopping = true;
     child?.kill("SIGTERM");
     await dispose?.().catch(() => undefined);
+    await fakes?.stop().catch(() => undefined);
   }
   process.exit(code);
 }
@@ -215,7 +341,12 @@ async function main(): Promise<void> {
   dispose = () => t.dispose();
   await seedDemoData(t.db, {});
   const [business] = await t.admin
-    .select({ id: businesses.id, agencyId: businesses.agencyId, name: businesses.name })
+    .select({
+      id: businesses.id,
+      agencyId: businesses.agencyId,
+      name: businesses.name,
+      segmentId: businesses.segmentId,
+    })
     .from(businesses)
     .where(eq(businesses.slug, "summit-roofing"));
   if (business === undefined) throw new Error("The demo data has no Summit Roofing.");
@@ -252,6 +383,21 @@ async function main(): Promise<void> {
     return connection.publicKey;
   });
   await storeConnectionStates(t, { agencyId: business.agencyId, businessId: business.id });
+  const channelBusiness = await createChannelBusiness(t, {
+    agencyId: business.agencyId,
+    segmentId: business.segmentId,
+  });
+  const mailAddress = "office@northside-roofing.example.com";
+  const mailPassword = randomBytes(12).toString("base64url");
+  fakes = await startFakes({
+    port: FAKES_PORT,
+    whatsappPhoneNumberIds: [CHANNEL_IDS.whatsappPhoneNumberId],
+    mailAddress,
+    mailPassword,
+  });
+  const caFile = path.join(path.dirname(STATE_FILE), "mail-ca.crt");
+  await mkdir(path.dirname(STATE_FILE), { recursive: true });
+  await writeFile(caFile, localCertificate());
 
   const state: E2eState = {
     databaseUrl: t.url,
@@ -259,6 +405,18 @@ async function main(): Promise<void> {
     businessId: business.id,
     businessName: business.name,
     widgetKey,
+    channels: {
+      ...channelBusiness,
+      whatsappPhoneNumberId: CHANNEL_IDS.whatsappPhoneNumberId,
+      pageId: CHANNEL_IDS.pageId,
+      instagramAccountId: CHANNEL_IDS.instagramAccountId,
+      mail: {
+        address: mailAddress,
+        password: mailPassword,
+        imapPort: fakes.mail.imap.port,
+        smtpPort: fakes.mail.smtp.port,
+      },
+    },
   };
   await mkdir(path.dirname(STATE_FILE), { recursive: true });
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
@@ -266,6 +424,10 @@ async function main(): Promise<void> {
   const next = run(["start", "--port", String(APP_PORT), "--hostname", "127.0.0.1"], {
     ...env,
     DATABASE_URL: t.url,
+    // Development only (ignored on a deployment): Meta and the mail server are on this machine.
+    DEV_META_GRAPH_URL: FAKES_URL,
+    DEV_LOCAL_MAIL_PORTS: `${fakes.mail.imap.port},${fakes.mail.smtp.port}`,
+    DEV_LOCAL_MAIL_CA_FILE: caFile,
   });
   next.on("exit", (code) => void stop(code ?? 0));
 }

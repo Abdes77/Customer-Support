@@ -37,7 +37,7 @@ import { type OAuthApp, OAuthCredentials, oauthExpiresSoon, tokenRequest } from 
  * { clientId, createdAt: { after } })`. In that schema `RequestCreateInput` also requires
  * `customFormInput: { formId }`, which this connector does not send: whether the version we
  * send (2025-04-16, from search results of the docs) still requires it is unconfirmed; the
- * live check (docs/HUMAN_TODO.md 17) settles it.
+ * live check (docs/HUMAN_TODO.md step 34) settles it.
  *
  * A lead becomes a client (reused by exact email or phone unless the settings say otherwise)
  * and a request on it; the report is a note on the client, added again only when it changed.

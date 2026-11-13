@@ -21,7 +21,7 @@ import { createAckRouteHandlers, createTwilioRouteHandler } from "./routes";
  * behind the server pipeline's `alertTransports`. A customer's emergency goes from the
  * webhook through the reply turn (the offline model escalates it), the chain's jobs and the
  * alerts; the acknowledgement page and Twilio's callbacks are the real routes. The runner's
- * clock runs ahead, so the chain's waits pass at once. The live checks are in HUMAN_TODO 16.
+ * clock runs ahead, so the chain's waits pass at once. The live checks are in HUMAN_TODO 33.
  */
 
 const local: DeploymentInfo = { environment: "local", commitSha: null, region: null };

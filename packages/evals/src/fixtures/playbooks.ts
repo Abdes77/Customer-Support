@@ -15,7 +15,7 @@ import type { EvalSegment } from "./businesses";
  *
  * Both kinds are fixed, so a change in a score comes from the prompt, the engine or the
  * settings, never from a playbook that was researched differently on another day. The
- * quality of generated playbooks has its own live check (docs/HUMAN_TODO.md, entry 8).
+ * quality of generated playbooks has its own live check (docs/HUMAN_TODO.md, step 26).
  */
 export interface EvalPlaybook {
   readonly document: PlaybookDocument;

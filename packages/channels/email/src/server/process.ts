@@ -428,7 +428,7 @@ export async function processEmail(
         }),
       );
       if (ownCopy !== null) {
-        // Detectable: the loop header should have recognized it (HUMAN_TODO 14).
+        // Detectable: the loop header should have recognized it (HUMAN_TODO 31).
         logger.warn("email.own_send_without_marker", {
           businessId: context.tenant.businessId,
           connectionId: context.connectionId,

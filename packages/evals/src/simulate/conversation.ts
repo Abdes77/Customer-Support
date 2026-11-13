@@ -153,7 +153,7 @@ function infrastructureFailure(turn: DryRunTurn): Error | null {
   if (note === undefined) return null;
   if (note === "error:config_missing") {
     return new ConfigError(
-      "The engine could not call the model: the Claude API is not configured, or it refused the key (docs/HUMAN_TODO.md, entry 2).",
+      "The engine could not call the model: the Claude API is not configured, or it refused the key (docs/HUMAN_TODO.md, step 4).",
     );
   }
   return new ExternalServiceError(

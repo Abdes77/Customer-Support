@@ -279,7 +279,7 @@ export default async function IntegrationsPage({
             <NotOnThisDeployment
               what="Google and Outlook calendar sign-in"
               variables={["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID"]}
-              todo="item 15"
+              todo="steps 11 and 12"
             />
           )}
           {calendarAvailability.calendlyToken && (
@@ -382,7 +382,7 @@ export default async function IntegrationsPage({
                       ) : !crm.oauth ? (
                         <p className="text-sm text-slate-600">
                           {crm.displayName} connects through its OAuth app, which is not set up on
-                          this deployment (docs/HUMAN_TODO.md, item 17).
+                          this deployment (docs/HUMAN_TODO.md, step 15).
                         </p>
                       ) : null}
                     </div>

@@ -217,7 +217,7 @@ export default async function ChannelsPage({
             <NotOnThisDeployment
               what="WhatsApp"
               variables={["META_APP_ID", "META_APP_SECRET", "META_WEBHOOK_VERIFY_TOKEN"]}
-              todo="item 12"
+              todo="step 10"
             />
           ) : (
             <>
@@ -308,7 +308,7 @@ export default async function ChannelsPage({
                 <NotOnThisDeployment
                   what="WhatsApp Embedded Signup"
                   variables={["META_WHATSAPP_SIGNUP_CONFIG_ID"]}
-                  todo="item 12"
+                  todo="step 10"
                 />
               ) : (
                 <WhatsAppSignupButton
@@ -331,7 +331,7 @@ export default async function ChannelsPage({
             <NotOnThisDeployment
               what="Messenger and Instagram"
               variables={["META_APP_ID", "META_APP_SECRET", "META_WEBHOOK_VERIFY_TOKEN"]}
-              todo="item 13"
+              todo="step 10"
             />
           ) : (
             <>
@@ -373,7 +373,7 @@ export default async function ChannelsPage({
                 <NotOnThisDeployment
                   what="Facebook Login for Business"
                   variables={["META_LOGIN_CONFIG_ID"]}
-                  todo="item 13"
+                  todo="step 10"
                 />
               ) : (
                 <FacebookLoginButton businessId={tenant.businessId} config={meta.loginConfig()!} />
@@ -460,7 +460,7 @@ export default async function ChannelsPage({
             <NotOnThisDeployment
               what="Gmail and Microsoft 365 sign-in"
               variables={["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID"]}
-              todo="item 14"
+              todo="steps 11 and 12"
             />
           )}
           <details className="rounded-lg border border-slate-200 px-4 py-3">

@@ -4,7 +4,7 @@ What the bot sends to a business's CRM and to webhook receivers, how each one is
 what each vendor requires before an app may use its API, and how much of each connector was
 checked against the vendor's current documentation. Built by C14 in `packages/integrations`;
 the design is in `docs/ARCHITECTURE.md` §2 "As built (C14)", the live checks in
-`docs/HUMAN_TODO.md` entry 17.
+`docs/HUMAN_TODO.md` step 34 (accounts and variables: step 15).
 
 ## What happens to a lead
 
@@ -78,7 +78,7 @@ Legend for "Checked against docs": **read** = the vendor's current docs were rea
 2026-11-12 and the connector follows them; **official sample** = not the API reference but
 code or a schema file the vendor publishes; **memory** = no vendor source could be read and
 the connector is written from knowledge of the API, to be confirmed by the live check
-(`docs/HUMAN_TODO.md` 17). Nothing here has run against a real account yet.
+(`docs/HUMAN_TODO.md` step 34). Nothing here has run against a real account yet.
 
 ### HubSpot
 

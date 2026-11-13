@@ -951,11 +951,33 @@ Security and reliability across the system; the threats, their mitigations and p
     after it.
   - *Health.* `/api/health/ready` answers an anonymous caller with the verdict only; the
     checks need `HEALTH_CHECK_TOKEN` or a developer machine; one evaluation is reused for 15
-    seconds. It does not notice a job runner that accepts events and never runs them
-    (THREAT_MODEL 4.16).
+    seconds. It did not notice a job runner that accepts events and never runs them
+    (THREAT_MODEL 4.16) until C18 added the `unanswered` check.
   - *Edges.* Every response carries `X-Frame-Options: DENY`, `nosniff` and a referrer policy
     (`apps/web/next.config.ts`); Graph's notification route bounds its lookups; the Sentry
     scrubber reads a bounded part of a string and takes stack frames only after the message.
+
+### As built (C18)
+
+- **Unanswered messages** (`countUnansweredMessages`, `packages/pipeline/src/unanswered.ts`,
+  DECISIONS 291): readiness counts, per active business, customer messages 30 minutes to two
+  hours old that no turn dealt with (above `handled_through_seq`, nothing sent after them,
+  reactions excluded) and fails `unanswered` when there are any. It is the one check that does
+  not depend on the job runner (THREAT_MODEL 4.16).
+- **Load test** (`pnpm load:test`, `packages/pipeline/src/load`, DECISIONS 294): the real
+  pipeline in one process on a throwaway local database; checks one reply turn per burst, order,
+  latency beyond the configured wait, no limit at defaults, and a business at its daily reply
+  cap. `loadTestRefusal` refuses non-local servers.
+- **Browser journeys on every local channel** (`apps/web/e2e`, DECISIONS 292, 293): the e2e
+  server (`e2e/support/app-server.ts`) also starts `e2e/support/fakes.ts` (C9's and C10's fake
+  Graph API behind one HTTP server on port 3101, C11's ImapKit mail server, and control routes
+  under `/__e2e/`) and points the app at them with the development-only variables
+  `DEV_META_GRAPH_URL`, `DEV_LOCAL_MAIL_PORTS` and `DEV_LOCAL_MAIL_CA_FILE`
+  (`localServiceFakes`, ignored unless `deploymentInfo()` is "local"). `channels.spec.ts`:
+  WhatsApp, Messenger, Instagram (signed webhooks) and email (connected through the admin
+  panel); `journey.spec.ts`: the test channel to the lead list.
+- **Launch documents:** `docs/HUMAN_TODO.md` (the numbered checklist), `docs/RUNBOOK.md`,
+  `docs/ONBOARDING.md`, `docs/META_APP_REVIEW.md`, `docs/BUILD_REPORT.md`.
 
 ### Invariants (each needs a test in the chunk that owns it)
 

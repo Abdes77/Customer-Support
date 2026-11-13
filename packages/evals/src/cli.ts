@@ -364,7 +364,7 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
   const mode: RunMode = options.mode ?? (deps.apiKey === undefined ? "mock" : "live");
   if (mode === "live" && deps.apiKey === undefined) {
     print(
-      "A live run needs ANTHROPIC_API_KEY (docs/HUMAN_TODO.md, entry 2). Without a key, run `pnpm eval --mode mock`.",
+      "A live run needs ANTHROPIC_API_KEY (docs/HUMAN_TODO.md, step 4). Without a key, run `pnpm eval --mode mock`.",
     );
     return 2;
   }
@@ -401,7 +401,7 @@ export async function main(argv: readonly string[], deps: CliDeps): Promise<numb
   if (options.calibrate) {
     if (mode !== "live") {
       print(
-        "Calibrating the judge needs the Claude API: a stand-in judge evaluates nothing. Set ANTHROPIC_API_KEY (docs/HUMAN_TODO.md, entry 2).",
+        "Calibrating the judge needs the Claude API: a stand-in judge evaluates nothing. Set ANTHROPIC_API_KEY (docs/HUMAN_TODO.md, step 4).",
       );
       return 2;
     }

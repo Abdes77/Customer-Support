@@ -4,7 +4,7 @@
  * database is reached). It is per process: on a serverless platform each instance counts on
  * its own, so it bounds what one instance does, not the whole deployment; the per-address,
  * per-session and per-business limits in PostgreSQL (C8) and a platform firewall rule
- * (HUMAN_TODO 19) are the deployment-wide ones.
+ * (HUMAN_TODO 21) are the deployment-wide ones.
  */
 
 export interface MemoryRateLimiter {

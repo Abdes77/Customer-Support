@@ -45,7 +45,7 @@ hosted project (there is none in the build); the commands are for the agency's o
 Restore into a **new** Supabase project (or the same one after a failed migration), never on
 top of a live database.
 
-1. Create the project as in `docs/HUMAN_TODO.md` entry 3 (private bucket `attachments`).
+1. Create the project as in `docs/HUMAN_TODO.md` step 5 (private bucket `attachments`).
 2. Restore the schema and data:
 
    ```
@@ -89,4 +89,4 @@ top of a live database.
 
 Twice a year, restore the latest dump into a scratch project and run `pnpm db:doctor` against
 it, then open one conversation with a photo in the admin panel of a preview deployment pointed
-at it. Record the date in the runbook (C18).
+at it. Record the date in `docs/RUNBOOK.md` (section "Restore test log").

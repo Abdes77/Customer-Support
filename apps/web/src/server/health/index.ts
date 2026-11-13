@@ -1,5 +1,6 @@
 import { deploymentInfo, developmentModeRequested, getEnv, nodeEnv } from "@repo/core/env";
 import { alerts, and, eq, getDatabase, gt, inArray, sql } from "@repo/db";
+import { countUnansweredMessages } from "@repo/pipeline";
 
 import { errorReportingEnabled } from "../observability";
 import { getServerPipeline } from "../pipeline";
@@ -45,6 +46,10 @@ export function readinessFacts(now: () => Date = () => new Date()): ReadinessFac
           );
         return row?.total ?? 0;
       }),
+    unansweredMessages: (tenant) =>
+      db
+        .forBusiness(tenant.businessId, { agencyId: tenant.agencyId })
+        .run((ctx) => countUnansweredMessages(ctx, now())),
   };
 }
 

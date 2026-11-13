@@ -78,7 +78,7 @@ export function requestInfo(request: Request): WidgetRequestInfo {
  * `config` and `session` are the two calls anyone can make with only a public key. Counted in
  * this process's memory, so on a serverless platform each instance counts on its own; the
  * per-address session limit in PostgreSQL (`limits.widget_sessions_per_ip_per_hour`) and a
- * platform firewall rule (HUMAN_TODO 19) are the deployment-wide limits.
+ * platform firewall rule (HUMAN_TODO 21) are the deployment-wide limits.
  */
 export const EDGE_LIMITS = {
   config: { limit: 60, windowMs: 60_000 },

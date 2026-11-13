@@ -19,6 +19,7 @@
     "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
     "eval": "pnpm --filter @repo/evals run eval",
     "e2e": "pnpm --filter @repo/web run e2e",
+    "load:test": "pnpm --filter @repo/pipeline run load:test",
     "check:boundaries": "node tooling/scripts/check-boundaries.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

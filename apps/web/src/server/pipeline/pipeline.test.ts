@@ -10,7 +10,12 @@ import { createTestDatabase, type TestDatabase } from "@repo/db/testing";
 import { createLocalJobRunner, jobsModeFromEnv, type LocalJobRunner } from "@repo/jobs";
 import { applySettingChanges } from "@repo/settings/server";
 
-import { buildServerPipeline, inngestFunctions, type ServerPipeline } from "./index";
+import {
+  buildServerPipeline,
+  inngestFunctions,
+  localServiceFakes,
+  type ServerPipeline,
+} from "./index";
 import { createWebhookHandler } from "./webhook-route";
 
 const local: DeploymentInfo = { environment: "local", commitSha: null, region: null };
@@ -255,5 +260,26 @@ describe("composition", () => {
     ]);
     // Every definition converts to an Inngest function that /api/inngest can serve.
     expect(inngestFunctions(withInngest)).toHaveLength(withInngest.jobs.length);
+  });
+});
+
+describe("fakes of outside services for the browser tests (C18)", () => {
+  const vars = {
+    DEV_META_GRAPH_URL: "http://127.0.0.1:3101/",
+    DEV_LOCAL_MAIL_PORTS: "3993,3587",
+    DEV_LOCAL_MAIL_CA_FILE: new URL(import.meta.url).pathname,
+  };
+
+  it("are used on a developer machine only", () => {
+    const fakes = localServiceFakes(loadEnv(vars), local);
+    expect(fakes.graphBaseUrl).toBe("http://127.0.0.1:3101");
+    expect(fakes.mailPolicy?.isAllowedAddress("127.0.0.1")).toBe(true);
+    expect(fakes.mailPolicy?.isAllowedAddress("10.0.0.5")).toBe(false);
+    expect(fakes.mailPolicy?.imapPorts).toContain(3993);
+    expect(fakes.mailPolicy?.smtpPorts).toContain(3587);
+    // A deployment ignores them: Meta is graph.facebook.com, mail servers must be public.
+    for (const environment of ["production", "preview", "development"] as const) {
+      expect(localServiceFakes(loadEnv(vars), { ...hosted, environment })).toEqual({});
+    }
   });
 });

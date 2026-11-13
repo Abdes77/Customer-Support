@@ -38,7 +38,7 @@ import {
 /*
  * CRMs through the app (C14), without any vendor account: the fakes of the five CRMs sit
  * behind the server pipeline's `integrationsFetch`. The connect routes, the jobs (lead events
- * to deliveries) and the service are the real ones. The live checks are in HUMAN_TODO 17.
+ * to deliveries) and the service are the real ones. The live checks are in HUMAN_TODO 34.
  */
 
 const local: DeploymentInfo = { environment: "local", commitSha: null, region: null };

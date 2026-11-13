@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   const env = getEnv();
   if (env.ANTHROPIC_API_KEY === undefined) {
     console.error(
-      "ANTHROPIC_API_KEY is not set. This check needs a Claude API key (docs/HUMAN_TODO.md, entry 2).",
+      "ANTHROPIC_API_KEY is not set. This check needs a Claude API key (docs/HUMAN_TODO.md, step 4).",
     );
     process.exitCode = 2;
     return;

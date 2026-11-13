@@ -1,5 +1,5 @@
 /**
- * Live check of the alert transports (HUMAN_TODO 16) with the app's own clients and the
+ * Live check of the alert transports (HUMAN_TODO 33) with the app's own clients and the
  * credentials in the environment (`TWILIO_*`, `ALERT_SMTP_URL`, `ALERT_EMAIL_FROM`,
  * `ALERT_WHATSAPP_*`). Sends one test message per channel asked for; prints what each
  * provider answered, never a credential.

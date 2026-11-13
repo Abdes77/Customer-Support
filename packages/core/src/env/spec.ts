@@ -128,6 +128,33 @@ export const ENV_SPEC = {
     required: "optional",
     default: "info",
   },
+  DEV_META_GRAPH_URL: {
+    schema: url,
+    group: "app",
+    description:
+      "Development only, ignored on a deployment: where Meta Graph API calls go instead of graph.facebook.com (the browser tests' fake Graph API on this machine).",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
+  DEV_LOCAL_MAIL_PORTS: {
+    schema: z.string().regex(/^\d{1,5}(,\d{1,5})*$/),
+    group: "app",
+    description:
+      "Development only, ignored on a deployment: ports of a mail server on 127.0.0.1 that IMAP/SMTP inboxes may use (the browser tests' local mail server), comma-separated.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
+  DEV_LOCAL_MAIL_CA_FILE: {
+    schema: nonEmpty,
+    group: "app",
+    description:
+      "Development only, ignored on a deployment: the certificate file that local mail server presents, trusted with DEV_LOCAL_MAIL_PORTS.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
 
   // --- supabase --------------------------------------------------------------------------
   NEXT_PUBLIC_SUPABASE_URL: {

@@ -1,5 +1,5 @@
 /**
- * Live check of a calendar account (HUMAN_TODO 15) with the app's own clients. The access
+ * Live check of a calendar account (HUMAN_TODO 32) with the app's own clients. The access
  * token is read from standard input, never from the command line, and never printed.
  *
  *   pnpm --filter @repo/scheduling live:check --provider google|microsoft [--calendar <id>]
@@ -15,7 +15,7 @@
  *
  * A token for a quick check: Google's OAuth Playground (scopes calendar.readonly and
  * calendar.events), Microsoft Graph Explorer (Calendars.ReadWrite), a Calendly personal
- * access token. The full flow goes through the app's connect routes (HUMAN_TODO 15).
+ * access token. The full flow goes through the app's connect routes (HUMAN_TODO 32).
  */
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";

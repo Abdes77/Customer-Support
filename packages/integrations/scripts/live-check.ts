@@ -1,5 +1,5 @@
 /**
- * Live check of a CRM account or a webhook receiver (HUMAN_TODO 17) with the app's own
+ * Live check of a CRM account or a webhook receiver (HUMAN_TODO 34) with the app's own
  * connectors. Secrets are read from standard input, never from the command line, and never
  * printed.
  *

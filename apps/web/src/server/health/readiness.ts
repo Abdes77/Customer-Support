@@ -24,7 +24,8 @@ import { resolveAuthMode } from "../auth/mode";
  * not configured; a variable the product cannot run without is missing; a development-only
  * switch is on in a production build that others can reach. Warnings (still 200): Sentry is
  * off in a production build; businesses whose emergencies reach nobody (by id); stuck work
- * alerted in the last day.
+ * alerted in the last day. Failing too (C18): customer messages that no reply turn dealt with
+ * for more than half an hour, which is what a job runner that never runs leaves behind.
  *
  * The route is public. Without `HEALTH_CHECK_TOKEN` it answers "ready" or "not_ready" and
  * nothing else, and one evaluation serves every request for a few seconds.
@@ -52,6 +53,12 @@ export interface ReadinessFacts {
   }>;
   /** Stuck-work alerts (send_stuck, ingest_stuck) raised in the last day, per business. */
   readonly stuckWork: (tenant: BusinessTenant) => Promise<number>;
+  /**
+   * Customer messages no turn dealt with, 30 minutes to two hours old (C18,
+   * `countUnansweredMessages`): what a job runner that accepts events and never runs them
+   * leaves behind, which nothing inside the runner can notice (THREAT_MODEL 4.16).
+   */
+  readonly unansweredMessages: (tenant: BusinessTenant) => Promise<number>;
 }
 
 const REQUIRED_IN_PRODUCTION = ["APP_URL", "DATABASE_URL", "CREDENTIALS_ENCRYPTION_KEY"] as const;
@@ -132,7 +139,14 @@ export async function evaluateReadiness(facts: ReadinessFacts): Promise<Readines
   const notReady: string[] = [];
   let checked = 0;
   let stuck = 0;
+  let unanswered = 0;
+  let unansweredUnknown = false;
   for (const tenant of businesses) {
+    try {
+      unanswered += await facts.unansweredMessages(tenant);
+    } catch {
+      unansweredUnknown = true;
+    }
     try {
       const emergency = await facts.emergencyReady(tenant);
       if (emergency.enabled) {
@@ -153,6 +167,21 @@ export async function evaluateReadiness(facts: ReadinessFacts): Promise<Readines
           `${stuck} message${stuck === 1 ? "" : "s"} got stuck in the last day (see the alerts).`,
         )
       : check("stuck_work", "ok", "No stuck messages in the last day."),
+  );
+  checks.push(
+    unanswered > 0
+      ? check(
+          "unanswered",
+          "fail",
+          `${unanswered} customer message${unanswered === 1 ? " has" : "s have"} waited more than 30 minutes without a reply turn: check that the job runner runs (docs/RUNBOOK.md).`,
+        )
+      : unansweredUnknown
+        ? check(
+            "unanswered",
+            "warn",
+            "Unanswered messages could not be counted for every business.",
+          )
+        : check("unanswered", "ok", "No customer message has waited more than 30 minutes."),
   );
   return summarize(checks);
 }

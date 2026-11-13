@@ -1,5 +1,5 @@
 /**
- * Live checks of the WhatsApp channel against Meta's real Cloud API (HUMAN_TODO 12). Needs a
+ * Live checks of the WhatsApp channel against Meta's real Cloud API (HUMAN_TODO 29). Needs a
  * Meta app with the WhatsApp product and its test number.
  *
  *   pnpm --filter @repo/channel-whatsapp live:check

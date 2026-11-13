@@ -10,7 +10,7 @@ import { scrubText, scrubValue } from "./scrub";
  * `{type: "event"}`, then the event JSON; POSTed to
  * `<scheme>://<host><path>/api/<project>/envelope/` with `X-Sentry-Auth` carrying the public
  * key (Sentry's documented "envelope" and "store" protocols; unverified against a live
- * project, HUMAN_TODO 19).
+ * project, HUMAN_TODO 8 and 35).
  */
 
 export interface SentryDsn {

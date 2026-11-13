@@ -75,7 +75,7 @@ export function liveModels(
 ): EvalModels {
   if (credentials.apiKey === undefined) {
     throw new ConfigError(
-      "A live evaluation needs ANTHROPIC_API_KEY (docs/HUMAN_TODO.md, entry 2). Without it, run in mock mode.",
+      "A live evaluation needs ANTHROPIC_API_KEY (docs/HUMAN_TODO.md, step 4). Without it, run in mock mode.",
       { details: { variables: ["ANTHROPIC_API_KEY"] } },
     );
   }

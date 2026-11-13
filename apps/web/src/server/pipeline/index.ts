@@ -1,4 +1,5 @@
 import { hkdfSync, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import { createModelClientFromEnv, type ModelMode, modelModeFromEnv } from "@repo/ai";
 import { createGraphClient, type FetchLike } from "@repo/channel-meta";
@@ -13,7 +14,9 @@ import {
   createEmailAdapter,
   createGmailClient,
   createGraphMailClient,
+  DEFAULT_MAIL_POLICY,
   type FetchLike as EmailFetch,
+  isPublicAddress,
   type MailNetworkPolicy,
 } from "@repo/channel-email";
 import {
@@ -287,6 +290,38 @@ function storageMediaReader(storage: (tenant: BusinessTenant) => TenantStorage):
   };
 }
 
+/**
+ * Fakes of outside services on this machine, for the browser tests (C18): Meta's Graph API
+ * at `DEV_META_GRAPH_URL`, and a mail server on 127.0.0.1 (`DEV_LOCAL_MAIL_PORTS`, its
+ * certificate in `DEV_LOCAL_MAIL_CA_FILE`). Only ever on a developer machine: on a deployment
+ * the variables are ignored, so Meta is always graph.facebook.com and mail servers must be
+ * public. Exported for its test.
+ */
+export function localServiceFakes(
+  env: Env,
+  deployment: DeploymentInfo,
+): { readonly graphBaseUrl?: string; readonly mailPolicy?: MailNetworkPolicy } {
+  if (deployment.environment !== "local") return {};
+  const ports = env.DEV_LOCAL_MAIL_PORTS?.split(",").map(Number) ?? [];
+  return {
+    ...(env.DEV_META_GRAPH_URL === undefined
+      ? {}
+      : { graphBaseUrl: env.DEV_META_GRAPH_URL.replace(/\/$/, "") }),
+    ...(ports.length === 0 || env.DEV_LOCAL_MAIL_CA_FILE === undefined
+      ? {}
+      : {
+          mailPolicy: {
+            ...DEFAULT_MAIL_POLICY,
+            isAllowedAddress: (address: string) =>
+              address === "127.0.0.1" || isPublicAddress(address),
+            imapPorts: [...DEFAULT_MAIL_POLICY.imapPorts, ...ports],
+            smtpPorts: [...DEFAULT_MAIL_POLICY.smtpPorts, ...ports],
+            ca: readFileSync(env.DEV_LOCAL_MAIL_CA_FILE),
+          },
+        }),
+  };
+}
+
 // The local test-channel secret when none is configured: valid for this process only, which
 // is all the in-process dev chat page needs.
 const processTestSecret = randomBytes(32).toString("base64url");
@@ -308,6 +343,8 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
   const { db, env, deployment } = options;
   const logger = (options.logger ?? rootLogger).child({ component: "server-pipeline" });
   const mode = jobsModeFromEnv(env, deployment);
+  const fakes = localServiceFakes(env, deployment);
+  const mailPolicy = options.mailPolicy ?? fakes.mailPolicy;
 
   const testSecret =
     options.testChannelSecret ??
@@ -356,6 +393,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     ? createGraphClient({
         version: env.META_GRAPH_API_VERSION,
         ...(options.metaFetch === undefined ? {} : { fetch: options.metaFetch }),
+        ...(fakes.graphBaseUrl === undefined ? {} : { baseUrl: fakes.graphBaseUrl }),
       })
     : null;
   const whatsappDeps =
@@ -446,7 +484,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
       send: (list) => events.send(list),
     },
     storage,
-    ...(options.mailPolicy === undefined ? {} : { mailPolicy: options.mailPolicy }),
+    ...(mailPolicy === undefined ? {} : { mailPolicy }),
     ...(options.googleKeys === undefined ? {} : { googleKeys: options.googleKeys }),
   };
   const emailTokens = createAccessTokens(emailDeps);
@@ -456,7 +494,7 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
     gmail: emailDeps.gmail,
     graph: emailDeps.graph,
     media: emailReader,
-    ...(options.mailPolicy === undefined ? {} : { mailPolicy: options.mailPolicy }),
+    ...(mailPolicy === undefined ? {} : { mailPolicy }),
     logger: emailDeps.logger,
   });
 
