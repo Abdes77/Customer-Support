@@ -1,5 +1,5 @@
 import type { ConversationId, TraceId, UserId } from "@repo/core";
-import { type BusinessContext, conversations, eq, messages, sql } from "@repo/db";
+import { and, type BusinessContext, conversations, eq, messages, sql } from "@repo/db";
 import { type AnyJobEvent, jobEvent } from "@repo/jobs";
 
 import { sendEventId } from "./event-ids";
@@ -50,15 +50,30 @@ export async function enqueueHumanMessage(
     readonly text: string;
     readonly traceId: string;
     readonly userId: string;
+    /**
+     * The reply box's key for this one reply (C16). A second call with the same key in the
+     * same conversation (a double click, a retried request) stores nothing and returns the
+     * first message with no event, so the customer gets the reply once.
+     */
+    readonly idempotencyKey?: string;
   },
-): Promise<{ readonly messageId: string; readonly events: readonly AnyJobEvent[] } | null> {
+): Promise<{
+  readonly messageId: string;
+  readonly events: readonly AnyJobEvent[];
+  readonly duplicate?: boolean;
+} | null> {
   const queued = await enqueueOutbound(ctx, {
     ...input,
     author: "human_agent",
     authorUserId: input.userId as UserId,
-    payload: { source: "admin_panel" },
+    payload:
+      input.idempotencyKey === undefined
+        ? { source: "admin_panel" }
+        : { source: "admin_panel", idempotencyKey: input.idempotencyKey },
+    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
   });
   if (queued === null) return null;
+  if (queued.duplicate === true) return queued;
   await ctx.tx
     .update(conversations)
     .set({
@@ -77,8 +92,13 @@ async function enqueueOutbound(
     readonly author: "bot" | "human_agent";
     readonly authorUserId: UserId | null;
     readonly payload: Record<string, unknown>;
+    readonly idempotencyKey?: string;
   },
-): Promise<{ readonly messageId: string; readonly events: readonly AnyJobEvent[] } | null> {
+): Promise<{
+  readonly messageId: string;
+  readonly events: readonly AnyJobEvent[];
+  readonly duplicate?: boolean;
+} | null> {
   const text = input.text.trim();
   if (text.length === 0) return null;
   const conversationId = input.conversationId as ConversationId;
@@ -93,6 +113,21 @@ async function enqueueOutbound(
     .for("update")
     .limit(1);
   if (conversation === undefined) return null;
+  if (input.idempotencyKey !== undefined) {
+    // Checked under the conversation's row lock, so two concurrent calls cannot both insert.
+    const [earlier] = await ctx.tx
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversation.id),
+          eq(messages.direction, "outbound"),
+          sql`${messages.payload} ->> 'idempotencyKey' = ${input.idempotencyKey}`,
+        ),
+      )
+      .limit(1);
+    if (earlier !== undefined) return { messageId: earlier.id, events: [], duplicate: true };
+  }
   const [counter] = await ctx.tx
     .update(conversations)
     .set({ messageSeq: sql`${conversations.messageSeq} + 1` })

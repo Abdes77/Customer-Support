@@ -29,8 +29,8 @@ export default async function BusinessLayout({
     { href: `${base}/settings`, label: "Settings" },
     ...(staff
       ? [
-          { href: `${base}/channels`, label: "Channels", slot: true },
-          { href: `${base}/integrations`, label: "Integrations", slot: true },
+          { href: `${base}/channels`, label: "Channels" },
+          { href: `${base}/integrations`, label: "Integrations" },
         ]
       : []),
   ];

@@ -340,6 +340,15 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
 - **Must not touch:** package logic (add a missing query or mutation to the owning package),
   the screens built by C15 except to fill the slots it left, RLS policies (a client user who
   sees too much is a `packages/db` bug to fix there, with a test).
+- **Delivered, for C17 and C18:** the inbox and conversation view (takeover, manual reply
+  exactly once, release, notes, assignment, emergencies, follow-ups, attachments), the lead
+  list and CSV export, analytics, the audit log viewer, the channel and integration pages, the
+  client portal's per-screen permissions (`apps/web/src/server/portal.ts`), live updates
+  (Realtime or polling, migration 0014), new reads in `@repo/db` (`inbox.ts`, `leads.ts`,
+  `analytics.ts`, `listAuditLog`), `requireHolder` and `idempotencyKey` on C13's
+  `sendManualReply`, and three browser specs. ARCHITECTURE §2 "As built (C16)" has the rest.
+  **For C17:** the attachment route, the CSV export and the reveal of signing secrets are the
+  new surfaces that hand data to a browser; the e2e server now sets Meta's webhook secrets.
 
 ### C17 · Security and reliability
 

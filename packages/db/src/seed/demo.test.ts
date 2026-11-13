@@ -65,12 +65,12 @@ describe("seedDemoData", () => {
       segments: 2,
       playbook_versions: 2,
       businesses: 2,
-      channel_connections: 2,
-      conversations: 5,
-      contacts: 5,
-      leads: 5,
-      lead_reports: 5,
-      routing_decisions: 5,
+      channel_connections: 4,
+      conversations: 7,
+      contacts: 7,
+      leads: 7,
+      lead_reports: 7,
+      routing_decisions: 7,
       bookings: 1,
       escalations: 1,
       alerts: 1,
@@ -126,7 +126,7 @@ describe("seedDemoData", () => {
       expect(snapshot.success, JSON.stringify(snapshot.error?.issues)).toBe(true);
     }
     expect(new Set(allLeads.map((lead) => lead.status))).toEqual(
-      new Set(["meeting_booked", "qualifying", "disqualified", "handed_off", "qualified"]),
+      new Set(["meeting_booked", "qualifying", "disqualified", "handed_off", "qualified", "new"]),
     );
   });
 
@@ -171,7 +171,7 @@ describe("seedDemoData", () => {
     const ownerLeads = await t.db
       .asUser(owner)
       .run(({ tx }) => tx.select({ businessId: leads.businessId }).from(leads));
-    expect(ownerLeads).toHaveLength(3);
+    expect(ownerLeads).toHaveLength(4);
     expect(new Set(ownerLeads.map((lead) => lead.businessId))).toEqual(
       new Set([DEMO.businesses.roofing]),
     );

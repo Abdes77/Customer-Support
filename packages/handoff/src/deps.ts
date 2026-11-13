@@ -28,8 +28,14 @@ export interface OutboundMessages {
       readonly text: string;
       readonly traceId: string;
       readonly userId: string;
+      /** C16: the same key twice stores one message (`duplicate` on the second answer). */
+      readonly idempotencyKey?: string;
     },
-  ): Promise<{ readonly messageId: string; readonly events: readonly AnyJobEvent[] } | null>;
+  ): Promise<{
+    readonly messageId: string;
+    readonly events: readonly AnyJobEvent[];
+    readonly duplicate?: boolean;
+  } | null>;
 }
 
 /** What the domain parts (action handlers, observers, guard, send gate) need. */

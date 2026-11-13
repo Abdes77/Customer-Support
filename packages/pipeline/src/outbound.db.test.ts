@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ConversationId } from "@repo/core";
 import { eq, messages, takeoverLocks } from "@repo/db";
 
-import { enqueueBotMessage } from "./outbound";
+import { enqueueBotMessage, enqueueHumanMessage } from "./outbound";
 import { createHarness, type Harness, message, type TestTenant } from "./testing/harness";
 
 /*
@@ -81,6 +81,45 @@ describe("enqueueBotMessage", () => {
     const conversationId = await conversationFor(tenant);
     expect(await enqueue(tenant, conversationId, "   ")).toBeNull();
     expect(await enqueue(tenant, crypto.randomUUID() as ConversationId, "x")).toBeNull();
+  });
+});
+
+describe("enqueueHumanMessage (C16)", () => {
+  it("sends a person's reply once for one idempotency key", async () => {
+    const tenant = await conversationTenant();
+    const conversationId = await conversationFor(tenant);
+    await h.t.admin
+      .insert(takeoverLocks)
+      .values({ ...tenant.tenant, conversationId, source: "admin_panel", reason: "test" });
+    const userId = (
+      await h.t.db.localAuth.upsertUser({ email: `sam-${crypto.randomUUID()}@pipeline.test` })
+    ).id;
+    const send = (key: string) =>
+      h.t.db
+        .forBusiness(tenant.tenant.businessId, { agencyId: tenant.tenant.agencyId })
+        .run((ctx) =>
+          enqueueHumanMessage(ctx, {
+            conversationId,
+            text: "Hi, this is Sam from the office.",
+            traceId: crypto.randomUUID(),
+            userId,
+            idempotencyKey: key,
+          }),
+        );
+    // Two clicks at once, then a retry: one message.
+    const [first, second] = await Promise.all([send("reply-1"), send("reply-1")]);
+    const third = await send("reply-1");
+    const events = [first, second, third].flatMap((result) => result?.events ?? []);
+    expect(events).toHaveLength(1);
+    expect(new Set([first?.messageId, second?.messageId, third?.messageId]).size).toBe(1);
+    expect([first, second, third].filter((result) => result?.duplicate === true)).toHaveLength(2);
+    await h.events.send(events);
+    await h.idle();
+    const texts = h.transport.textsFor(conversationId);
+    expect(texts.filter((text) => text === "Hi, this is Sam from the office.")).toHaveLength(1);
+    // A new key is a new message.
+    const other = await send("reply-2");
+    expect(other?.messageId).not.toBe(first?.messageId);
   });
 });
 

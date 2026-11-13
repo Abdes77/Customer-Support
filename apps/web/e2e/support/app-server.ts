@@ -19,9 +19,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { ensureWidgetConnection } from "@repo/channel-widget/server";
-import { businesses, eq } from "@repo/db";
+import {
+  type BusinessTenant,
+  businesses,
+  channelConnections,
+  eq,
+  integrationConnections,
+} from "@repo/db";
 import { seedDemoData } from "@repo/db/seed";
-import { createTestDatabase, TEST_ENCRYPTION_KEY } from "@repo/db/testing";
+import { createTestDatabase, type TestDatabase, TEST_ENCRYPTION_KEY } from "@repo/db/testing";
 import { applySettingChanges } from "@repo/settings/server";
 
 import { APP_PORT, APP_URL, type E2eState, SITE_URL, STATE_FILE } from "./config";
@@ -41,9 +47,23 @@ function appEnv(): NodeJS.ProcessEnv {
     WIDGET_SESSION_SECRET: "e2e-widget-session-secret-0123456789-abcdefgh",
     AI_MODEL_MODE: "offline",
     NEXT_TELEMETRY_DISABLED: "1",
+    // Meta's webhook secrets, so the WhatsApp and Messenger connection pages list what is
+    // stored (C16). No Embedded Signup or Facebook Login configuration: those flows need a
+    // real Meta app, and the pages must say so.
+    META_APP_ID: "100000000000000",
+    META_APP_SECRET: "e2e-meta-app-secret-0123456789",
+    META_WEBHOOK_VERIFY_TOKEN: "e2e-meta-verify-token",
   };
   for (const name of [
     "ANTHROPIC_API_KEY",
+    "META_WHATSAPP_SIGNUP_CONFIG_ID",
+    "META_LOGIN_CONFIG_ID",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "MICROSOFT_CLIENT_ID",
+    "MICROSOFT_CLIENT_SECRET",
+    "CALENDLY_CLIENT_ID",
+    "CALENDLY_CLIENT_SECRET",
     "INNGEST_DEV",
     "INNGEST_EVENT_KEY",
     "INNGEST_SIGNING_KEY",
@@ -56,6 +76,94 @@ function appEnv(): NodeJS.ProcessEnv {
     delete env[name];
   }
   return env;
+}
+
+/**
+ * Connections as the connect flows of C9 to C14 leave them, for the connection pages' tests
+ * (C16): a WhatsApp number connected, a Facebook Page whose access Meta removed, an IMAP inbox
+ * whose login failed, a Google calendar connected, a Housecall Pro key that was refused, and a
+ * paused webhook target. Rows only; no credentials, and no job acts on them (the inbox is not
+ * active, the webhook is paused).
+ */
+async function storeConnectionStates(t: TestDatabase, tenant: BusinessTenant): Promise<void> {
+  const connectedAt = new Date();
+  await t.admin.insert(channelConnections).values([
+    {
+      ...tenant,
+      channel: "whatsapp",
+      externalAccountId: "100000000000001",
+      displayName: "+1 303-555-0100",
+      status: "active",
+      config: {
+        businessAccountId: "100000000000002",
+        phoneNumberId: "100000000000001",
+        displayPhoneNumber: "+1 303-555-0100",
+        verifiedName: "Summit Roofing Co.",
+      },
+      connectedAt,
+    },
+    {
+      ...tenant,
+      channel: "messenger",
+      externalAccountId: "200000000000001",
+      displayName: "Summit Roofing Co. Page",
+      status: "error",
+      lastError: "Meta removed the app's access to this Page: connect it again.",
+      lastErrorAt: connectedAt,
+      config: { pageId: "200000000000001", pageName: "Summit Roofing Co. Page" },
+      connectedAt,
+    },
+    {
+      ...tenant,
+      channel: "email",
+      externalAccountId: "office@summitroofing.example.com",
+      displayName: "Summit Roofing Co.",
+      status: "error",
+      lastError: "The IMAP login failed: authentication failed.",
+      lastErrorAt: connectedAt,
+      config: { provider: "imap", address: "office@summitroofing.example.com" },
+      connectedAt,
+    },
+  ]);
+  await t.admin.insert(integrationConnections).values([
+    {
+      ...tenant,
+      provider: "google_calendar",
+      externalAccountId: "office@summitroofing.example.com",
+      displayName: "office@summitroofing.example.com",
+      status: "active",
+      connectedAt,
+    },
+    {
+      ...tenant,
+      provider: "housecall_pro",
+      externalAccountId: "e2e-company",
+      displayName: "Summit Roofing (Housecall Pro)",
+      status: "error",
+      lastError: "Housecall Pro answered with an error (500); the next lead tries again.",
+      lastErrorAt: connectedAt,
+      connectedAt,
+    },
+  ]);
+  await t.db.forBusiness(tenant.businessId, { agencyId: tenant.agencyId }).run((ctx) =>
+    applySettingChanges(ctx, {
+      target: { scope: "business", ...tenant },
+      changes: [
+        {
+          key: "integrations.webhooks",
+          value: [
+            {
+              name: "e2e-zapier",
+              url: "https://hooks.example.com/e2e",
+              events: ["lead_qualified"],
+              active: false,
+            },
+          ],
+        },
+      ],
+      actor: { type: "system", label: "e2e setup" },
+    }),
+  );
 }
 
 /** The running child (the build, then the server), stopped with this script. */
@@ -137,6 +245,7 @@ async function main(): Promise<void> {
     });
     return connection.publicKey;
   });
+  await storeConnectionStates(t, { agencyId: business.agencyId, businessId: business.id });
 
   const state: E2eState = {
     databaseUrl: t.url,

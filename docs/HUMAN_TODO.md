@@ -927,6 +927,33 @@ Format of an entry:
   admin and give it to the receiver (Zapier and Make ignore it; your own system should verify
   it as `docs/INTEGRATIONS.md` shows).
 
+### 18. Inbox live updates through Supabase Realtime, and the connection pages with real accounts (C16)
+
+- **What:** the inbox, a conversation and its takeover state update themselves. With
+  `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` set (entry 3), the signed-in
+  browser subscribes to Realtime `postgres_changes` on `conversations`, `messages`,
+  `takeover_locks` and `internal_notes` (filtered by conversation on its page) with the
+  person's own session, so row-level security decides which changes it hears about, and
+  re-renders the page from the server when one arrives (a slow 60 s poll stays as a safety
+  net). Without them, or when the subscription fails, the page polls (the conversation every
+  4 s, the inbox every 10 s); the corner of the screen says "Live" or "Updates every N s".
+  Migration 0014 adds those tables (and `leads`) to the `supabase_realtime` publication when
+  it exists; on plain PostgreSQL it does nothing. Built from memory of `@supabase/ssr` and
+  Realtime's `postgres_changes` API, not checked against a live project (the docs site was not
+  reachable from the build VM). The connection pages were checked against the fakes of C9 to
+  C14 and against stored connection states in the browser tests, never against a real account.
+- **Where:** the Supabase project: Database, Replication (the publication must list the
+  tables above after `pnpm db:migrate`); Realtime settings: postgres changes on.
+- **Variables:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (entry 3).
+- **Live check:** deploy a preview against the Supabase project, sign in as agency staff in two
+  browsers, open the same conversation in both, and write as the customer from the test chat:
+  the message appears within about a second without a reload, and the network tab shows one
+  websocket to `<project>.supabase.co/realtime/v1/websocket` with a `phx_reply` `"status":"ok"`
+  for `realtime:admin:conversation:<id>`. Sign in as a client user of another business and
+  confirm their socket receives no events for it. Then connect one real account per page
+  (entries 11 to 17): each page must show it as connected, and after revoking the app's access
+  at the provider, as needing a reconnect with the provider's reason.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and

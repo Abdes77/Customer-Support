@@ -1,7 +1,9 @@
+import { and, desc, eq, sql } from "drizzle-orm";
+
 import type { AgencyId, BusinessId, TraceId, UserId } from "@repo/core";
 
 import type { SystemContext, UserContext } from "../context";
-import { auditLog } from "../schema/tables";
+import { auditLog, businesses, users } from "../schema/tables";
 
 /**
  * Writing the audit log. Call these in the same `run()` as the change they describe, so the
@@ -77,4 +79,102 @@ export async function recordSystemAudit(
     actorLabel: actor.label ?? null,
     ...columns(entry),
   });
+}
+
+/** Field names whose values the audit log viewer never shows, wherever they appear. */
+const HIDDEN_FIELD =
+  /secret|token|password|passwd|apikey|api_key|ciphertext|credential|pin$|authorization/i;
+
+/**
+ * Replaces values under secret-sounding field names with "[hidden]", at any depth. Writers
+ * must never put a secret in an entry; this is the viewer's second line of defence.
+ */
+export function redactAuditValue(value: unknown, depth = 0): unknown {
+  if (depth > 8) return "[…]";
+  if (Array.isArray(value))
+    return value.slice(0, 100).map((item) => redactAuditValue(item, depth + 1));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = HIDDEN_FIELD.test(key) ? "[hidden]" : redactAuditValue(inner, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+export interface AuditRow {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly agencyId: string;
+  readonly businessId: string | null;
+  readonly businessName: string | null;
+  readonly actorType: string;
+  readonly actorName: string | null;
+  readonly action: string;
+  readonly targetType: string | null;
+  readonly targetId: string | null;
+  readonly summary: string | null;
+  readonly before: unknown;
+  readonly after: unknown;
+}
+
+/**
+ * The audit log as the signed-in user may read it: row-level security lets agency admins read
+ * their agency's entries and nobody else any. Newest first; values under secret-sounding names
+ * are hidden (`redactAuditValue`).
+ */
+export async function listAuditLog(
+  ctx: UserContext,
+  filter: {
+    readonly agencyId?: AgencyId;
+    readonly businessId?: BusinessId | null;
+    readonly action?: string;
+    readonly limit?: number;
+    readonly offset?: number;
+  } = {},
+): Promise<{ readonly rows: readonly AuditRow[]; readonly more: boolean }> {
+  const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+  const where = [];
+  if (filter.agencyId !== undefined) where.push(eq(auditLog.agencyId, filter.agencyId));
+  if (filter.businessId != null) where.push(eq(auditLog.businessId, filter.businessId));
+  if (filter.action !== undefined && filter.action !== "") {
+    where.push(
+      sql`${auditLog.action} like ${`${filter.action.replace(/[\\%_]/g, (c) => `\\${c}`)}%`}`,
+    );
+  }
+  const rows = await ctx.tx
+    .select({
+      id: auditLog.id,
+      createdAt: auditLog.createdAt,
+      agencyId: auditLog.agencyId,
+      businessId: auditLog.businessId,
+      businessName: sql<
+        string | null
+      >`(select b.name from ${businesses} b where b.id = ${auditLog.businessId})`,
+      actorType: auditLog.actorType,
+      actorName: sql<
+        string | null
+      >`coalesce((select coalesce(u.full_name, u.email) from ${users} u where u.id = ${auditLog.actorUserId}), ${auditLog.actorLabel})`,
+      action: auditLog.action,
+      targetType: auditLog.targetType,
+      targetId: auditLog.targetId,
+      summary: auditLog.summary,
+      before: auditLog.before,
+      after: auditLog.after,
+    })
+    .from(auditLog)
+    .where(and(...where))
+    .orderBy(desc(auditLog.createdAt), desc(auditLog.id))
+    .limit(limit + 1)
+    .offset(Math.max(filter.offset ?? 0, 0));
+  return {
+    more: rows.length > limit,
+    rows: rows.slice(0, limit).map((row) => ({
+      ...row,
+      createdAt: row.createdAt.toISOString(),
+      before: redactAuditValue(row.before),
+      after: redactAuditValue(row.after),
+    })),
+  };
 }

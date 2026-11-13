@@ -262,6 +262,10 @@ interface SeedMessage {
 
 interface SeedConversation {
   readonly id: ConversationId;
+  /** The test chat unless set (C16 adds website-chat conversations). */
+  readonly channel?: "test" | "widget";
+  /** Seconds between messages (default 120): the first one is the first-response time. */
+  readonly gapSeconds?: number;
   readonly contactId: ContactId;
   readonly leadId: LeadId;
   readonly contact: {
@@ -421,6 +425,39 @@ const ROOFING_CONVERSATIONS: readonly SeedConversation[] = [
       disqualifyReason: "out_of_area",
     },
   },
+  // C16: a website-chat visitor who asked once, got an answer within a minute and left. It is
+  // the "answered, never replied" step of the analytics' drop-off.
+  {
+    id: id("1004") as ConversationId,
+    contactId: id("2004") as ContactId,
+    leadId: id("3004") as LeadId,
+    channel: "widget",
+    gapSeconds: 45,
+    contact: { name: "Kim Tran", phone: "+13035550133", email: null, address: null },
+    startedHoursAgo: 30,
+    messages: [
+      { from: "customer", text: "Do you do gutter guards too?" },
+      {
+        from: "bot",
+        text: "We do install gutter guards, usually alongside a roof job. Is this for a home you own, and roughly where are you?",
+      },
+    ],
+    lead: {
+      status: "new",
+      score: 18,
+      band: "cold",
+      outcome: "contact_later",
+      fields: {
+        service_type: {
+          value: "gutter_guards",
+          confidence: 0.8,
+          evidence: "Do you do gutter guards too?",
+        },
+      },
+      summary: "Asked about gutter guards on the website chat and did not reply.",
+      reasons: ["Service interest only", "No location or ownership yet"],
+    },
+  },
 ];
 
 const HVAC_CONVERSATIONS: readonly SeedConversation[] = [
@@ -531,11 +568,47 @@ const HVAC_CONVERSATIONS: readonly SeedConversation[] = [
       reasons: ["Aging system, replacement is likely", "Still comparing options"],
     },
   },
+  // C16: a website-chat visitor who replied once and stopped before qualifying.
+  {
+    id: id("1103") as ConversationId,
+    contactId: id("2103") as ContactId,
+    leadId: id("3103") as LeadId,
+    channel: "widget",
+    gapSeconds: 60,
+    contact: { name: "Luis Ortega", phone: "+16125550147", email: null, address: null },
+    startedHoursAgo: 8,
+    messages: [
+      { from: "customer", text: "Is a furnace tune-up worth it if it's working fine?" },
+      {
+        from: "bot",
+        text: "Usually, yes: a yearly tune-up catches small problems before the first cold night. How old is the furnace?",
+      },
+      { from: "customer", text: "Maybe 10 years." },
+      {
+        from: "bot",
+        text: "That's a good age for a check. What's your ZIP code, so I can see when we're nearby?",
+      },
+    ],
+    lead: {
+      status: "qualifying",
+      score: 38,
+      band: "warm",
+      outcome: "contact_later",
+      fields: {
+        service_type: { value: "tune_up", confidence: 0.9, evidence: "furnace tune-up" },
+        job_scope: { value: "10-year-old furnace", confidence: 0.7, evidence: "Maybe 10 years." },
+      },
+      summary: "Thinking about a furnace tune-up for a 10-year-old system; location not known yet.",
+      reasons: ["Maintenance interest", "Service area still unknown"],
+    },
+  },
 ];
 
 interface SeedBusiness {
   readonly id: BusinessId;
   readonly connectionId: ChannelConnectionId;
+  /** The website chat (C16's seed conversations); its key is public, like any widget key. */
+  readonly widget: { readonly connectionId: ChannelConnectionId; readonly publicKey: string };
   readonly segment: keyof typeof DEMO.segments;
   readonly name: string;
   readonly slug: string;
@@ -563,6 +636,10 @@ const SEED_BUSINESSES: readonly SeedBusiness[] = [
   {
     id: DEMO.businesses.roofing,
     connectionId: id("4001") as ChannelConnectionId,
+    widget: {
+      connectionId: id("4011") as ChannelConnectionId,
+      publicKey: "wpk_DemoSummitRoofingKey0001",
+    },
     segment: "roofing",
     name: "Summit Roofing Co.",
     slug: "summit-roofing",
@@ -624,6 +701,10 @@ const SEED_BUSINESSES: readonly SeedBusiness[] = [
   {
     id: DEMO.businesses.hvac,
     connectionId: id("4002") as ChannelConnectionId,
+    widget: {
+      connectionId: id("4012") as ChannelConnectionId,
+      publicKey: "wpk_DemoEvergreenHvacKey0001",
+    },
     segment: "hvac",
     name: "Evergreen Heating & Air",
     slug: "evergreen-heating-air",
@@ -760,11 +841,26 @@ async function seedBusiness(
     connectedAt: hoursAgo(24 * 14),
   });
   bump("channel_connections");
+  await tx.insert(channelConnections).values({
+    id: business.widget.connectionId,
+    ...tenant,
+    channel: "widget",
+    externalAccountId: business.widget.publicKey,
+    displayName: "Website chat",
+    status: "active",
+    connectedBy: userIds.agencyAdmin,
+    connectedAt: hoursAgo(24 * 14),
+  });
+  bump("channel_connections");
 
   for (const conversation of business.conversations) {
     const startedAt = hoursAgo(conversation.startedHoursAgo);
-    // Messages are spaced two minutes apart from the start of the conversation.
-    const at = (index: number) => new Date(startedAt.getTime() + index * 120_000);
+    const channel = conversation.channel ?? "test";
+    const connectionId =
+      channel === "widget" ? business.widget.connectionId : business.connectionId;
+    // Messages are spaced two minutes apart (or `gapSeconds`) from the start.
+    const gapMs = (conversation.gapSeconds ?? 120) * 1000;
+    const at = (index: number) => new Date(startedAt.getTime() + index * gapMs);
     const lastIndex = conversation.messages.length - 1;
     const lastInbound = conversation.messages.findLastIndex((m) => m.from === "customer");
     const lastOutbound = conversation.messages.findLastIndex((m) => m.from !== "customer");
@@ -784,7 +880,7 @@ async function seedBusiness(
     await tx.insert(contactIdentities).values({
       ...tenant,
       contactId: conversation.contactId,
-      channel: "test",
+      channel,
       externalId: visitorId,
       displayName: conversation.contact.name,
       lastSeenAt: at(Math.max(lastInbound, 0)),
@@ -796,8 +892,8 @@ async function seedBusiness(
       id: conversation.id,
       ...tenant,
       contactId: conversation.contactId,
-      channelConnectionId: business.connectionId,
-      channel: "test",
+      channelConnectionId: connectionId,
+      channel,
       status: closed ? "closed" : "open",
       closedAt: closed ? at(lastIndex) : null,
       closedReason: closed ? "not_a_fit" : null,
@@ -815,7 +911,7 @@ async function seedBusiness(
         return {
           ...tenant,
           conversationId: conversation.id,
-          channelConnectionId: business.connectionId,
+          channelConnectionId: connectionId,
           direction: inbound ? ("inbound" as const) : ("outbound" as const),
           author: message.from,
           authorUserId: message.from === "human_agent" ? userIds.agencyMember : null,

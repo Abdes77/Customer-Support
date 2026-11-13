@@ -763,6 +763,59 @@ describe("takeover", () => {
   });
 });
 
+describe("takeover for the inbox (C16)", () => {
+  it("claims a takeover no person holds, and lets only its holder reply", async () => {
+    const f = await createFixture(t);
+    const clock = new TestClock(TUESDAY_10AM);
+    const { deps, queued } = testDeps(t, clock);
+    const service = createHandoffService(deps);
+    const sam = await createUser(t);
+    const alex = await createUser(t);
+    // The bot handed over (a rule): nobody holds it yet.
+    await t.db.forBusiness(f.tenant.businessId, { agencyId: f.tenant.agencyId }).run((ctx) =>
+      startTakeover(ctx, {
+        conversationId: f.conversationId,
+        source: "rule",
+        userId: null,
+        reason: "Handoff",
+        traceId: TRACE,
+        now: clock.now(),
+      }),
+    );
+    const reply = (userId: typeof sam, key?: string) =>
+      service.sendManualReply({
+        tenant: f.tenant,
+        conversationId: f.conversationId,
+        userId,
+        text: "On my way.",
+        requireHolder: true,
+        ...(key === undefined ? {} : { idempotencyKey: key }),
+      });
+    await expect(reply(sam)).rejects.toThrow(/Take the conversation over/);
+    expect(
+      await service.takeOver({ tenant: f.tenant, conversationId: f.conversationId, userId: sam }),
+    ).toEqual({ started: false, claimed: true });
+    expect((await service.takeoverState(f.tenant, f.conversationId)).userId).toBe(sam);
+    // Another person cannot take it from Sam, nor reply.
+    expect(
+      await service.takeOver({ tenant: f.tenant, conversationId: f.conversationId, userId: alex }),
+    ).toEqual({ started: false, heldByOther: true });
+    await expect(reply(alex)).rejects.toThrow(/Take the conversation over/);
+    await reply(sam, "key-1");
+    expect(queued).toEqual([
+      expect.objectContaining({ author: "human_agent", idempotencyKey: "key-1" }),
+    ]);
+    const audit = await t.admin
+      .select({ action: auditLog.action })
+      .from(auditLog)
+      .where(eq(auditLog.targetId, f.conversationId));
+    expect(audit.map((row) => row.action)).toContain("conversation.takeover_claimed");
+    // Released, the next reply needs a new takeover.
+    await service.release({ tenant: f.tenant, conversationId: f.conversationId, userId: sam });
+    await expect(reply(sam)).rejects.toThrow(/Take the conversation over/);
+  });
+});
+
 describe("follow-ups", () => {
   async function plan(f: Fixture, at: Date, nudge: number | null, inboundSeq: number) {
     return t.db.forBusiness(f.tenant.businessId, { agencyId: f.tenant.agencyId }).run((ctx) =>

@@ -1,4 +1,5 @@
 import {
+  AppError,
   type ContactId,
   type ConversationId,
   NotFoundError,
@@ -16,7 +17,9 @@ import {
   eq,
   escalations,
   inArray,
+  recordSystemAudit,
   scheduledJobs,
+  takeoverLocks,
 } from "@repo/db";
 import type { AnyJobEvent } from "@repo/jobs";
 import { loadSettings } from "@repo/settings/server";
@@ -171,28 +174,70 @@ export function createHandoffService(deps: HandoffDeps) {
       }));
     },
 
-    /** A person takes the conversation over: the bot stays silent until it is released. */
+    /**
+     * A person takes the conversation over: the bot stays silent until it is released. A
+     * takeover that no person holds yet (started by a rule or by a reply from the provider's
+     * own inbox) is claimed by this person (C16), so they can reply. One held by another
+     * person stays theirs: `heldByOther` says so.
+     */
     async takeOver(input: {
       readonly tenant: BusinessTenant;
       readonly conversationId: ConversationId;
       readonly userId: UserId;
       readonly reason?: string;
-    }): Promise<{ readonly started: boolean }> {
+    }): Promise<{
+      readonly started: boolean;
+      readonly claimed?: boolean;
+      readonly heldByOther?: boolean;
+    }> {
       await requireConversation(input.tenant, input.conversationId);
       const result = await scope(input.tenant).run(async (ctx) => {
+        const now = clock();
+        const existing = await activeLock(ctx, input.conversationId, "update");
+        if (existing !== null) {
+          if (existing.userId === input.userId) {
+            await touchTakeover(ctx, input.conversationId, now);
+            return { kind: "held" as const };
+          }
+          if (existing.userId !== null) return { kind: "other" as const };
+          await ctx.tx
+            .update(takeoverLocks)
+            .set({ userId: input.userId, lastActivityAt: now })
+            .where(eq(takeoverLocks.id, existing.id));
+          await recordSystemAudit(
+            ctx,
+            { type: "user", userId: input.userId },
+            {
+              action: "conversation.takeover_claimed",
+              targetType: "conversation",
+              targetId: input.conversationId,
+              summary: "A person picked up a conversation the bot had handed over.",
+              metadata: { lockId: existing.id, source: existing.source },
+            },
+          );
+          await cancelFollowUps(ctx, input.conversationId, "takeover", now);
+          return { kind: "claimed" as const };
+        }
         const started = await startTakeover(ctx, {
           conversationId: input.conversationId,
           source: "admin_panel",
           userId: input.userId,
           reason: input.reason ?? "Taken over in the admin panel.",
           traceId: traceId(),
-          now: clock(),
+          now,
         });
-        if (started !== null) await cancelFollowUps(ctx, input.conversationId, "takeover", clock());
-        return started;
+        if (started !== null) await cancelFollowUps(ctx, input.conversationId, "takeover", now);
+        return started === null
+          ? { kind: "other" as const }
+          : { kind: "started" as const, started };
       });
-      if (result !== null) await emit([result.event]);
-      return { started: result !== null };
+      if (result.kind === "started") {
+        await emit([result.started.event]);
+        return { started: true };
+      }
+      if (result.kind === "claimed") return { started: false, claimed: true };
+      if (result.kind === "held") return { started: false };
+      return { started: false, heldByOther: true };
     },
 
     /** Gives the conversation back to the bot (and, per settings, lets it check in). */
@@ -220,14 +265,18 @@ export function createHandoffService(deps: HandoffDeps) {
     /**
      * A person's reply from the admin panel, sent through the conversation's channel by the
      * pipeline. A reply means the person holds the conversation: a takeover starts if none is
-     * active, and the idle time starts again.
+     * active, and the idle time starts again. With `requireHolder` (C16's inbox) the reply is
+     * refused unless this person holds the takeover. With `idempotencyKey`, the same key twice
+     * stores and sends one message.
      */
     async sendManualReply(input: {
       readonly tenant: BusinessTenant;
       readonly conversationId: ConversationId;
       readonly userId: UserId;
       readonly text: string;
-    }): Promise<{ readonly messageId: string }> {
+      readonly requireHolder?: boolean;
+      readonly idempotencyKey?: string;
+    }): Promise<{ readonly messageId: string; readonly duplicate?: boolean }> {
       const text = input.text.trim();
       if (text.length === 0) throw new ValidationError("The reply is empty.");
       if (text.length > 4000)
@@ -236,6 +285,16 @@ export function createHandoffService(deps: HandoffDeps) {
       const id = traceId();
       const result = await scope(input.tenant).run(async (ctx) => {
         const now = clock();
+        if (input.requireHolder === true) {
+          const lock = await activeLock(ctx, input.conversationId, "update");
+          if (lock?.userId !== input.userId) {
+            throw new AppError(
+              "conflict",
+              "Take the conversation over before replying: only the person holding it can reply.",
+              { retryable: false },
+            );
+          }
+        }
         const started = await startTakeover(ctx, {
           conversationId: input.conversationId,
           source: "admin_panel",
@@ -251,15 +310,19 @@ export function createHandoffService(deps: HandoffDeps) {
           text,
           traceId: id,
           userId: input.userId,
+          ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         });
         if (queued === null) throw new NotFoundError("The conversation was not found.");
         return {
           messageId: queued.messageId,
+          duplicate: queued.duplicate === true,
           events: [...(started === null ? [] : [started.event]), ...queued.events],
         };
       });
       await emit(result.events);
-      return { messageId: result.messageId };
+      return result.duplicate
+        ? { messageId: result.messageId, duplicate: true }
+        : { messageId: result.messageId };
     },
 
     /** Opts a contact out of (or back into) every automated message, as a person decided. */

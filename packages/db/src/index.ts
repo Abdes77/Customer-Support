@@ -104,11 +104,53 @@ export {
   updateBusinessProfile,
 } from "./repositories/businesses";
 
+// Inbox, conversation view and internal notes for the admin panel (C16)
+export {
+  addInternalNote,
+  assignConversation,
+  type ConversationAttachmentView,
+  type ConversationDetail,
+  type ConversationMessageView,
+  deleteInternalNote,
+  findVisibleAttachment,
+  findVisibleConversation,
+  getConversationDetail,
+  InboxFilter,
+  type InboxPage,
+  type InboxRow,
+  type LeadFieldView,
+  type LeadView,
+  likePattern,
+  listAgencyStaff,
+  listInbox,
+  listVisibleSegments,
+  markConversationRead,
+  NoteBody,
+} from "./repositories/inbox";
+
+// Analytics (C16)
+export {
+  type AnalyticsReport,
+  type AnalyticsSummary,
+  computeAnalytics,
+  type ConversationFact,
+  FUNNEL_STEPS,
+  type FunnelStep,
+  loadConversationFacts,
+  summarize,
+} from "./repositories/analytics";
+
+// Lead list and CSV export (C16)
+export { csvCell, csvLine, LeadFilter, type LeadRow, listLeads } from "./repositories/leads";
+
 // Audit log
 export {
   type AuditActor,
   type AuditEntry,
+  type AuditRow,
+  listAuditLog,
   recordSystemAudit,
+  redactAuditValue,
   recordUserAudit,
 } from "./repositories/audit";
 

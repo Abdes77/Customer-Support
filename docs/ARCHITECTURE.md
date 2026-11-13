@@ -843,6 +843,58 @@ services and the business repository of `@repo/db`.
   override and reset at business scope, a client user limited to their business; every
   step checks that the phone page does not scroll sideways.
 
+### As built (C16)
+
+The operational screens in `apps/web` (route group `src/app/(admin)`) on the services of C8 to
+C14 and new reads in `@repo/db`.
+
+- **Who sees what** (`src/server/portal.ts`, DECISIONS 261). `permissionsFor(role, settings)`:
+  staff get everything; a client user gets what `client_portal.*` says for their role, per
+  business. `screenBusinesses(session, screen)` lists the businesses of a screen
+  (conversations, leads, export, analytics); lists pass them as `businessIds` on top of RLS.
+  Notes, assignment, emergencies, alerts, follow-ups, connections, integrations and the audit
+  log are staff only. The navigation shows a client user only the screens they may open.
+- **Reads as the user** (`packages/db/src/repositories`): `inbox.ts` (`listInbox` with
+  filters and literal search, `getConversationDetail` with reports and notes only when
+  allowed, `findVisibleConversation`, `findVisibleAttachment`, `listAgencyStaff`), `leads.ts`
+  (`listLeads`, `csvCell`/`csvLine` with formula neutralization), `analytics.ts`
+  (`computeAnalytics`: per-conversation facts in one query, `summarize` pure; DECISIONS 265),
+  `audit.ts` (`listAuditLog`, `redactAuditValue`). Writes to pipeline tables in the system
+  scope after the role check: `markConversationRead`, `assignConversation` (staff assignees,
+  audited); notes as the user (`addInternalNote`, `deleteInternalNote`; RLS: staff, own name).
+- **Inbox** (`/inbox`, `/inbox/[id]`): filters, search, unread, assignment, takeover state;
+  the conversation with attachments (`GET /api/inbox/attachments/<id>`, DECISIONS 268), the
+  lead panel (criteria with evidence, score, report, routing history, bookings), takeover,
+  reply box and release, notes, emergencies (acknowledge) and follow-ups (stop). Actions in
+  `src/server/inbox.ts` (`createInboxActions`, testable without Next.js) behind `"use server"`
+  wrappers in `_actions/inbox.ts`; each looks the conversation up again as the person.
+- **Manual reply, exactly once** (DECISIONS 262): `takeOver` claims an unheld lock;
+  `sendManualReply({ requireHolder: true, idempotencyKey })` refuses anyone but the holder;
+  `enqueueHumanMessage` stores the key in the payload and returns the first message for a
+  repeated key, under the conversation's row lock; the send path does the rest (window,
+  staff template, human-agent tag). The reply box calls `noteActivity` at most every 30 s.
+- **Live updates** (`components/inbox/live-refresh.tsx`, DECISIONS 264): Supabase Realtime
+  `postgres_changes` with the user's session when configured (migration 0014 publishes the
+  tables), else polling; either way the page is rendered again on the server.
+- **Leads** (`/leads`, `GET /api/leads/export`): same filters for list and file
+  (`src/server/leads.ts`), export audited per business, at most 5,000 rows (DECISIONS 267).
+- **Analytics** (`/analytics`): totals, funnel and the breakdowns by business, channel and
+  segment; the seed's totals are checked in `packages/db/src/repositories/analytics.test.ts`
+  and in the browser (`e2e/portal.spec.ts`).
+- **Connection pages** (`/businesses/[id]/channels`, `/businesses/[id]/integrations`,
+  DECISIONS 269): stored state only (`components/connections/status.tsx`: connected, needs
+  reconnecting, error with the stored reason, disconnected); sections without the deployment's
+  app say which variables are missing. Account-proving flows post to the routes of C9 to C14
+  (Meta's SDK for Embedded Signup and Facebook Login with the `choose_page` step, OAuth starts,
+  the IMAP form, the Calendly token, CRM keys); everything else is a server action in
+  `src/server/connections.ts` (`createConnectionActions`, tested against the fakes). Signing
+  secrets are revealed or rotated by agency admins only, on request, audited.
+- **Audit log** (`/audit`): agency admins, with values redacted (DECISIONS 270).
+- **End to end:** `e2e/inbox.spec.ts` (takeover, manual reply on the test channel, the bot
+  silent meanwhile, note, release), `e2e/connections.spec.ts` (every connection page in each
+  stored state; the e2e server stores them), `e2e/portal.spec.ts` (client owner and staff,
+  swapped ids, CSV, analytics totals), at 1280×800 and 390×844.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
