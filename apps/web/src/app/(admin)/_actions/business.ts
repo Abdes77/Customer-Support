@@ -15,7 +15,6 @@ import {
   actionSession,
   adminLogger,
   runAction,
-  staffAgency,
 } from "@/server/admin";
 import { ActionError, toFailure } from "@/server/admin/result";
 import { userDatabase } from "@/server/auth";
@@ -76,8 +75,20 @@ export async function createBusinessAction(
   let businessId: string;
   try {
     const session = await actionSession();
-    const agency = staffAgency(session);
-    if (agency === null) throw new ActionError("Only agency staff can onboard a business.");
+    // The agency the form was opened for, among the person's own memberships only; with
+    // several agencies the form must say which one.
+    const requested = form.get("agencyId");
+    const agencies = session.access.agencies;
+    if (agencies.length === 0) throw new ActionError("Only agency staff can onboard a business.");
+    const agency =
+      typeof requested === "string" && requested !== ""
+        ? agencies.find((candidate) => candidate.agencyId === requested)
+        : agencies.length === 1
+          ? agencies[0]
+          : undefined;
+    if (agency === undefined) {
+      throw new ActionError("Choose the agency this business belongs to. Reload the page.");
+    }
     const created = await userDatabase(session.user).run((ctx) =>
       createBusiness(ctx, { agencyId: agency.agencyId, profile: values }),
     );
@@ -164,6 +175,9 @@ export async function activateBusinessAction(
   try {
     const session = await actionSession();
     const { business, tenant } = await actionBusiness(session, form.get("businessId"));
+    if (business.status === "archived") {
+      return { error: "This business is archived and cannot be activated here." };
+    }
     const readiness = await getHandoff().readiness(tenant);
     if (readiness.enabled && !readiness.ready && form.get("acknowledgeNotReady") !== "yes") {
       return {
@@ -190,14 +204,30 @@ export async function activateBusinessAction(
 const StatusInput = z.strictObject({
   businessId: z.string(),
   status: z.enum(["active", "paused"]),
+  acknowledgeNotReady: z.boolean().optional(),
 });
 
-/** Pauses or resumes a business (archiving is not offered in the panel yet). */
+/**
+ * Pauses or resumes a live business (archiving is not offered in the panel yet). A business
+ * in onboarding is activated only through the wizard's finish step; resuming one whose
+ * emergencies would reach nobody needs the same acknowledgement, checked here again.
+ */
 export async function setStatusAction(input: unknown): Promise<ActionResult<null>> {
   return runAction("business.status", async (session) => {
     const parsed = StatusInput.safeParse(input);
     if (!parsed.success) throw new ActionError("Unknown status.");
-    const { business } = await actionBusiness(session, parsed.data.businessId);
+    const { business, tenant } = await actionBusiness(session, parsed.data.businessId);
+    if (parsed.data.status === "active" && business.status !== "active") {
+      if (business.status !== "paused") {
+        throw new ActionError("Finish onboarding to activate this business.");
+      }
+      const readiness = await getHandoff().readiness(tenant);
+      if (readiness.enabled && !readiness.ready && parsed.data.acknowledgeNotReady !== true) {
+        throw new ActionError(
+          "Emergencies at this business would reach nobody. Add escalation contacts first, or confirm that you understand.",
+        );
+      }
+    }
     await userDatabase(session.user).run((ctx) =>
       setBusinessStatus(ctx, { businessId: business.id, status: parsed.data.status }),
     );

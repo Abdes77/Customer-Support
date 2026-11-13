@@ -908,7 +908,8 @@ point at another tenant's row.
 Sign-in is Supabase Auth (magic link and password), behind a provider interface in
 `apps/web/src/server/auth`. Local development and CI have no Supabase project: there the same
 interface is served by a local provider (users in the compatibility `auth.users` table, a
-signed cookie as the session), switched on by `LOCAL_AUTH_SECRET` and never on Vercel.
+signed cookie as the session), switched on by `LOCAL_AUTH_SECRET`, never on Vercel, and in a
+production build (`next start`) only while `APP_URL` is this machine (the browser tests).
 `apps/web/src/proxy.ts` (the Next.js 16 name for middleware) only refreshes the session
 cookie; it is not an authorization layer. Every server action and route handler authorizes on
 its own (`requireAccess()`, then `requireBusinessRole()`), because a route outside the proxy's

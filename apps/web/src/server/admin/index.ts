@@ -10,6 +10,7 @@ import {
 } from "@repo/core";
 import { getEnv } from "@repo/core/env";
 import {
+  agencies,
   type BusinessDetails,
   type BusinessTenant,
   businessRoleOf,
@@ -51,23 +52,61 @@ export function getAdminSettings(): AdminSettings {
   return adminSettings;
 }
 
-/** The agencies where the user is staff, and the first one (the one agency pages show). */
-export function staffAgency(session: SessionAccess): {
+/**
+ * The agency an agency page acts for: the one the page asked for (`?agency=`) when the user
+ * is staff there, otherwise the user's first agency membership. Never an agency the user is
+ * not staff of: the id only chooses among the user's own memberships.
+ */
+export function staffAgency(
+  session: SessionAccess,
+  requested?: string | null,
+): {
   readonly agencyId: AgencyId;
   readonly role: "agency_admin" | "agency_member";
 } | null {
-  return session.access.agencies[0] ?? null;
+  const agencies = session.access.agencies;
+  if (requested != null) {
+    const match = agencies.find((agency) => agency.agencyId === requested);
+    if (match !== undefined) return match;
+  }
+  return agencies[0] ?? null;
 }
 
-/** For agency pages (playbooks, agency settings): agency staff only; others go to their business. */
-export async function requireStaffSession(next: string): Promise<
+export interface StaffAgencyOption {
+  readonly id: AgencyId;
+  readonly name: string;
+  readonly role: "agency_admin" | "agency_member";
+}
+
+/** The agencies where the user is staff, with their names, in membership order. */
+export async function listStaffAgencies(session: SessionAccess): Promise<StaffAgencyOption[]> {
+  if (session.access.agencies.length === 0) return [];
+  const rows = await userDatabase(session.user).run(({ tx }) =>
+    tx.select({ id: agencies.id, name: agencies.name }).from(agencies),
+  );
+  const names = new Map(rows.map((row) => [row.id, row.name]));
+  return session.access.agencies.map((agency) => ({
+    id: agency.agencyId,
+    name: names.get(agency.agencyId) ?? "Agency",
+    role: agency.role,
+  }));
+}
+
+/**
+ * For agency pages (playbooks, agency settings): agency staff only; others go to their
+ * business. `requestedAgency` (the page's `?agency=`) picks one of the user's agencies.
+ */
+export async function requireStaffSession(
+  next: string,
+  requestedAgency?: string | null,
+): Promise<
   SessionAccess & {
     readonly agencyId: AgencyId;
     readonly agencyRole: "agency_admin" | "agency_member";
   }
 > {
   const session = await requireAccess(next);
-  const agency = staffAgency(session);
+  const agency = staffAgency(session, requestedAgency);
   if (agency === null) redirect("/businesses");
   return { ...session, agencyId: agency.agencyId, agencyRole: agency.role };
 }
@@ -101,7 +140,7 @@ export async function requireBusinessPage(
 }
 
 /** Throws unless the action's request came from this site (the sign-in forms' rule). */
-async function assertSameOrigin(): Promise<void> {
+export async function assertSameOrigin(): Promise<void> {
   if (!isSameOriginHeaders(await headers(), getEnv().APP_URL)) {
     adminLogger.warn("admin.action.cross_site");
     throw new ActionError(

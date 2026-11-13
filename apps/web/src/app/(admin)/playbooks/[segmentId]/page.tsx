@@ -5,7 +5,12 @@ import { notFound } from "next/navigation";
 import { RefreshWhile } from "@/components/onboarding/refresh-while";
 import { DiffView } from "@/components/playbook/diff-view";
 import { PlaybookDocumentView } from "@/components/playbook/document-view";
-import { OriginBadge, originExplanation } from "@/components/playbook/origin";
+import {
+  EDITED_WITHOUT_MODEL,
+  editedWithoutModel,
+  OriginBadge,
+  originExplanation,
+} from "@/components/playbook/origin";
 import { RegenerateButton, RollbackButton } from "@/components/playbook/version-actions";
 import { Badge } from "@/components/ui/badge";
 import { buttonClass } from "@/components/ui/button";
@@ -134,6 +139,9 @@ export default async function SegmentPlaybookPage({
               />
               <CardBody className="space-y-3">
                 <p className="text-sm text-slate-600">{originExplanation(shown.origin)}</p>
+                {editedWithoutModel(versions, shown) && (
+                  <Callout tone="warning">{EDITED_WITHOUT_MODEL}</Callout>
+                )}
                 {shown.issues.length > 0 && (
                   <Callout tone="warning" title="Notes on this version">
                     <ul className="list-disc pl-5">

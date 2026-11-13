@@ -301,7 +301,10 @@ function SettingRow({
   const run = (action: () => Promise<Result | ActionResult<string>>, done: string) => {
     setMessage(null);
     startTransition(async () => {
-      const result = await action();
+      const result = await action().catch((): Result => ({
+        ok: false,
+        error: "The change could not be sent. Check your connection and try again.",
+      }));
       if (result.ok) {
         setMode({ kind: "view" });
         setProblems([]);

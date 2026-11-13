@@ -1,18 +1,32 @@
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 
-import { listVisibleSegments } from "@/server/admin/segments";
 import { SettingsPanel } from "@/components/settings/settings-panel";
+import { AgencySwitcher } from "@/components/shell/agency-switcher";
 import { PageHeader } from "@/components/ui/page-header";
-import { requireStaffSession } from "@/server/admin";
+import { listStaffAgencies, requireStaffSession } from "@/server/admin";
+import { listVisibleSegments } from "@/server/admin/segments";
 
 export const metadata: Metadata = { title: "Agency settings" };
 export const dynamic = "force-dynamic";
 
 /** Agency-wide values: the defaults every business inherits unless its segment or itself overrides. */
-export default async function AgencySettingsPage() {
-  const session = await requireStaffSession("/settings");
-  const segments = await listVisibleSegments(session);
+export default async function AgencySettingsPage({
+  searchParams,
+}: {
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const requested = (await searchParams)["agency"];
+  const session = await requireStaffSession(
+    "/settings",
+    typeof requested === "string" ? requested : null,
+  );
+  const [agencies, visibleSegments] = await Promise.all([
+    listStaffAgencies(session),
+    listVisibleSegments(session),
+  ]);
+  // Row-level security shows the segments of every agency the user is staff of.
+  const segments = visibleSegments.filter((segment) => segment.agencyId === session.agencyId);
   return (
     <div>
       <PageHeader
@@ -23,6 +37,7 @@ export default async function AgencySettingsPage() {
             : "Values set here apply to every business of the agency. Only an agency admin can change them."
         }
       />
+      <AgencySwitcher agencies={agencies} current={session.agencyId} path="/settings" />
       {segments.length > 0 && (
         <p className="mb-4 text-sm text-slate-600">
           Segment defaults:{" "}

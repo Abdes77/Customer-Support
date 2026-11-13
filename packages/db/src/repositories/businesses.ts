@@ -285,10 +285,16 @@ export async function updateBusinessProfile(
 ): Promise<BusinessDetails> {
   const before = await staffBusiness(ctx, input.businessId);
   const profile = parseProfile(input.profile);
-  await ctx.tx
+  const updated = await ctx.tx
     .update(businesses)
     .set({ ...profile, updatedAt: new Date() })
-    .where(eq(businesses.id, before.id));
+    .where(eq(businesses.id, before.id))
+    .returning({ id: businesses.id });
+  if (updated.length === 0) {
+    throw new TenantAccessError("You cannot change this business.", {
+      details: { businessId: before.id },
+    });
+  }
   const changed = (Object.keys(profile) as (keyof BusinessProfile)[]).filter(
     (field) => (before as unknown as Record<string, unknown>)[field] !== profile[field],
   );

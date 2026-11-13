@@ -10,6 +10,7 @@ import { BusinessId, logger } from "@repo/core";
 import { getEnv } from "@repo/core/env";
 import { businesses, eq, getDatabase } from "@repo/db";
 
+import { assertSameOrigin } from "@/server/admin";
 import { requireAccess, requireBusinessRole, userDatabase } from "@/server/auth";
 import { getServerPipeline } from "@/server/pipeline";
 
@@ -48,6 +49,12 @@ export async function sendTestMessage(input: unknown): Promise<SendTestMessageRe
   const parsed = SendInput.safeParse(input);
   if (!parsed.success) return { ok: false, error: "Type a message of up to 2,000 characters." };
   const { businessId, visitorId, text } = parsed.data;
+  // The admin panel's cross-site rule (C15): this action writes as the signed-in person.
+  try {
+    await assertSameOrigin();
+  } catch {
+    return { ok: false, error: "That request did not come from this site. Reload the page." };
+  }
   const found = await staffBusiness(businessId);
   if (found === null) return { ok: false, error: "That business was not found." };
 

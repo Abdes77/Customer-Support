@@ -1,3 +1,6 @@
+import type { Route } from "next";
+import Link from "next/link";
+
 import type { EmergencyReadiness, ReadinessProblem } from "@repo/handoff";
 
 import { Callout } from "@/components/ui/callout";
@@ -26,7 +29,14 @@ const PROBLEMS: Readonly<Record<ReadinessProblem, string>> = {
  * the loudest thing on the page: a business must never look ready while its emergencies
  * would reach nobody.
  */
-export function ReadinessPanel({ readiness }: { readonly readiness: EmergencyReadiness }) {
+export function ReadinessPanel({
+  readiness,
+  contactsHref,
+}: {
+  readonly readiness: EmergencyReadiness;
+  /** Where the escalation chain is edited, when it is not on this page. */
+  readonly contactsHref?: string;
+}) {
   const counts = `${readiness.businessContacts} in the business's chain, ${readiness.fallbackContacts} agency fallback ${readiness.fallbackContacts === 1 ? "contact" : "contacts"}, ${readiness.alertRecipients} emergency alert ${readiness.alertRecipients === 1 ? "recipient" : "recipients"}.`;
   if (!readiness.enabled) {
     return (
@@ -48,10 +58,20 @@ export function ReadinessPanel({ readiness }: { readonly readiness: EmergencyRea
           ))}
         </ul>
         <p className="pt-1">{counts}</p>
-        <p>
-          Add at least one person to the escalation chain below, reachable by a way this deployment
-          can send.
-        </p>
+        {contactsHref === undefined ? (
+          <p>
+            Add at least one person to the escalation chain below, reachable by a way this
+            deployment can send.
+          </p>
+        ) : (
+          <p>
+            Add at least one person to the escalation chain on the{" "}
+            <Link href={contactsHref as Route} className="font-medium underline">
+              alert contacts
+            </Link>{" "}
+            page, reachable by a way this deployment can send.
+          </p>
+        )}
       </Callout>
     );
   }

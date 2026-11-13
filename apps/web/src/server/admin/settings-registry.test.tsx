@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 
 import { NotFoundError } from "@repo/core";
 import { loadUserAccess, type UserIdentity } from "@repo/db";
@@ -22,28 +21,34 @@ import { createAdminSettings } from "./settings-actions";
 
 const ADDED = "data.c15_archive_to_cold_storage";
 const LABEL = "Archive old photos to cold storage";
+const ADDED_DAYS = "data.c15_cold_storage_after_days";
+const DAYS_LABEL = "Move photos to cold storage after";
 
 vi.mock("../../../../../packages/settings/src/registry/data.ts", async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
-  const field = { kind: "boolean" as const, schema: z.boolean(), widget: null };
-  const added = Object.freeze({
-    key: "data.c15_archive_to_cold_storage",
-    category: "data",
-    label: "Archive old photos to cold storage",
-    help: "Photos older than the retention period are moved to cheaper storage instead of being deleted.",
-    field,
-    schema: field.schema,
-    default: false,
-    scopes: ["global", "segment", "business"],
-    clientEditable: false,
-    sensitive: false,
-    group: null,
+  // Declared exactly as a later chunk would, with the registry's own helpers.
+  const { defineCategory, setting } = await import("../../../../../packages/settings/src/define");
+  const { f } = await import("../../../../../packages/settings/src/fields");
+  const added = defineCategory("data", {
+    "data.c15_archive_to_cold_storage": setting({
+      label: "Archive old photos to cold storage",
+      help: "Photos older than the retention period are moved to cheaper storage instead of being deleted.",
+      field: f.boolean(),
+      default: false,
+    }),
+    "data.c15_cold_storage_after_days": setting({
+      label: "Move photos to cold storage after",
+      help: "How old a photo is before it moves to cold storage.",
+      field: f.integer({ min: 30, max: 3650, unit: "days" }),
+      default: 180,
+      clientEditable: true,
+    }),
   });
   return {
     ...original,
     dataSettings: Object.freeze({
       ...(original["dataSettings"] as Record<string, unknown>),
-      "data.c15_archive_to_cold_storage": added,
+      ...added,
     }),
   };
 });
@@ -72,6 +77,7 @@ afterAll(async () => {
 describe("a setting added to the registry", () => {
   it("is declared (through the category file only)", () => {
     expect(findSetting(ADDED)?.label).toBe(LABEL);
+    expect(findSetting(ADDED_DAYS)?.label).toBe(DAYS_LABEL);
   });
 
   it("appears on the settings screen, and override and reset work at business scope", async () => {
@@ -99,6 +105,15 @@ describe("a setting added to the registry", () => {
     expect(html).toContain(LABEL);
     expect(html).toContain(`data-setting-key="${ADDED}"`);
     expect(html).toContain("Override");
+    // Every setting of the category is on the screen, the new ones included, with its value.
+    expect(html).toContain(DAYS_LABEL);
+    expect(html).toContain(`data-setting-key="${ADDED_DAYS}"`);
+    expect(html).toContain("180");
+    for (const definition of before.entries.filter((candidate) =>
+      candidate.key.startsWith("data."),
+    )) {
+      expect(html).toContain(`data-setting-key="${definition.key}"`);
+    }
 
     await admin.save(session, { target, key: ADDED, value: true, expectedVersion: null });
     const overridden = await admin.view(session, target);
@@ -147,6 +162,10 @@ describe("a setting added to the registry", () => {
     const owner = await sessionOf(world.users.a1Owner);
     const clientView = await admin.view(owner, target);
     expect(clientView.entries.some((candidate) => candidate.key === ADDED)).toBe(false);
+    // A new setting marked client-editable reaches the client's screen the same way.
+    expect(clientView.entries.find((candidate) => candidate.key === ADDED_DAYS)).toMatchObject({
+      value: 180,
+    });
     await expect(
       admin.save(owner, { target, key: ADDED, value: true, expectedVersion: null }),
     ).rejects.toBeInstanceOf(SettingsPermissionError);

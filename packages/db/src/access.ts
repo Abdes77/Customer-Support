@@ -51,7 +51,8 @@ export async function loadUserAccess(ctx: UserContext): Promise<UserAccess> {
     .select({ agencyId: agencyMemberships.agencyId, role: agencyMemberships.role })
     .from(agencyMemberships)
     .where(eq(agencyMemberships.userId, userId))
-    .orderBy(agencyMemberships.createdAt);
+    // Membership order, then the id: "the user's first agency" must not change between requests.
+    .orderBy(agencyMemberships.createdAt, agencyMemberships.agencyId);
   // The membership row is always visible to its user; the business row only while client
   // logins are enabled.
   const memberships = await ctx.tx

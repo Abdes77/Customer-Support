@@ -44,4 +44,24 @@ describe("resolveAuthMode", () => {
       );
     },
   );
+
+  it("uses the local sign-in in a production build only while APP_URL is this machine", () => {
+    const loopback = loadEnv({ LOCAL_AUTH_SECRET: secret, APP_URL: "http://127.0.0.1:3100" });
+    expect(resolveAuthMode(loopback, local, "production")).toBe("local");
+    expect(
+      resolveAuthMode(
+        loadEnv({ LOCAL_AUTH_SECRET: secret, APP_URL: "http://localhost:3000" }),
+        local,
+        "production",
+      ),
+    ).toBe("local");
+    for (const appUrl of ["https://admin.example.com", "http://10.0.0.5:3000", undefined]) {
+      const env = loadEnv({
+        LOCAL_AUTH_SECRET: secret,
+        ...(appUrl === undefined ? {} : { APP_URL: appUrl }),
+      });
+      expect(resolveAuthMode(env, local, "production"), appUrl).toBe("unconfigured");
+      expect(resolveAuthMode(env, local, "development"), appUrl).toBe("local");
+    }
+  });
 });

@@ -70,7 +70,7 @@ export default async function BusinessOverviewPage({
           </Link>
         </Callout>
       )}
-      <ReadinessPanel readiness={readiness} />
+      <ReadinessPanel readiness={readiness} contactsHref={`/businesses/${business.id}/alerts`} />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader
@@ -159,7 +159,11 @@ export default async function BusinessOverviewPage({
                 }
               />
               <CardBody>
-                <StatusButton businessId={business.id} status={business.status} />
+                <StatusButton
+                  businessId={business.id}
+                  status={business.status}
+                  emergencyReady={!readiness.enabled || readiness.ready}
+                />
               </CardBody>
             </Card>
           )}

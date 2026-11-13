@@ -43,11 +43,14 @@ export function ProfileForm({
   action,
   initial,
   businessId,
+  agencyId = null,
   submitLabel,
 }: {
   readonly action: (state: ProfileFormState, form: FormData) => Promise<ProfileFormState>;
   readonly initial: ProfileValues;
   readonly businessId: string | null;
+  /** A new business only: the agency it is created in (checked against the session). */
+  readonly agencyId?: string | null;
   readonly submitLabel: string;
 }) {
   const [state, formAction, pending] = useActionState(action, {
@@ -63,6 +66,7 @@ export function ProfileForm({
   return (
     <form action={formAction} className="space-y-5" noValidate>
       {businessId !== null && <input type="hidden" name="businessId" value={businessId} />}
+      {agencyId !== null && <input type="hidden" name="agencyId" value={agencyId} />}
       {state.error !== null && (
         <p
           role="alert"

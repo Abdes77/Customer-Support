@@ -6,6 +6,7 @@ import type {
 } from "@repo/knowledge";
 
 import type { StepStatus, WizardStep } from "@/components/onboarding/wizard-steps";
+import { editedWithoutModel } from "@/components/playbook/origin";
 import { getHandoff } from "@/server/handoff";
 import { getKnowledge } from "@/server/knowledge";
 
@@ -23,17 +24,20 @@ export interface OnboardingState {
   readonly playbook: PlaybookVersionRecord | null;
   /** The newest generation run of the segment's playbook, if any. */
   readonly generation: PlaybookGenerationRecord | null;
+  /** The playbook in force is a hand edit or rollback of versions the Claude API never wrote. */
+  readonly playbookWithoutModel: boolean;
   readonly statuses: Readonly<Record<WizardStep, StepStatus>>;
 }
 
 export async function loadOnboarding(page: BusinessPage): Promise<OnboardingState> {
   const knowledge = getKnowledge();
   const segmentId = page.business.segment?.id ?? null;
-  const [facts, readiness, playbook, generations] = await Promise.all([
+  const [facts, readiness, playbook, generations, versions] = await Promise.all([
     knowledge.knowledge.list(page.user, page.business.id, { status: "active" }),
     getHandoff().readiness(page.tenant),
     segmentId === null ? null : knowledge.playbooks.getVersion(page.user, segmentId),
     segmentId === null ? [] : knowledge.playbooks.listGenerations(page.user, segmentId),
+    segmentId === null ? [] : knowledge.playbooks.listVersions(page.user, segmentId),
   ]);
   const generation = generations[0] ?? null;
   const generating =
@@ -43,6 +47,7 @@ export async function loadOnboarding(page: BusinessPage): Promise<OnboardingStat
     readiness,
     playbook,
     generation,
+    playbookWithoutModel: playbook !== null && editedWithoutModel(versions, playbook),
     statuses: {
       profile: "done",
       segment: segmentId === null ? "todo" : "done",

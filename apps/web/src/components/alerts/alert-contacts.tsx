@@ -1,3 +1,4 @@
+import type { Route } from "next";
 import Link from "next/link";
 
 import { sendTestAlertAction } from "@/app/(admin)/_actions/alerts";
@@ -31,7 +32,10 @@ export async function AlertContacts({ page }: { readonly page: BusinessPage }) {
         <p className="text-sm text-slate-600">
           The agency&apos;s fallback contacts, alerted when nobody in a business&apos;s chain
           answers, are in the{" "}
-          <Link href="/settings" className="font-medium text-blue-700 underline">
+          <Link
+            href={`/settings?agency=${page.business.agencyId}` as Route}
+            className="font-medium text-blue-700 underline"
+          >
             agency settings
           </Link>{" "}
           under Emergencies.

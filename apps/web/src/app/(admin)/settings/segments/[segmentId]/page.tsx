@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Route } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -27,7 +27,10 @@ export default async function SegmentSettingsPage({
         description={
           <>
             Defaults for every business in this segment. They override the{" "}
-            <Link href="/settings" className="font-medium text-blue-700 underline">
+            <Link
+              href={`/settings?agency=${segment.agencyId}` as Route}
+              className="font-medium text-blue-700 underline"
+            >
               agency settings
             </Link>{" "}
             and are overridden by each business&apos;s own.

@@ -37,3 +37,21 @@ export function OriginBadge({ origin }: { readonly origin: PlaybookOrigin }) {
 export function originExplanation(origin: PlaybookOrigin): string {
   return ORIGINS[origin].explain;
 }
+
+/**
+ * True when a hand edit or a rollback (`version`) descends only from versions the Claude API
+ * did not write: no version up to it was generated. Its own badge ("Edited by hand", "Rolled
+ * back") would not say so.
+ */
+export function editedWithoutModel(
+  versions: readonly { readonly version: number; readonly origin: PlaybookOrigin }[],
+  version: { readonly version: number; readonly origin: PlaybookOrigin },
+): boolean {
+  if (version.origin !== "manual" && version.origin !== "rollback") return false;
+  return !versions.some(
+    (candidate) => candidate.version <= version.version && candidate.origin === "generated",
+  );
+}
+
+export const EDITED_WITHOUT_MODEL =
+  "No version of this playbook up to this one was written by the Claude API: it was written by hand, imported or started from the built-in starter, then edited or rolled back. Regenerate it once the deployment has an API key.";

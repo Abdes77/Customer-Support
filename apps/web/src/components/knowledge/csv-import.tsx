@@ -91,6 +91,16 @@ const STAT_LABELS: readonly [string, string][] = [
   ["recordsFailed", "rows with problems"],
 ];
 
+/** The server action body limit is 4 MB (next.config.ts); the file must fit with room to spare. */
+const MAX_FILE_BYTES = 3_500_000;
+const MAX_SENT_BYTES = 3_900_000;
+const TOO_LARGE =
+  "The file is too large for an upload here (3.5 MB at most). Use the import API for larger files.";
+const SEND_FAILED = {
+  ok: false as const,
+  error: "The file could not be sent. Check your connection and try again.",
+};
+
 export function CsvImport({ businessId }: { readonly businessId: string }) {
   const router = useRouter();
   const [file, setFile] = useState<{ name: string; text: string } | null>(null);
@@ -108,7 +118,7 @@ export function CsvImport({ businessId }: { readonly businessId: string }) {
         businessId,
         csv: text,
         ...(next === undefined ? {} : { mapping: next }),
-      });
+      }).catch(() => SEND_FAILED);
       if (!result.ok) {
         setError(result.error);
         return;
@@ -126,11 +136,16 @@ export function CsvImport({ businessId }: { readonly businessId: string }) {
       setFile(null);
       return;
     }
-    if (selected.size > 3_500_000) {
-      setError("The file is too large for an upload here (3.5 MB at most).");
+    if (selected.size > MAX_FILE_BYTES) {
+      setError(TOO_LARGE);
       return;
     }
     const text = await selected.text();
+    // The file travels as JSON text: quotes and line breaks take more room than in the file.
+    if (new TextEncoder().encode(JSON.stringify(text)).length > MAX_SENT_BYTES) {
+      setError(TOO_LARGE);
+      return;
+    }
     setFile({ name: selected.name.slice(0, 200), text });
     runPreview(text);
   };
@@ -152,7 +167,7 @@ export function CsvImport({ businessId }: { readonly businessId: string }) {
         fileName: file.name,
         mapping,
         mode,
-      });
+      }).catch(() => SEND_FAILED);
       if (!result.ok) {
         setError(result.error);
         return;
