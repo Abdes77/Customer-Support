@@ -855,8 +855,8 @@ C14 and new reads in `@repo/db`.
   Notes, assignment, emergencies, alerts, follow-ups, connections, integrations and the audit
   log are staff only. The navigation shows a client user only the screens they may open.
 - **Reads as the user** (`packages/db/src/repositories`): `inbox.ts` (`listInbox` with
-  filters and literal search, `getConversationDetail` with reports and notes only when
-  allowed, `findVisibleConversation`, `findVisibleAttachment`, `listAgencyStaff`), `leads.ts`
+  filters and literal search, `getConversationDetail` with the lead, reports (and routing
+  reasons) and notes only when allowed, `findVisibleConversation`, `findVisibleAttachment`, `listAgencyStaff`), `leads.ts`
   (`listLeads`, `csvCell`/`csvLine` with formula neutralization), `analytics.ts`
   (`computeAnalytics`: per-conversation facts in one query, `summarize` pure; DECISIONS 265),
   `audit.ts` (`listAuditLog`, `redactAuditValue`). Writes to pipeline tables in the system

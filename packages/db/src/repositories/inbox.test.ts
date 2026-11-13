@@ -129,6 +129,15 @@ describe("getConversationDetail", () => {
     // RLS keeps notes from client users even when asked for.
     expect(owner?.notes).toEqual([]);
     expect(owner?.lead?.report).toBeNull();
+    // Without reports, routing decisions come without their reasons (the report's "why").
+    expect(owner?.lead?.routing.every((decision) => decision.reasons.length === 0)).toBe(true);
+    // Without the leads permission, no lead panel at all.
+    const noLeads = await t.db
+      .asUser(world.users.a1Owner)
+      .run((ctx) => getConversationDetail(ctx, id, { reports: true, notes: false, lead: false }));
+    expect(noLeads?.id).toBe(id);
+    expect(noLeads?.lead).toBeNull();
+    expect(noLeads?.bookings).toEqual([]);
     for (const user of [
       world.users.a2Owner,
       world.users.a3Owner,

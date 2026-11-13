@@ -13,7 +13,8 @@ import { publicEnv } from "@/env.public";
  * appears is authorized there like the first render. Paused while the tab is hidden.
  */
 export interface LiveTable {
-  readonly table: "conversations" | "messages" | "takeover_locks" | "internal_notes" | "leads";
+  /** The tables migration 0014 publishes to Realtime. */
+  readonly table: "conversations" | "messages" | "takeover_locks";
   /** A Realtime filter such as `conversation_id=eq.<uuid>`; none for the whole table. */
   readonly filter?: string;
 }

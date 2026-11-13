@@ -346,7 +346,13 @@ const MESSAGE_LIMIT = 500;
 export async function getConversationDetail(
   ctx: UserContext,
   conversationId: string,
-  include: { readonly reports: boolean; readonly notes: boolean },
+  include: {
+    /** The written report, and the reasons of each routing decision (the report's "why"). */
+    readonly reports: boolean;
+    readonly notes: boolean;
+    /** The lead panel (score, criteria, routing); null lead when false. Default true. */
+    readonly lead?: boolean;
+  },
 ): Promise<ConversationDetail | null> {
   const id = z.uuid().safeParse(conversationId);
   if (!id.success) return null;
@@ -424,7 +430,10 @@ export async function getConversationDetail(
           .where(inArray(attachments.messageId, messageIds))
           .orderBy(asc(attachments.createdAt));
 
-  const [lead] = await ctx.tx.select().from(leads).where(eq(leads.conversationId, cid)).limit(1);
+  const [lead] =
+    include.lead === false
+      ? []
+      : await ctx.tx.select().from(leads).where(eq(leads.conversationId, cid)).limit(1);
   let leadView: LeadView | null = null;
   if (lead !== undefined) {
     const fields = await ctx.tx
@@ -473,18 +482,22 @@ export async function getConversationDetail(
         outcome: decision.outcome,
         score: decision.score,
         band: decision.band,
-        reasons: decision.reasons,
+        // The reasons are the report's "why": only for those who may read reports.
+        reasons: include.reports ? decision.reasons : [],
         decidedAt: decision.decidedAt.toISOString(),
       })),
     };
   }
 
-  const bookingRows = await ctx.tx
-    .select()
-    .from(bookings)
-    .where(eq(bookings.conversationId, cid))
-    .orderBy(desc(bookings.createdAt))
-    .limit(10);
+  const bookingRows =
+    include.lead === false
+      ? []
+      : await ctx.tx
+          .select()
+          .from(bookings)
+          .where(eq(bookings.conversationId, cid))
+          .orderBy(desc(bookings.createdAt))
+          .limit(10);
 
   const noteRows = include.notes
     ? await ctx.tx
@@ -757,13 +770,25 @@ export async function addInternalNote(
   return { id: row!.id };
 }
 
-/** Deletes a note: its author, or an agency admin (RLS decides). */
-export async function deleteInternalNote(ctx: UserContext, noteId: string): Promise<boolean> {
+/**
+ * Deletes a note: its author, or an agency admin (RLS decides). With `conversationId`, only a
+ * note of that conversation (the one the person was checked against).
+ */
+export async function deleteInternalNote(
+  ctx: UserContext,
+  noteId: string,
+  conversationId?: ConversationId,
+): Promise<boolean> {
   const id = z.uuid().safeParse(noteId);
   if (!id.success) return false;
   const rows = await ctx.tx
     .delete(internalNotes)
-    .where(eq(internalNotes.id, id.data))
+    .where(
+      and(
+        eq(internalNotes.id, id.data),
+        conversationId === undefined ? undefined : eq(internalNotes.conversationId, conversationId),
+      ),
+    )
     .returning({ id: internalNotes.id });
   return rows.length > 0;
 }

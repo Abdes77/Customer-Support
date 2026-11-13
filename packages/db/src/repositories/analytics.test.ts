@@ -4,7 +4,7 @@ import { DEMO, seedDemoData } from "../seed/demo";
 import { createTestDatabase, type TestDatabase } from "../testing";
 import { computeAnalytics, summarize } from "./analytics";
 import { listAuditLog, redactAuditValue } from "./audit";
-import { csvCell, csvLine, listLeads } from "./leads";
+import { csvCell, csvLine, isCalendarDay, listLeads } from "./leads";
 
 /*
  * Analytics (C16) against the demo data (src/seed/demo.ts): the totals must equal what the
@@ -136,6 +136,21 @@ describe("lead list and CSV", () => {
       }),
     );
     expect(filtered.rows.map((row) => row.contactName).sort()).toEqual(["Luis Ortega"]);
+  });
+
+  it("accepts only calendar days as date filters", async () => {
+    expect(isCalendarDay("2026-11-10")).toBe(true);
+    expect(isCalendarDay("2024-02-29")).toBe(true);
+    for (const bad of ["2026-13-45", "2025-02-29", "2026-1-1", "", "2026-11-10T00:00"]) {
+      expect(isCalendarDay(bad), bad).toBe(false);
+    }
+    await expect(
+      t.db
+        .asUser(ADMIN)
+        .run((ctx) =>
+          listLeads(ctx, { businessIds: null, includeReports: false, from: "2026-13-45" }),
+        ),
+    ).rejects.toThrow();
   });
 
   it("neutralizes cells a spreadsheet would run as formulas", () => {

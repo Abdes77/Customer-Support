@@ -54,7 +54,11 @@ export function ReplyBox({
           setText("");
           setKey(newKey());
           setError(null);
-          setSent(`Sent through ${channelLabel}.`);
+          setSent(
+            result.value.duplicate
+              ? "This reply had already been sent; it was not sent again."
+              : `Sent through ${channelLabel}.`,
+          );
           router.refresh();
         } else {
           setError(result.error);
@@ -81,6 +85,8 @@ export function ReplyBox({
         id="reply"
         name="reply"
         value={text}
+        // The draft cannot change while it is being sent: its key stands for this text.
+        readOnly={pending}
         maxLength={4000}
         rows={3}
         placeholder={`Write a reply. It goes out through ${channelLabel}.`}

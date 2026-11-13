@@ -22,7 +22,14 @@ import { likePattern } from "./inbox";
  * and says whether the written reports may be included.
  */
 
-const DateText = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** A calendar day, `YYYY-MM-DD`, that exists (not 2026-13-45). */
+export function isCalendarDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+const DateText = z.string().refine(isCalendarDay, "Not a calendar day.");
 
 export const LeadFilter = z.object({
   businessId: z.uuid().optional(),

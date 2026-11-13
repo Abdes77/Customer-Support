@@ -237,6 +237,16 @@ describe("takeover and manual reply", () => {
       (await sendReplyAction({ conversationId, text: "Owner here.", key: "owner-draft-1" })).ok,
     ).toBe(true);
     expect((await releaseAction({ conversationId })).ok).toBe(true);
+    // A staff member's takeover stays theirs: the owner can neither claim nor release it.
+    const held = conversationOf("a1");
+    const holder = (await activeLock(held))?.userId;
+    expect(holder).toBeTruthy();
+    expect(await takeOverAction({ conversationId: held })).toMatchObject({ ok: false });
+    expect(await releaseAction({ conversationId: held })).toMatchObject({
+      ok: false,
+      error: "Only the person holding the conversation can release it.",
+    });
+    expect((await activeLock(held))?.userId).toBe(holder);
     // Turning the permission off closes it again, without a new session.
     await setPortal("a1", { "client_portal.reply_and_take_over": "nobody" });
     expect(await takeOverAction({ conversationId })).toMatchObject({ ok: false });
@@ -282,7 +292,11 @@ describe("notes and assignment", () => {
     expect(
       await deleteNoteAction({ conversationId: conversationOf("b1"), noteId: note!.id }),
     ).toMatchObject({ ok: false });
+    // Nor with another conversation of the same business that the author may see.
     as(world.users.aMember);
+    expect(
+      await deleteNoteAction({ conversationId: conversationOf("a1", "spare"), noteId: note!.id }),
+    ).toMatchObject({ ok: false });
     expect(
       await assignAction({ conversationId, assigneeId: world.users.bMember.id }),
     ).toMatchObject({ ok: false });

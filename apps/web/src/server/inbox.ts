@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { ConversationId, UserId } from "@repo/core";
+import { AppError, type ConversationId, type UserId } from "@repo/core";
 import {
   addInternalNote,
   assignConversation,
@@ -110,15 +110,14 @@ export function createInboxActions(deps: InboxDeps) {
       const { conversationId } = parse(ConversationRef, input);
       const access = await conversationAccess(session, conversationId);
       requireReply(access);
-      const state = await deps.handoff.takeoverState(access.tenant, access.conversationId);
-      // Staff may release any takeover; a client user only their own.
-      if (state.active && !access.permissions.staff && state.userId !== session.user.id) {
-        throw new ActionError("Only the person holding the conversation can release it.");
-      }
+      // Staff may release any takeover; a client user only their own, checked in the same
+      // transaction as the release.
+      // (A refusal is a "conflict" error, whose message the result shows.)
       const { released } = await deps.handoff.release({
         tenant: access.tenant,
         conversationId: access.conversationId,
         userId: session.user.id,
+        ...(access.permissions.staff ? {} : { requireHolder: true }),
       });
       return released ? "The bot has the conversation again." : "The bot already had it.";
     },
@@ -141,7 +140,7 @@ export function createInboxActions(deps: InboxDeps) {
         });
         return { messageId: result.messageId, duplicate: result.duplicate === true };
       } catch (error) {
-        if (error instanceof Error && error.message.startsWith("Take the conversation over")) {
+        if (error instanceof AppError && error.code === "conflict") {
           throw new ActionError(error.message);
         }
         throw error;
@@ -183,7 +182,7 @@ export function createInboxActions(deps: InboxDeps) {
       const access = await conversationAccess(session, parsed.conversationId);
       requireStaff(access);
       const deleted = await userDatabase(session.user).run((ctx) =>
-        deleteInternalNote(ctx, parsed.noteId),
+        deleteInternalNote(ctx, parsed.noteId, access.conversationId),
       );
       if (!deleted) throw new ActionError("You can delete only your own notes.");
       return "Note deleted.";

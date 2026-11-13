@@ -1,6 +1,6 @@
 import type { AgencyId, BusinessId } from "@repo/core";
 import { findVisibleAttachment } from "@repo/db";
-import type { TenantStorage } from "@repo/db/storage";
+import { isObjectPath, type TenantStorage } from "@repo/db/storage";
 
 import { type SessionAccess, userDatabase } from "@/server/auth";
 import { businessPermissions } from "@/server/portal";
@@ -55,7 +55,12 @@ export async function serveAttachment(
   const permissions = await businessPermissions(session, tenant);
   if (!permissions.viewConversations) return notFound();
   // The stored path must be in this tenant's folder (the storage refuses others as well).
-  if (!found.storagePath.startsWith(`${tenant.agencyId}/${tenant.businessId}/`)) return notFound();
+  if (
+    !isObjectPath(found.storagePath) ||
+    !found.storagePath.startsWith(`${tenant.agencyId}/${tenant.businessId}/`)
+  ) {
+    return notFound();
+  }
   const object = await deps.storage(tenant).get(found.storagePath);
   if (object === null) return notFound();
   const declared = (found.mimeType ?? object.contentType ?? "").toLowerCase().split(";")[0]!.trim();

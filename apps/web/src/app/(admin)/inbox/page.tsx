@@ -65,6 +65,10 @@ export default async function InboxPage({
     }),
   );
   const now = currentTime();
+  // Lead scores only where the person may see leads (client_portal.view_leads).
+  const leadsVisible = new Set(
+    allowed.filter((item) => item.permissions.viewLeads).map((item) => item.id),
+  );
   const query = (overrides: Record<string, string>) => {
     const next = new URLSearchParams();
     const base: Record<string, string> = {
@@ -249,9 +253,15 @@ export default async function InboxPage({
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                       <span>{channelLabel(row.channel)}</span>
                       {allowed.length > 1 && <span className="truncate">· {row.businessName}</span>}
-                      {row.assignedUserName !== null && <span>· {row.assignedUserName}</span>}
-                      <ScoreBadge score={row.leadScore} band={row.leadBand} />
-                      <LeadStatusBadge status={row.leadStatus} />
+                      {staff && row.assignedUserName !== null && (
+                        <span>· {row.assignedUserName}</span>
+                      )}
+                      {leadsVisible.has(row.businessId) && (
+                        <>
+                          <ScoreBadge score={row.leadScore} band={row.leadBand} />
+                          <LeadStatusBadge status={row.leadStatus} />
+                        </>
+                      )}
                     </div>
                   </Link>
                 </li>

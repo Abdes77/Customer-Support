@@ -141,7 +141,14 @@ export {
 } from "./repositories/analytics";
 
 // Lead list and CSV export (C16)
-export { csvCell, csvLine, LeadFilter, type LeadRow, listLeads } from "./repositories/leads";
+export {
+  csvCell,
+  csvLine,
+  isCalendarDay,
+  LeadFilter,
+  type LeadRow,
+  listLeads,
+} from "./repositories/leads";
 
 // Audit log
 export {

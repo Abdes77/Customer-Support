@@ -245,9 +245,25 @@ export function createHandoffService(deps: HandoffDeps) {
       readonly tenant: BusinessTenant;
       readonly conversationId: ConversationId;
       readonly userId: UserId;
+      /**
+       * C16: only the person holding the takeover may release it (checked under the lock's row
+       * lock, so a takeover that changed hands in between is not released by someone else).
+       */
+      readonly requireHolder?: boolean;
     }): Promise<{ readonly released: boolean }> {
       await requireConversation(input.tenant, input.conversationId);
       const result = await scope(input.tenant).run(async (ctx) => {
+        if (input.requireHolder === true) {
+          const lock = await activeLock(ctx, input.conversationId, "update");
+          if (lock === null) return null;
+          if (lock.userId !== input.userId) {
+            throw new AppError(
+              "conflict",
+              "Only the person holding the conversation can release it.",
+              { retryable: false },
+            );
+          }
+        }
         const settings = await loadSettings(ctx, input.tenant, { logger: deps.logger });
         return releaseTakeover(ctx, {
           conversationId: input.conversationId,

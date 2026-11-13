@@ -185,6 +185,7 @@ export default async function ConversationPage({
     getConversationDetail(ctx, found.id, {
       reports: permissions.viewReports,
       notes: permissions.staff,
+      lead: permissions.viewLeads,
     }),
   );
   if (detail === null) notFound();
@@ -336,109 +337,113 @@ export default async function ConversationPage({
             </CardBody>
           </Card>
 
-          <Card data-testid="lead-panel">
-            <CardHeader
-              title="Lead"
-              actions={
-                detail.lead === null ? undefined : (
+          {permissions.viewLeads && (
+            <Card data-testid="lead-panel">
+              <CardHeader
+                title="Lead"
+                actions={
+                  detail.lead === null ? undefined : (
+                    <>
+                      <ScoreBadge score={detail.lead.score} band={detail.lead.band} />
+                      <LeadStatusBadge status={detail.lead.status} />
+                    </>
+                  )
+                }
+              />
+              <CardBody className="space-y-4">
+                {detail.lead === null ? (
+                  <p className="text-sm text-slate-500">No lead yet.</p>
+                ) : (
                   <>
-                    <ScoreBadge score={detail.lead.score} band={detail.lead.band} />
-                    <LeadStatusBadge status={detail.lead.status} />
-                  </>
-                )
-              }
-            />
-            <CardBody className="space-y-4">
-              {detail.lead === null ? (
-                <p className="text-sm text-slate-500">No lead yet.</p>
-              ) : (
-                <>
-                  {detail.lead.routingOutcome !== null && (
-                    <p className="text-sm text-slate-700">
-                      Routing:{" "}
-                      <strong>
-                        {ROUTING_LABELS[
-                          detail.lead.routingOutcome as keyof typeof ROUTING_LABELS
-                        ] ?? detail.lead.routingOutcome}
-                      </strong>
-                    </p>
-                  )}
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900">Criteria</h3>
-                    {detail.lead.fields.length === 0 ? (
-                      <p className="text-sm text-slate-500">Nothing known yet.</p>
-                    ) : (
-                      <dl className="mt-1 space-y-2 text-sm">
-                        {detail.lead.fields.map((field) => (
-                          <div key={field.key}>
-                            <dt className="text-slate-500">{criterionLabel(field.key)}</dt>
-                            <dd className="break-words text-slate-900">
-                              {valueText(field.value)}{" "}
-                              <span className="text-xs text-slate-500">
-                                ({Math.round(field.confidence * 100)}% sure)
-                              </span>
-                              {field.evidence !== null && (
-                                <span className="block text-xs text-slate-500 italic">
-                                  “{field.evidence}”
-                                </span>
-                              )}
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
+                    {detail.lead.routingOutcome !== null && (
+                      <p className="text-sm text-slate-700">
+                        Routing:{" "}
+                        <strong>
+                          {ROUTING_LABELS[
+                            detail.lead.routingOutcome as keyof typeof ROUTING_LABELS
+                          ] ?? detail.lead.routingOutcome}
+                        </strong>
+                      </p>
                     )}
-                  </div>
-                  {permissions.viewReports && (
                     <div>
-                      <h3 className="text-sm font-semibold text-slate-900">Report</h3>
-                      {detail.lead.report === null ? (
-                        <p className="text-sm text-slate-500">No report yet.</p>
+                      <h3 className="text-sm font-semibold text-slate-900">Criteria</h3>
+                      {detail.lead.fields.length === 0 ? (
+                        <p className="text-sm text-slate-500">Nothing known yet.</p>
                       ) : (
-                        <div className="mt-1 text-sm text-slate-800">
-                          <p className="font-medium break-words">{detail.lead.report.summary}</p>
-                          <div className="mt-2">
-                            <ReportText markdown={detail.lead.report.markdown} />
-                          </div>
-                        </div>
+                        <dl className="mt-1 space-y-2 text-sm">
+                          {detail.lead.fields.map((field) => (
+                            <div key={field.key}>
+                              <dt className="text-slate-500">{criterionLabel(field.key)}</dt>
+                              <dd className="break-words text-slate-900">
+                                {valueText(field.value)}{" "}
+                                <span className="text-xs text-slate-500">
+                                  ({Math.round(field.confidence * 100)}% sure)
+                                </span>
+                                {field.evidence !== null && (
+                                  <span className="block text-xs text-slate-500 italic">
+                                    “{field.evidence}”
+                                  </span>
+                                )}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
                       )}
                     </div>
-                  )}
-                  {detail.lead.routing.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-900">Routing history</h3>
-                      <ul className="mt-1 space-y-1 text-xs text-slate-600">
-                        {detail.lead.routing.map((decision, index) => (
-                          <li key={index}>
-                            {formatDateTime(decision.decidedAt)}:{" "}
-                            {ROUTING_LABELS[decision.outcome as keyof typeof ROUTING_LABELS] ??
-                              decision.outcome}{" "}
-                            at {Math.round(decision.score)} ({decision.band})
-                            {decision.reasons.length > 0 && ` · ${decision.reasons.join("; ")}`}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </>
-              )}
-              {detail.bookings.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-900">Meetings</h3>
-                  <ul className="mt-1 space-y-1 text-sm text-slate-700">
-                    {detail.bookings.map((booking) => (
-                      <li key={booking.id}>
-                        {booking.startsAt === null ? "Link sent" : formatDateTime(booking.startsAt)}{" "}
-                        · {booking.status}
-                        {booking.title !== null && (
-                          <span className="block text-xs">{booking.title}</span>
+                    {permissions.viewReports && (
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Report</h3>
+                        {detail.lead.report === null ? (
+                          <p className="text-sm text-slate-500">No report yet.</p>
+                        ) : (
+                          <div className="mt-1 text-sm text-slate-800">
+                            <p className="font-medium break-words">{detail.lead.report.summary}</p>
+                            <div className="mt-2">
+                              <ReportText markdown={detail.lead.report.markdown} />
+                            </div>
+                          </div>
                         )}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </CardBody>
-          </Card>
+                      </div>
+                    )}
+                    {detail.lead.routing.length > 0 && (
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-900">Routing history</h3>
+                        <ul className="mt-1 space-y-1 text-xs text-slate-600">
+                          {detail.lead.routing.map((decision, index) => (
+                            <li key={index}>
+                              {formatDateTime(decision.decidedAt)}:{" "}
+                              {ROUTING_LABELS[decision.outcome as keyof typeof ROUTING_LABELS] ??
+                                decision.outcome}{" "}
+                              at {Math.round(decision.score)} ({decision.band})
+                              {decision.reasons.length > 0 && ` · ${decision.reasons.join("; ")}`}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+                {detail.bookings.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Meetings</h3>
+                    <ul className="mt-1 space-y-1 text-sm text-slate-700">
+                      {detail.bookings.map((booking) => (
+                        <li key={booking.id}>
+                          {booking.startsAt === null
+                            ? "Link sent"
+                            : formatDateTime(booking.startsAt)}{" "}
+                          · {booking.status}
+                          {booking.title !== null && (
+                            <span className="block text-xs">{booking.title}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          )}
 
           {permissions.staff && (
             <>

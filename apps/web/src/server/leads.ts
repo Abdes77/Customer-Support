@@ -2,6 +2,7 @@ import { type BusinessId, CHANNEL_IDS, LEAD_STATUSES, ROUTING_OUTCOMES } from "@
 import {
   csvLine,
   getDatabase,
+  isCalendarDay,
   type LeadFilter,
   type LeadRow,
   listLeads,
@@ -20,7 +21,6 @@ import { businessIdsFor, type ScreenBusiness, screenBusinesses } from "@/server/
 
 type Params = Readonly<Record<string, string | string[] | undefined>>;
 const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface LeadQuery {
   readonly filter: Omit<LeadFilter, "limit" | "offset">;
@@ -47,8 +47,8 @@ export function leadFilterFrom(params: Params, allowed: readonly ScreenBusiness[
       ...(outcome === undefined ? {} : { outcome }),
       ...(channel === undefined ? {} : { channel }),
       ...(band === "" ? {} : { band }),
-      ...(DAY.test(from) ? { from } : {}),
-      ...(DAY.test(to) ? { to } : {}),
+      ...(isCalendarDay(from) ? { from } : {}),
+      ...(isCalendarDay(to) ? { to } : {}),
       ...(q === "" ? {} : { q }),
       sort,
     },

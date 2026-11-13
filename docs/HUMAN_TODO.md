@@ -932,13 +932,14 @@ Format of an entry:
 - **What:** the inbox, a conversation and its takeover state update themselves. With
   `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` set (entry 3), the signed-in
   browser subscribes to Realtime `postgres_changes` on `conversations`, `messages`,
-  `takeover_locks` and `internal_notes` (filtered by conversation on its page) with the
+  and `takeover_locks` (filtered by conversation on its page) with the
   person's own session, so row-level security decides which changes it hears about, and
   re-renders the page from the server when one arrives (a slow 60 s poll stays as a safety
   net). Without them, or when the subscription fails, the page polls (the conversation every
   4 s, the inbox every 10 s); the corner of the screen says "Live" or "Updates every N s".
-  Migration 0014 adds those tables (and `leads`) to the `supabase_realtime` publication when
-  it exists; on plain PostgreSQL it does nothing. Built from memory of `@supabase/ssr` and
+  Migration 0014 adds those three tables (and no others: Realtime sends a deleted row's key to
+  every subscriber, so staff-only tables such as internal notes stay out) to the
+  `supabase_realtime` publication when it exists; on plain PostgreSQL it does nothing. Built from memory of `@supabase/ssr` and
   Realtime's `postgres_changes` API, not checked against a live project (the docs site was not
   reachable from the build VM). The connection pages were checked against the fakes of C9 to
   C14 and against stored connection states in the browser tests, never against a real account.
