@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { EventPayload } from "@repo/core";
 import {
   alerts,
+  and,
   auditLog,
   bookings,
   contacts,
@@ -567,6 +568,73 @@ describe("emergency chain", () => {
       ).body,
     ).toContain("6-digit code");
     expect((await hooks.sms({ url, params, signature: null })).status).toBe(403);
+  });
+
+  it("bounds what a replayed Twilio callback can do: nothing beyond the first delivery (C17)", async () => {
+    // Twilio signs the URL and the parameters but no time, so a captured callback can be
+    // sent again at any time. Each one names one alert (the code, the call's secret, the
+    // alert id in the URL), and every change it makes is forward-only and conditional.
+    const f = await chainFixture({ "emergency.escalation_chain": [ann] });
+    const clock = new TestClock(TUESDAY_10AM);
+    const { deps, transports } = testDeps(t, clock);
+    const hooks = createTwilioWebhookHandlers({ ...deps, authToken: "twilio-token" });
+    const first = await start(f, clock);
+    await runChainStep(deps, f.tenant, first!.escalationId, 0);
+    const code = /Reply (\d{6})/.exec(transports.sent.at(-1)!.text)![1]!;
+    const smsUrl = "https://app.example/api/handoff/twilio/sms";
+    const params = { From: ann.phone, To: "+15125550000", Body: code, MessageSid: "SM10" };
+    const captured = {
+      url: smsUrl,
+      params,
+      signature: twilioSignature("twilio-token", smsUrl, params),
+    };
+    expect((await hooks.sms(captured)).body).toContain("acknowledged");
+    const escalationOf = async (id: string) =>
+      (await t.admin.select().from(escalations).where(eq(escalations.id, id)))[0]!;
+    const acknowledgedAt = (await escalationOf(first!.escalationId)).acknowledgedAt;
+
+    // Replayed: the chain is over, the code matches nothing active, nothing is said back,
+    // and the record of who acknowledged and when does not move.
+    clock.advance(60 * 60_000);
+    expect((await hooks.sms(captured)).body).not.toContain("acknowledged");
+    expect((await escalationOf(first!.escalationId)).acknowledgedAt).toEqual(acknowledgedAt);
+    const audit = await t.admin
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.targetId, first!.escalationId));
+    expect(audit.filter((row) => row.action === "emergency.acknowledge")).toHaveLength(1);
+
+    // A new emergency of the same contact: the old capture names the old code, which does
+    // not acknowledge the new chain.
+    const g = await chainFixture({ "emergency.escalation_chain": [ann] });
+    const second = await start(g, clock);
+    await runChainStep(deps, g.tenant, second!.escalationId, 0);
+    await hooks.sms(captured);
+    expect((await escalationOf(second!.escalationId)).status).toBe("active");
+
+    // Status callbacks: a replayed "failed" cannot undo a "delivered", and the signature
+    // binds the alert id in the URL, so a capture cannot be pointed at another alert.
+    const [alert] = await t.admin
+      .select({ id: alerts.id })
+      .from(alerts)
+      .where(and(eq(alerts.escalationId, second!.escalationId), eq(alerts.channel, "sms")));
+    const statusUrl = `https://app.example/api/handoff/twilio/status?alert=${alert!.id}`;
+    const signedStatus = (word: string) => {
+      const statusParams = { MessageSid: "SM11", MessageStatus: word };
+      return {
+        url: statusUrl,
+        params: statusParams,
+        signature: twilioSignature("twilio-token", statusUrl, statusParams),
+      };
+    };
+    const failed = signedStatus("failed");
+    await hooks.status(signedStatus("delivered"));
+    await hooks.status(failed);
+    await hooks.status(signedStatus("delivered"));
+    const [after] = await t.admin.select().from(alerts).where(eq(alerts.id, alert!.id));
+    expect(after!.status).toBe("delivered");
+    const elsewhere = `https://app.example/api/handoff/twilio/status?alert=${first!.escalationId}`;
+    expect((await hooks.status({ ...failed, url: elsewhere })).status).toBe(403);
   });
 
   it("moves straight on when an alert cannot be sent, and repeats nothing when a step runs again", async () => {

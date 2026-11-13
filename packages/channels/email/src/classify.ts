@@ -21,6 +21,14 @@ export type EmailClass =
       readonly failed: boolean;
       /** Message-IDs the report names: one of them is the message that bounced. */
       readonly candidates: readonly string[];
+      /**
+       * The recipients the report says failed (Final-Recipient, Original-Recipient,
+       * X-Failed-Recipients), lower case. A report marks one of our messages failed only
+       * when it names that message's recipient (C17: forged bounces).
+       */
+      readonly recipients: readonly string[];
+      /** The receiving server says the report's sender failed DMARC: it is ignored. */
+      readonly spoofed: boolean;
       readonly diagnostic: string | null;
     }
   /** Written by the business itself (the inbox, an internal domain). */
@@ -98,6 +106,40 @@ function bounceOutcome(email: ParsedEmail): { failed: boolean; diagnostic: strin
   const failed =
     actions.length === 0 ? status === null || status.startsWith("5") : actions.includes("failed");
   return { failed, diagnostic: diagnostic ?? status };
+}
+
+const ADDRESS = /[A-Z0-9._%+'-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.[A-Z]{2,}/gi;
+
+/** The recipients a delivery report says failed, lower case. */
+export function failedRecipients(email: ParsedEmail): string[] {
+  const found = new Set<string>();
+  const add = (text: string) => {
+    for (const match of text.matchAll(ADDRESS)) found.add(match[0].toLowerCase());
+  };
+  const report = email.attachments.find((item) =>
+    /^message\/(?:global-)?delivery-status$/.test(item.mimeType),
+  );
+  if (report !== undefined) {
+    const text = decode(report.bytes, 64 * 1024);
+    for (const match of text.matchAll(/^(?:final|original)-recipient\s*:\s*[^;\n]*;\s*(.+)$/gim)) {
+      add(match[1] ?? "");
+    }
+  }
+  for (const value of email.headers.get("x-failed-recipients") ?? []) add(value);
+  return [...found];
+}
+
+/**
+ * Whether the receiving mail server says the message failed DMARC: the topmost
+ * Authentication-Results header (the one our provider added on receipt; anything below it
+ * was written by whoever sent the message) reports `dmarc=fail`. Only ever used to trust a
+ * message less: a sender can add an Authentication-Results header of its own, but only
+ * below the receiver's, and a forged `dmarc=pass` is never believed (C17: reflection and
+ * forged bounces).
+ */
+export function failedDmarc(email: ParsedEmail): boolean {
+  const topmost = email.headers.get("authentication-results")?.[0];
+  return topmost !== undefined && /\bdmarc\s*=\s*fail\b/i.test(topmost);
 }
 
 function isBounce(email: ParsedEmail): boolean {
@@ -201,7 +243,13 @@ export function classifyEmail(email: ParsedEmail, context: ClassifyContext): Ema
 
   if (isBounce(email)) {
     const outcome = bounceOutcome(email);
-    return { kind: "bounce", candidates: bounceCandidates(email), ...outcome };
+    return {
+      kind: "bounce",
+      candidates: bounceCandidates(email),
+      recipients: failedRecipients(email),
+      spoofed: failedDmarc(email),
+      ...outcome,
+    };
   }
 
   const from = email.from?.address ?? null;

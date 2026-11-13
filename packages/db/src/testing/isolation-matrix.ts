@@ -801,6 +801,19 @@ export const ISOLATION_MATRIX: readonly MatrixEntry[] = [
     system: "read_write",
   },
   {
+    name: "stored_uploads",
+    table: tables.storedUploads,
+    kind: "business",
+    row: (r) => ({
+      ...r.tenant,
+      path: `${r.tenant.agencyId}/${r.tenant.businessId}/uploads/${r.unique("path")}`,
+      source: "widget",
+    }),
+    change: { column: "source", value: "email" },
+    user: READ_ONLY_FOR_USERS,
+    system: "read_write",
+  },
+  {
     name: "audit_log",
     table: tables.auditLog,
     kind: "shared",

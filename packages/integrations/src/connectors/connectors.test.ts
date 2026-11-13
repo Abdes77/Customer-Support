@@ -264,6 +264,40 @@ describe("GoHighLevel", () => {
     pipelineStageId: "stage_1",
   };
 
+  it("recovering a lost push, adopts the note and the opportunity it made instead of adding more (C17)", async () => {
+    const ctx = contextFor(connector, credentials, config);
+    // The first push went through at GoHighLevel, but its answer never reached us.
+    const lost = await connector.pushLead(ctx, sampleLeadPayload(), { idempotencyKey: "k1" });
+    expect(lost.ok).toBe(true);
+    const notesBefore = fake
+      .requestsTo("services.leadconnectorhq.com", /\/notes$/)
+      .filter((request) => request.method === "POST").length;
+    const opportunitiesBefore = fake.requestsTo(
+      "services.leadconnectorhq.com",
+      /^\/opportunities\/$/,
+    ).length;
+    const recovered = await connector.pushLead(ctx, sampleLeadPayload(), {
+      idempotencyKey: "k2",
+      recovery: { since: new Date(NOW.getTime() - 600_000), isKnownRecord: async () => false },
+    });
+    expect(recovered.ok).toBe(true);
+    if (!recovered.ok || !lost.ok) return;
+    expect(recovered.value.externalId).toBe(lost.value.externalId);
+    expect(recovered.value.state).toMatchObject({
+      reportNoteId: lost.value.state?.["reportNoteId"],
+      opportunityId: lost.value.state?.["opportunityId"],
+    });
+    // No second note was created (the existing one was updated) and no second opportunity.
+    expect(
+      fake
+        .requestsTo("services.leadconnectorhq.com", /\/notes$/)
+        .filter((request) => request.method === "POST"),
+    ).toHaveLength(notesBefore);
+    expect(fake.requestsTo("services.leadconnectorhq.com", /^\/opportunities\/$/)).toHaveLength(
+      opportunitiesBefore,
+    );
+  });
+
   it("upserts the contact with source and tags, adds the note and opens an opportunity once", async () => {
     const ctx = contextFor(connector, credentials, config);
     const result = await connector.pushLead(ctx, sampleLeadPayload(), { idempotencyKey: "k1" });

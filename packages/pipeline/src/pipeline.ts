@@ -7,6 +7,7 @@ import { ingest, type IngestResult } from "./ingest/ingest";
 import { handleWebhook, type WebhookResponse } from "./ingest/webhook";
 import { replyJob, requestedTurnJob } from "./reply/job";
 import { sendJob } from "./send/job";
+import { retentionJob } from "./retention/purge";
 import { sweepBusiness, sweeperJob, type SweepResult } from "./sweeper";
 
 export interface Pipeline {
@@ -42,6 +43,7 @@ export function createPipeline(deps: PipelineDeps): Pipeline {
       requestedTurnJob(context),
       sendJob(context),
       sweeperJob(context),
+      retentionJob(context),
     ],
     sweep: (business) => sweepBusiness(context, business),
   };

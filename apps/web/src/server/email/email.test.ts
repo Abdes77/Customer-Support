@@ -315,8 +315,10 @@ describe("IMAP/SMTP round trip against a local mail server", () => {
     expect(reply.from).toEqual({ address: mail.address, name: "Sam at Acme Roofing" });
     expect(reply.to.map((item) => item.address)).toEqual([customer]);
     expect(reply.text).toContain("Sam\nAcme Roofing\n+15125550100");
-    expect(reply.text).toContain("> Hi, my kitchen ceiling started leaking");
-    expect(reply.html).toContain('<div class="gmail_quote">');
+    // The first email of an address is never quoted back to it (C17: From can be forged, and
+    // the business's inbox must not deliver a stranger's text to the address they chose).
+    expect(reply.text).not.toContain("> Hi, my kitchen ceiling started leaking");
+    expect(reply.html).not.toContain('<div class="gmail_quote">');
     // A copy is in Sent, as a mail program would leave it.
     expect(mail.messages("Sent").some((message) => message.raw.includes(reply.messageId!))).toBe(
       true,
@@ -352,6 +354,9 @@ describe("IMAP/SMTP round trip against a local mail server", () => {
       reply.messageId,
       secondInbound.externalMessageId,
     ]);
+    // The address wrote again, in reply to us: now the customer's words are quoted.
+    expect(secondReply.text).toContain("> Yes, I own the house.");
+    expect(secondReply.html).toContain('<div class="gmail_quote">');
     // Our own mail coming back through the INBOX and the Sent folder was never stored as a
     // customer's message.
     expect(second.rows.filter((row) => row.direction === "inbound")).toHaveLength(2);
@@ -395,8 +400,33 @@ describe("IMAP/SMTP round trip against a local mail server", () => {
     expect(turn).toEqual({ status: "skipped", reason: "email_channel:automatic_mail" });
     expect((await thread("news@roofsupply.example")).conversations).toEqual([]);
 
-    // The bounce of our reply: the message is marked failed, nothing is answered.
-    mail.deliver(bounce(ours).replace(/office@acme-roofing\.com/g, mail.address));
+    // A forged bounce: it names our reply but another recipient, or the receiving server
+    // says its sender failed DMARC. Neither marks the reply failed (C17).
+    mail.deliver(
+      bounce(ours)
+        .replace(/office@acme-roofing\.com/g, mail.address)
+        .replace("<dsn-1@mx.acme-roofing.com>", `<dsn-x-${unique()}@mx.acme-roofing.com>`),
+    );
+    mail.deliver(
+      `Authentication-Results: mx.mail.test; spf=fail smtp.mailfrom=mx.acme-roofing.com; dmarc=fail header.from=mx.acme-roofing.com\r\n${bounce(
+        ours,
+      )
+        .replace(/office@acme-roofing\.com/g, mail.address)
+        .replace(/nobody@example\.com/g, customer)
+        .replace("<dsn-1@mx.acme-roofing.com>", `<dsn-y-${unique()}@mx.acme-roofing.com>`)}`,
+    );
+    await pollAndSettle();
+    expect(
+      (await thread(customer)).rows.find((row) => row.externalMessageId === ours)?.status,
+    ).toBe("sent");
+
+    // The bounce of our reply, naming its recipient: the message is marked failed, nothing is
+    // answered.
+    mail.deliver(
+      bounce(ours)
+        .replace(/office@acme-roofing\.com/g, mail.address)
+        .replace(/nobody@example\.com/g, customer),
+    );
     await pollAndSettle();
     const bounced = await thread(customer);
     expect(bounced.rows.find((row) => row.externalMessageId === ours)?.status).toBe("failed");
@@ -404,6 +434,28 @@ describe("IMAP/SMTP round trip against a local mail server", () => {
     expect((await thread("MAILER-DAEMON@mx.acme-roofing.com".toLowerCase())).conversations).toEqual(
       [],
     );
+  });
+
+  it("stores but never answers mail whose sender failed DMARC at the receiving server (C17)", async () => {
+    const victim = `victim.${unique()}@example.com`;
+    mail.deliver(
+      `Authentication-Results: mx.mail.test; spf=fail smtp.mailfrom=example.com; dmarc=fail (p=REJECT) header.from=example.com\r\n${rawEmail(
+        {
+          from: victim,
+          to: mail.address,
+          subject: "Free gift card",
+          messageId: `<forged-${unique()}@example.com>`,
+          text: "Click https://evil.example/win to claim your prize",
+        },
+      )}`,
+    );
+    await pollAndSettle();
+    const stored = await thread(victim);
+    expect(stored.conversations).toHaveLength(1);
+    expect(stored.rows.filter((row) => row.direction === "inbound")).toHaveLength(1);
+    expect(stored.rows[0]!.payload).toMatchObject({ metadata: { automated: "dmarc_fail" } });
+    // The business's inbox writes nothing to the forged address.
+    expect(stored.rows.filter((row) => row.direction === "outbound")).toEqual([]);
   });
 
   it("stops after the daily reply limit of a thread (two auto-responders)", async () => {
@@ -849,7 +901,11 @@ describe("Gmail: OAuth through the routes, push, a threaded reply and a person's
         .replace("<oof-1@example.com>", `<oof-${unique()}@example.com>`),
     );
     gmail.deliver(newsletter());
-    gmail.deliver(bounce(ours).replace(/office@acme-roofing\.com/g, gmail.address));
+    gmail.deliver(
+      bounce(ours)
+        .replace(/office@acme-roofing\.com/g, gmail.address)
+        .replace(/nobody@example\.com/g, customer),
+    );
     await push();
     const after = await thread(customer);
     expect(after.rows.filter((row) => row.author === "bot")).toHaveLength(1);

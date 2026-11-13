@@ -895,6 +895,41 @@ C14 and new reads in `@repo/db`.
   stored state; the e2e server stores them), `e2e/portal.spec.ts` (client owner and staff,
   swapped ids, CSV, analytics totals), at 1280×800 and 390×844.
 
+### As built (C17)
+
+Security and reliability across the system; the threats, their mitigations and proofs are in
+`docs/THREAT_MODEL.md`, backups in `docs/BACKUP_RESTORE.md`.
+
+- **Production by default** (`deploymentInfo` in `@repo/core/env`, DECISIONS 272). A
+  production build off Vercel is "production" unless `DEVELOPMENT_MODE=1`; every development
+  convenience keyed on "local" is then off. The browser tests opt in.
+- **Limits** (`packages/pipeline/src/limits`, DECISIONS 273, 274). One `TurnGuard` asked after
+  every other guard (`PipelineDeps.limitGuards`, `DomainComposition.limitGuards`), before the
+  engine: `limits.*` per customer, business and agency, from messages and
+  `model_calls.cost_micro_usd`, emergencies excluded. Past a limit: follow-ups skipped; an
+  emergency still answered (three turns a day); otherwise `limits.notice_message` once a day,
+  an in-app alert, optionally a takeover (`limits.on_limit`). `TurnFacts.emit` lets a guard
+  that stops a turn have events sent after the claim (step `emit-skipped`).
+- **Observability** (`@repo/observability`, `apps/web/src/server/observability.ts`,
+  `apps/web/src/instrumentation.ts`, DECISIONS 275). Sentry through an envelope client behind
+  `SENTRY_DSN`, fed by a process-wide log listener (`addLogListener` in `@repo/core`) and
+  Next.js's `onRequestError`; scrubbing in `scrub.ts`; the fake transport in
+  `@repo/observability/testing`; an in-memory per-key limiter; the readiness rules.
+- **Traces** (`traceMessage` in `@repo/pipeline`, `pnpm --filter @repo/pipeline trace`):
+  inbound message → turn(s) → model calls → actions → replies and their parts, by trace id and
+  sequence range.
+- **Health** (`/api/health` liveness, `/api/health/ready` readiness, DECISIONS 277): database,
+  jobs, model, required variables, development switches (fail); Sentry, emergency readiness
+  per business, stuck work (warn). Details with `HEALTH_CHECK_TOKEN`.
+- **Alerts on stuck work** (the sweeper, DECISIONS 276): replies not out after 30 minutes,
+  customer messages never enqueued after 10 minutes; final send failures log at error level.
+- **Retention** (`retention-purge`, `packages/pipeline/src/retention`, DECISIONS 278, 279):
+  `data.*` per business; `stored_uploads` records files before their message exists;
+  `app.purge_audit_log` is the only way audit rows are deleted.
+- **Findings fixed** (THREAT_MODEL §3): profiles readable by a business scope (migration
+  0015), widget client address and per-address limits, forged bounces and reflection on email,
+  abandoned calendar holds, GoHighLevel duplicates after a lost answer, reactions as replies.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |
@@ -961,7 +996,8 @@ Sign-in is Supabase Auth (magic link and password), behind a provider interface 
 `apps/web/src/server/auth`. Local development and CI have no Supabase project: there the same
 interface is served by a local provider (users in the compatibility `auth.users` table, a
 signed cookie as the session), switched on by `LOCAL_AUTH_SECRET`, never on Vercel, and in a
-production build (`next start`) only while `APP_URL` is this machine (the browser tests).
+production build (`next start`) only with `DEVELOPMENT_MODE=1` and while `APP_URL` is this
+machine (the browser tests; C17).
 `apps/web/src/proxy.ts` (the Next.js 16 name for middleware) only refreshes the session
 cookie; it is not an authorization layer. Every server action and route handler authorizes on
 its own (`requireAccess()`, then `requireBusinessRole()`), because a route outside the proxy's
@@ -1007,7 +1043,10 @@ on a private channel bound to their signed session and can read no table.
 | Personal data in logs | The logger redacts message bodies, contact details and credentials by field name; full model inputs and outputs go to a tenant-scoped table with a retention setting, not to logs. |
 | SSRF from the website crawler and media downloads | One guarded fetcher (`createSafeFetcher` in `@repo/knowledge`, C6): http(s) only, no credentials, default ports, DNS resolved once and the connection pinned to the checked address, private, loopback, link-local and reserved ranges refused (IPv6 forms that wrap an IPv4 address included), every redirect checked again, size, time and content-type limits. Media downloads go through the channel adapters to the providers' own hosts. |
 | Widget abuse | Per-business allowed origins, signed visitor sessions, rate limits per IP, session and business, upload type and size limits. |
-| Runaway model spend | Debounce, one turn at a time per conversation, per-contact and per-business rate limits and daily spend caps checked before every model call. |
+| Runaway model spend | Debounce, one turn at a time per conversation, per-contact and per-business rate limits and daily spend caps checked before every model call (C17: the limits guard). |
+
+C17 completed this table in `docs/THREAT_MODEL.md`, which lists every threat with its
+mitigation, the file that implements it, the test that proves it, and the accepted risks.
 
 ## 4. Job design
 
@@ -1062,7 +1101,7 @@ Rules for every function:
 | `scheduling-reminders` | `scheduling.booking_changed` | limit 1 per booking; `sleepUntil` per reminder; a later version of the booking makes the run send nothing | C12 |
 | `scheduling-meeting-requested` | `lead.meeting_requested` | alert at once without a calendar, else after `scheduling.unbooked_alert_hours` without a booking | C12 |
 | `scheduling-reminder-sweep` | cron, hourly | re-emits the booking event of confirmed bookings whose reminders were never planned | C12 |
-| `retention-purge` | cron, daily | deletes per the data-retention settings | C17 |
+| `retention-purge` | cron, daily (08:17 UTC) | deletes per the data-retention settings, one step per business; audit log per agency | C17 |
 
 **Definitions and runners (C3).** Functions are declared once as `JobDefinition`s in
 `@repo/jobs` (trigger, debounce, concurrency key, retries, handler, `onFailure`) against a

@@ -79,7 +79,11 @@ export function createFakeCrms(): FakeCrms {
     contacts: new Map<string, Body>(),
     notes: new Map<string, Body>(),
   };
-  const ghl = { contacts: new Map<string, Body>(), notes: new Map<string, Body>() };
+  const ghl = {
+    contacts: new Map<string, Body>(),
+    notes: new Map<string, Body>(),
+    opportunities: new Map<string, Body>(),
+  };
   const jobber = { clients: new Map<string, Body>(), requests: new Map<string, Body>() };
   const hcp = { customers: new Map<string, Body>(), leads: new Map<string, Body>() };
   const servicetitan = { bookings: new Map<string, Body>() };
@@ -196,9 +200,16 @@ export function createFakeCrms(): FakeCrms {
       return json(201, { new: true, contact: { id, ...body }, traceId: "t-2" });
     }
     const contactNotes = /^\/contacts\/([^/]+)\/notes$/.exec(path);
+    if (request.method === "GET" && contactNotes !== null) {
+      return json(200, {
+        notes: [...ghl.notes.entries()]
+          .filter(([, note]) => note["contactId"] === contactNotes[1])
+          .map(([id, note]) => ({ id, body: note["body"], contactId: note["contactId"] })),
+      });
+    }
     if (request.method === "POST" && contactNotes !== null) {
       const id = `note_${nextId()}`;
-      ghl.notes.set(id, body);
+      ghl.notes.set(id, { ...body, contactId: contactNotes[1] });
       return json(201, {
         note: {
           id,
@@ -211,7 +222,7 @@ export function createFakeCrms(): FakeCrms {
     const noteEdit = /^\/contacts\/([^/]+)\/notes\/([^/]+)$/.exec(path);
     if (request.method === "PUT" && noteEdit !== null) {
       if (!ghl.notes.has(noteEdit[2]!)) return json(404, { message: "Note not found" });
-      ghl.notes.set(noteEdit[2]!, body);
+      ghl.notes.set(noteEdit[2]!, { ...body, contactId: noteEdit[1] });
       return json(200, { note: { id: noteEdit[2], body: body["body"] } });
     }
     const contact = /^\/contacts\/([^/]+)$/.exec(path);
@@ -222,7 +233,22 @@ export function createFakeCrms(): FakeCrms {
       return json(200, { succeded: true, contact: { id: contact[1], ...existing } });
     }
     if (request.method === "POST" && path === "/opportunities/") {
-      return json(201, { opportunity: { id: `opp_${nextId()}`, ...body } });
+      const id = `opp_${nextId()}`;
+      ghl.opportunities.set(id, { ...body });
+      return json(201, { opportunity: { id, ...body } });
+    }
+    if (request.method === "GET" && path === "/opportunities/search") {
+      const query = request.url.searchParams;
+      return json(200, {
+        opportunities: [...ghl.opportunities.entries()]
+          .filter(
+            ([, item]) =>
+              item["contactId"] === query.get("contact_id") &&
+              item["pipelineId"] === query.get("pipeline_id"),
+          )
+          .map(([id, item]) => ({ id, ...item })),
+        meta: { total: 0 },
+      });
     }
     return json(404, { message: `No route ${request.method} ${path}` });
   }

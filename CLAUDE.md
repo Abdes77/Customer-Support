@@ -11,7 +11,7 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
   Claude API rules, package layers, contracts between chunks.
 - `docs/BUILD_PLAN.md`: which paths each chunk owns and how to change shared files.
 - `docs/SETTINGS.md`: every setting, how values resolve, how to read, change and add one.
-- `docs/DECISIONS.md`, `docs/HUMAN_TODO.md`, `docs/INTEGRATIONS.md` (CRM and webhook setup per vendor).
+- `docs/DECISIONS.md`, `docs/HUMAN_TODO.md`, `docs/INTEGRATIONS.md` (CRMs), `docs/THREAT_MODEL.md` (threats, proofs, accepted risks), `docs/BACKUP_RESTORE.md`.
 - `AUTOBUILD.md`: the build rules. Never edit it or `autobuild/STATE.md`.
 
 ## Commands
@@ -25,8 +25,8 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 | `pnpm env:example` / `pnpm settings:docs` | Regenerate `.env.example` (from `packages/core/src/env/spec.ts`) / `docs/SETTINGS.md` (from the registry) |
 | `pnpm services:up` | Start local PostgreSQL 16, create `hsrb_dev` and `hsrb_test` |
 | `pnpm db:migrate` / `db:seed` / `db:reset` / `db:generate` | Apply migrations (the only supported way); load demo data; wipe a local database; write a migration after changing `packages/db/src/schema` |
-| `pnpm db:doctor` / `pnpm db:create-admin --slug <agency> --email <user>` | Check a database (roles, migrations, RLS, privileges, encryption key) / make a user agency_admin (first-time setup) |
-| `pnpm dev` | Run the Next.js app at http://localhost:3000 (jobs in-process without Inngest, offline model without a key; test chat at `/dev/chat`) |
+| `pnpm db:doctor` / `pnpm db:create-admin --slug <agency> --email <user>` / `pnpm --filter @repo/pipeline trace <business> <message>` | Check a database (roles, migrations, RLS, privileges, encryption key) / make a user agency_admin (first-time setup) / one customer message's trace: turn, model calls, actions, sends |
+| `pnpm dev` | Run the Next.js app at http://localhost:3000 (jobs in-process without Inngest, offline model without a key; test chat at `/dev/chat`; readiness at `/api/health/ready`). A production build is production unless `DEVELOPMENT_MODE=1` |
 | `pnpm e2e` / `pnpm --filter @repo/widget-embed build` | Playwright in `apps/web/e2e` against a production build (`next build` into `apps/web/.next`, then `next start`) on a fresh database (needs `services:up`, port 3100 free, no other `next build` at the same time) / rebuild the website chat script after editing `packages/widget-embed/src/browser` |
 | `pnpm --filter @repo/pipeline live:roundtrip` / `@repo/channel-whatsapp live:check` / `@repo/channel-messenger-instagram live:check` / `@repo/channel-email live:check` / `@repo/scheduling live:check` / `@repo/handoff live:alerts` / `@repo/integrations live:check --provider <crm|webhook>` | Live webhook → jobs → reply check against a running app (HUMAN_TODO 7) / WhatsApp Cloud API check with Meta's test number (HUMAN_TODO 12) / Messenger and Instagram check with a test Page (HUMAN_TODO 13) / IMAP/SMTP inbox check (HUMAN_TODO 14) / Google, Outlook or Calendly account check (HUMAN_TODO 15) / a test alert by text, call, WhatsApp and email (HUMAN_TODO 16) / a CRM account or webhook receiver (HUMAN_TODO 17) |
 | `pnpm --filter @repo/ai live:conversations` / `prompt:fingerprint --print` | Scripted customers against the Claude API (needs a key, HUMAN_TODO 2) / show the prompt as the model gets it |

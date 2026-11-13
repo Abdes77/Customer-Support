@@ -15,6 +15,7 @@ import {
 import { type ActionHandlerRegistry, createActionHandlerRegistry } from "../actions";
 import type { InboundObserver, SendGate, TurnGuard, TurnLoaders, TurnObserver } from "../deps";
 import { enqueueBotMessage, enqueueHumanMessage } from "../outbound";
+import { createLimitsGuard } from "../limits/guard";
 import { endedConversationGuard } from "./guards";
 import { engineActionHandlers } from "./handlers";
 
@@ -47,8 +48,8 @@ import { engineActionHandlers } from "./handlers";
  *   send by `follow_up.opt_out_scope`, an emergency always answered); the opt-out and
  *   quiet-hours send gates. All from @repo/handoff.
  *
- * Later chunks register here, and only here:
- * - C17: rate-limit and spend-cap guards.
+ * - C17: the limits guard (rate limits and model-spend caps from `limits.*`), in
+ *   `limitGuards`, which the pipeline asks after every other guard, the channels' included.
  */
 export interface DomainComposition {
   readonly engine: ConversationEngine;
@@ -56,6 +57,8 @@ export interface DomainComposition {
   readonly knowledge: KnowledgeRetriever;
   readonly loaders: TurnLoaders;
   readonly guards: readonly TurnGuard[];
+  /** Rate limits and spend caps (C17), asked after every other guard. */
+  readonly limitGuards: readonly TurnGuard[];
   /** What happens when a turn commits (C5: the lead side of the turn and its events). */
   readonly observers: readonly TurnObserver[];
   /** What happens when a customer message is stored (C13: opt-out, follow-ups, takeover). */
@@ -134,6 +137,7 @@ export function createDomainComposition(options: DomainCompositionOptions): Doma
     knowledge: knowledge.retriever,
     loaders: { playbook: knowledge.playbookLoader, lead: loadLeadSnapshot },
     guards: [endedConversationGuard, handoff.guard],
+    limitGuards: [createLimitsGuard({ db, logger })],
     observers: [createLeadTurnObserver({ db, logger: leadLogger }), handoff.observer],
     inboundObservers: [handoff.inboundObserver],
     sendGates: handoff.gates,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ExternalServiceError } from "./errors";
-import { createLogger, type LogRecord, redact, REDACTED } from "./logger";
+import { addLogListener, createLogger, type LogRecord, redact, REDACTED } from "./logger";
 
 function capture(level: "debug" | "info" | "warn" | "error" = "debug") {
   const records: LogRecord[] = [];
@@ -183,5 +183,29 @@ describe("redact", () => {
     let deep: Record<string, unknown> = { leaf: true };
     for (let i = 0; i < 20; i += 1) deep = { next: deep };
     expect(JSON.stringify(redact(deep))).toContain("[truncated]");
+  });
+});
+
+describe("log listeners", () => {
+  it("see every record after redaction, and a failing listener changes nothing", () => {
+    const seen: LogRecord[] = [];
+    const sink: LogRecord[] = [];
+    const remove = addLogListener((record) => seen.push(record));
+    const removeBroken = addLogListener(() => {
+      throw new Error("reporting is down");
+    });
+    try {
+      const log = createLogger({ sink: (record) => sink.push(record), level: "debug" });
+      log.error("turn.failed", { email: "jane@example.com", apiKey: "sk-123", count: 2 });
+    } finally {
+      remove();
+      removeBroken();
+    }
+    expect(sink).toHaveLength(1);
+    expect(seen).toEqual(sink);
+    expect(seen[0]).toMatchObject({ level: "error", email: "[redacted]", apiKey: "[redacted]" });
+    // Removed listeners hear nothing more.
+    createLogger({ sink: () => undefined }).error("later");
+    expect(seen).toHaveLength(1);
   });
 });

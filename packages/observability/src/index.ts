@@ -1,10 +1,14 @@
 /**
  * @repo/observability (owner: C17)
  *
- * Sentry, tracing, rate limits and model-spend caps. The structured logger itself lives in
- * @repo/core.
- *
- * Placeholder created by C0. What this package owns, what it may import and the contracts it
- * implements are in docs/BUILD_PLAN.md and docs/ARCHITECTURE.md.
+ * Error reporting to Sentry (a small envelope client behind `SENTRY_DSN`, with scrubbing),
+ * the log listener that reports error records, the in-memory per-address limiter of the
+ * public routes, and the readiness rules. The structured logger itself lives in @repo/core;
+ * the database-backed rate limits and spend caps are a turn guard of the pipeline
+ * (`packages/pipeline/src/limits`), because this layer cannot reach the database.
  */
-export {};
+export * from "./limiter";
+export * from "./readiness";
+export * from "./reporting";
+export * from "./scrub";
+export * from "./sentry";

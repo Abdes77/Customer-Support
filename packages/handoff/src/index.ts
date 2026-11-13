@@ -113,6 +113,7 @@ export {
   liftOptOut,
   matchKeyword,
   normalizeKeyword,
+  LIMIT_REACHED_NOTICE,
   OPTED_OUT_NOTICE,
   optOutRestriction,
   recordOptOut,

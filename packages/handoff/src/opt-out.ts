@@ -350,6 +350,10 @@ export async function optOutRestriction(
 export const OPTED_OUT_NOTICE =
   "The customer opted out of automated messages and wrote again; the bot did not answer.";
 
+/** The in-app and alert notice when a rate limit or spend cap stopped the bot (C17). */
+export const LIMIT_REACHED_NOTICE =
+  "A rate limit or spend cap stopped the bot in this conversation. Please answer the customer yourself.";
+
 /**
  * A customer who opted out wrote and the bot stayed silent: the business must still see it.
  * The message is unread in the inbox (ingest counts it); this adds a warning in the admin

@@ -2,6 +2,7 @@ import type { WidgetPhoto, WidgetService } from "@repo/channel-widget/server";
 
 import {
   bearerToken,
+  edgeLimit,
   errorResponse,
   invalid,
   MAX_UPLOAD_BYTES,
@@ -26,6 +27,8 @@ export function configHandler(getWidget?: Get) {
       request,
       "config",
       async (widget) => {
+        const limited = edgeLimit(request, "config");
+        if (limited !== null) return limited;
         const key = new URL(request.url).searchParams.get("key") ?? "";
         const outcome = await widget.config(key, requestInfo(request));
         // Cached briefly by the visitor's browser: one request per page view at most.
@@ -41,6 +44,8 @@ export function sessionHandler(getWidget?: Get) {
       request,
       "session",
       async (widget) => {
+        const limited = edgeLimit(request, "session");
+        if (limited !== null) return limited;
         const body = await readJson(request);
         if (!body.ok)
           return errorResponse(request, body.status, body.status === 413 ? tooLarge : invalid);

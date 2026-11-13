@@ -27,6 +27,7 @@
     "@repo/jobs": "workspace:*",
     "@repo/knowledge": "workspace:*",
     "@repo/leads": "workspace:*",
+    "@repo/observability": "workspace:*",
     "@repo/pipeline": "workspace:*",
     "@repo/scheduling": "workspace:*",
     "@repo/settings": "workspace:*",

@@ -603,8 +603,12 @@ type GateVerdict =
   | { readonly kind: "hold"; readonly until: string; readonly reason: string }
   | { readonly kind: "withhold"; readonly reason: string };
 
-/** Code-written messages that are not held: a reminder plans around quiet hours itself (C12). */
-const UNGATED_PURPOSES = new Set(["opt_out_confirmation", "reminder"]);
+/**
+ * Code-written messages that are not held: a reminder plans around quiet hours itself (C12);
+ * a limit's notice answers what the customer just wrote and tells them to call 911 if anyone
+ * is in danger (C17).
+ */
+const UNGATED_PURPOSES = new Set(["opt_out_confirmation", "reminder", "limit_notice"]);
 
 /**
  * Quiet hours at the moment of sending, in the customer's time zone:

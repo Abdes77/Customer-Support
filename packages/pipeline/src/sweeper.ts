@@ -1,5 +1,7 @@
-import type { BusinessRef } from "@repo/db";
+import type { ConversationId } from "@repo/core";
+import type { BusinessContext, BusinessRef } from "@repo/db";
 import {
+  alerts,
   and,
   conversations,
   conversationTurns,
@@ -10,6 +12,7 @@ import {
   lt,
   messages,
   pendingDeliveryStatuses,
+  sql,
 } from "@repo/db";
 import {
   type AnyJobEvent,
@@ -43,7 +46,9 @@ export interface SweepResult {
  *   get a new send event;
  * - turn leases that expired (the run crashed) are released and their turns marked failed,
  *   so the next message is answered without delay;
- * - delivery statuses held for a provider id that never turned up are dropped after two days.
+ * - delivery statuses held for a provider id that never turned up are dropped after two days;
+ * - stuck work raises a critical in-app alert and an error log (C17): a reply not sent half an
+ *   hour after it was stored, a customer message whose turn never started after ten minutes.
  */
 export async function sweepBusiness(
   p: PipelineContext,
@@ -158,8 +163,18 @@ export async function sweepBusiness(
     await ctx.tx
       .delete(pendingDeliveryStatuses)
       .where(lt(pendingDeliveryStatuses.createdAt, new Date(now.getTime() - HELD_STATUS_MS)));
-    return { unenqueued, stuck, expired: expired.length };
+    const alarms = await raiseStuckWorkAlerts(ctx, now);
+    return { unenqueued, stuck, expired: expired.length, alarms };
   });
+  for (const alarm of found.alarms) {
+    // New alerts only (each is raised once): an error log, which reaches Sentry (C17).
+    p.logger.error(alarm.kind === "send_stuck" ? "send.stuck" : "ingest.stuck", {
+      businessId: business.businessId,
+      conversationId: alarm.conversationId,
+      messageId: alarm.messageId,
+      traceId: alarm.traceId,
+    });
+  }
 
   const minute = Math.floor(now.getTime() / 60_000);
   const events: AnyJobEvent[] = [
@@ -215,6 +230,83 @@ export async function sweepBusiness(
     reSent: found.stuck.length,
     leasesReleased: found.expired,
   };
+}
+
+/** Outbound messages not sent this long after they were stored are stuck (unless held). */
+export const SEND_STUCK_AFTER_MS = 30 * 60_000;
+/** Inbound messages whose turn was never requested this long after they arrived are stuck. */
+export const INGEST_STUCK_AFTER_MS = 10 * 60_000;
+
+interface StuckAlarm {
+  readonly kind: "send_stuck" | "ingest_stuck";
+  readonly messageId: string;
+  readonly conversationId: string;
+  readonly traceId: string;
+}
+
+/**
+ * Alerts on stuck work (C17): an outbound message still queued or sending half an hour after
+ * it was stored (and not held by quiet hours: `payload.heldUntil` in the future), or a
+ * customer message whose event never reached the job runner after ten minutes, even after
+ * the sweeper re-sent it. One in-app alert per message (critical: a customer is waiting);
+ * returns the alerts that are new.
+ */
+async function raiseStuckWorkAlerts(ctx: BusinessContext, now: Date): Promise<StuckAlarm[]> {
+  const sendBefore = new Date(now.getTime() - SEND_STUCK_AFTER_MS).toISOString();
+  const ingestBefore = new Date(now.getTime() - INGEST_STUCK_AFTER_MS).toISOString();
+  const rows = (await ctx.tx.execute(
+    sql`select m.id::text as message_id, m.conversation_id::text as conversation_id,
+               m.trace_id::text as trace_id,
+               case when m.direction = 'outbound' then 'send_stuck' else 'ingest_stuck' end as kind
+          from messages m
+         where m.business_id = ${ctx.tenant.businessId}::uuid
+           and (
+             (m.direction = 'outbound' and m.status in ('queued', 'sending')
+               and m.created_at < ${sendBefore}::timestamptz
+               and coalesce((m.payload ->> 'heldUntil')::timestamptz, '-infinity'::timestamptz)
+                   < ${now.toISOString()}::timestamptz)
+             or
+             (m.direction = 'inbound' and m.enqueued_at is null
+               and m.created_at < ${ingestBefore}::timestamptz)
+           )
+         order by m.created_at
+         limit ${BATCH}`,
+  )) as unknown as {
+    message_id: string;
+    conversation_id: string;
+    trace_id: string;
+    kind: StuckAlarm["kind"];
+  }[];
+  const fresh: StuckAlarm[] = [];
+  for (const row of rows) {
+    const inserted = await ctx.tx
+      .insert(alerts)
+      .values({
+        ...ctx.tenant,
+        conversationId: row.conversation_id as ConversationId,
+        kind: row.kind,
+        severity: "critical",
+        channel: "in_app",
+        recipient: "agency",
+        subject:
+          row.kind === "send_stuck"
+            ? "A reply to a customer has not gone out for half an hour."
+            : "A customer message has waited ten minutes for the bot to start.",
+        payload: { messageId: row.message_id, conversationId: row.conversation_id },
+        dedupeKey: `${row.kind}:${row.message_id}`,
+      })
+      .onConflictDoNothing()
+      .returning({ id: alerts.id });
+    if (inserted.length > 0) {
+      fresh.push({
+        kind: row.kind,
+        messageId: row.message_id,
+        conversationId: row.conversation_id,
+        traceId: row.trace_id,
+      });
+    }
+  }
+  return fresh;
 }
 
 export function sweeperJob(p: PipelineContext): CronJobDefinition {

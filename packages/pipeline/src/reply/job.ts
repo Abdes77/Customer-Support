@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { AppError, type EventPayload } from "@repo/core";
 import { and, conversations, conversationTurns, eq } from "@repo/db";
-import { defineEventJob, type EventJobDefinition, type JobContext } from "@repo/jobs";
+import {
+  defineEventJob,
+  type EventJobDefinition,
+  type JobContext,
+  type StepTools,
+} from "@repo/jobs";
 
 import type { PipelineContext } from "../deps";
 import { raiseInAppAlert, recordDeadLetter } from "../failures";
@@ -70,6 +75,7 @@ export async function runReplyTurn(
   }
   if (claim.kind === "done") return { outcome: claim.reason, turnId: null, messageIds: [] };
   if (claim.kind === "skipped") {
+    await emitSkipped(p, step, claim);
     return { outcome: `skipped:${claim.reason}`, turnId: claim.turnId, messageIds: [] };
   }
   const claimed = claim;
@@ -107,6 +113,20 @@ export async function runReplyTurn(
     await step.run("presence-off", () => showPresence(p, data, claimed, "off", log));
   }
   return { outcome: commit.status, turnId: claimed.turnId, messageIds: commit.messageIds };
+}
+
+/** Sends what the guard that stopped a turn asked for (C17: a limit's notice and alerts). */
+async function emitSkipped(
+  p: PipelineContext,
+  step: StepTools,
+  claim: Extract<ClaimResult, { kind: "skipped" }>,
+): Promise<void> {
+  const events = claim.events ?? [];
+  if (events.length === 0) return;
+  await step.run("emit-skipped", async () => {
+    await p.events.send(events);
+    return null;
+  });
 }
 
 /**
@@ -242,6 +262,7 @@ export async function runRequestedTurn(
   }
   if (claim.kind === "done") return { outcome: claim.reason, turnId: null, messageIds: [] };
   if (claim.kind === "skipped") {
+    await emitSkipped(p, step, claim);
     return { outcome: `skipped:${claim.reason}`, turnId: claim.turnId, messageIds: [] };
   }
   const claimed = claim;

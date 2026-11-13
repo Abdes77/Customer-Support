@@ -34,8 +34,11 @@ export const FollowUpPlannedEvent = z.object({
 });
 export type FollowUpPlannedEvent = z.infer<typeof FollowUpPlannedEvent>;
 
-/** Why a conversation needs a person although nobody handed it over. */
-export const ATTENTION_REASONS = ["opted_out_customer_wrote"] as const;
+/**
+ * Why a conversation needs a person although nobody handed it over: an opted-out customer
+ * wrote (C13), or a rate limit or spend cap stopped the bot (C17).
+ */
+export const ATTENTION_REASONS = ["opted_out_customer_wrote", "limit_reached"] as const;
 export type AttentionReason = (typeof ATTENTION_REASONS)[number];
 
 /**

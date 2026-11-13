@@ -33,6 +33,8 @@ describe("pipeline functions on Inngest", () => {
       "pipeline-requested-turn",
       "pipeline-send",
       "pipeline-sweeper",
+      // C17: deleting data past its retention, once a day.
+      "retention-purge",
     ]);
     expect(options[0]).toMatchObject({
       triggers: [{ event: "message.received" }],
@@ -48,6 +50,7 @@ describe("pipeline functions on Inngest", () => {
       concurrency: [{ key: "event.data.conversationId", limit: 1 }],
     });
     expect(options[3]).toMatchObject({ triggers: [{ cron: "* * * * *" }] });
+    expect(options[4]).toMatchObject({ triggers: [{ cron: "17 8 * * *" }] });
   });
 
   it("round-trips a test-channel message: webhook, reply function, send function", async () => {

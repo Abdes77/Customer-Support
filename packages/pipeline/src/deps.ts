@@ -39,6 +39,14 @@ export interface TurnFacts {
   readonly trigger: TurnTrigger;
   readonly settings: AppResolvedSettings;
   readonly now: Date;
+  /** The turn's trace, for anything a guard stores or emits (C17). */
+  readonly traceId?: string;
+  /**
+   * Events a guard that stops the turn wants sent once the claim has committed (C17: the
+   * notice a customer gets when a limit stops the bot, a takeover, an alert). Ignored when
+   * the guard lets the turn run.
+   */
+  readonly emit?: (events: readonly AnyJobEvent[]) => void;
 }
 
 /**
@@ -286,6 +294,12 @@ export interface PipelineDeps {
    * domain guards, which `guards` replaces and this list never does.
    */
   readonly channelGuards?: readonly TurnGuard[];
+  /**
+   * Rate limits and spend caps (C17), asked after every other guard, so a turn another rule
+   * stops never counts against a limit or sends its notice. Default: the domain
+   * composition's, unless `guards` overrides the domain guards (tests).
+   */
+  readonly limitGuards?: readonly TurnGuard[];
   readonly observers?: readonly TurnObserver[];
   /** What happens when a customer message is stored (C13). Default: the domain composition's. */
   readonly inboundObservers?: readonly InboundObserver[];
@@ -364,7 +378,11 @@ export function resolveDeps(deps: PipelineDeps): PipelineContext {
     actions: deps.actions ?? domain.actions,
     knowledge: deps.knowledge ?? domain.knowledge,
     modelCalls: deps.modelCalls ?? null,
-    guards: [...(deps.guards ?? domain.guards), ...(deps.channelGuards ?? [])],
+    guards: [
+      ...(deps.guards ?? domain.guards),
+      ...(deps.channelGuards ?? []),
+      ...(deps.limitGuards ?? (deps.guards === undefined ? domain.limitGuards : [])),
+    ],
     observers: deps.observers ?? domain.observers,
     inboundObservers: deps.inboundObservers ?? domain.inboundObservers,
     sendGates: deps.sendGates ?? domain.sendGates,

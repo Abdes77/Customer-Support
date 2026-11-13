@@ -94,7 +94,8 @@ export const TURN_STATUSES = [
 ] as const;
 export type TurnStatus = (typeof TURN_STATUSES)[number];
 
-export const ATTACHMENT_STATUSES = ["pending", "stored", "failed", "skipped"] as const;
+/** "purged": the file was deleted by the retention job (C17); its description stays. */
+export const ATTACHMENT_STATUSES = ["pending", "stored", "failed", "skipped", "purged"] as const;
 export type AttachmentStatus = (typeof ATTACHMENT_STATUSES)[number];
 
 export const TAKEOVER_SOURCES = ["admin_panel", "provider_inbox", "rule"] as const;

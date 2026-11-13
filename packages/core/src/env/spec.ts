@@ -79,6 +79,46 @@ export const ENV_SPEC = {
     secret: false,
     required: "production",
   },
+  DEVELOPMENT_MODE: {
+    schema: flag,
+    group: "app",
+    description:
+      "Set to 1 only to run a production build (`next start`) off Vercel as a development machine: in-process jobs, the offline model, local sign-in and storage, per-process test-channel and widget secrets. The browser tests set it. Without it a production build is treated as production everywhere. Ignored on Vercel. The readiness check fails while it is on and APP_URL is not this machine.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
+  HEALTH_CHECK_TOKEN: {
+    schema: z.string().min(24),
+    group: "app",
+    description:
+      "Bearer token that unlocks the details of /api/health/ready (which checks failed and why). Without it the route answers only ready or not. At least 24 characters: openssl rand -base64 32",
+    example: "",
+    secret: true,
+    required: "optional",
+  },
+  TRUSTED_PROXY_HOPS: {
+    schema: z.coerce.number().int().min(1).max(5),
+    group: "app",
+    description:
+      "How many proxies in front of the app append to X-Forwarded-For: the client address is that many entries from the right. 1 on Vercel alone; 2 behind a CDN that appends too. Used for the website chat's per-address limits.",
+    example: "1",
+    secret: false,
+    required: "optional",
+    default: "1",
+  },
+  CLIENT_IP_HEADER: {
+    schema: z
+      .string()
+      .regex(/^[a-z0-9-]{2,64}$/i)
+      .transform((value) => value.toLowerCase()),
+    group: "app",
+    description:
+      "A header the edge in front of the app sets to the client address and overwrites when a client sends it (cf-connecting-ip on Cloudflare, x-vercel-forwarded-for on Vercel). Takes precedence over X-Forwarded-For. Leave empty unless such an edge is in front.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
   LOG_LEVEL: {
     schema: z.enum(["debug", "info", "warn", "error"]),
     group: "app",
@@ -210,7 +250,7 @@ export const ENV_SPEC = {
     schema: z.string().min(32),
     group: "security",
     description:
-      "Local development and CI only: switches on the built-in sign-in that stands in for Supabase Auth when no Supabase project is configured, and signs its session cookie (at least 32 characters). Ignored on Vercel. Never set it in production.",
+      "Local development and CI only: switches on the built-in sign-in that stands in for Supabase Auth when no Supabase project is configured, and signs its session cookie (at least 32 characters). Ignored on Vercel and in a production build unless DEVELOPMENT_MODE=1 and APP_URL is this machine. Never set it in production.",
     example: "",
     secret: true,
     required: "optional",

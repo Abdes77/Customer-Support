@@ -497,7 +497,10 @@ export async function markSendFailed(
     dedupeKey: `send_failed:${data.messageId}`,
     payload: { messageId: data.messageId, channel: data.channel, errorCode: failure.code },
   });
-  p.logger.warn("send.failed", {
+  // A closed messaging window is the channel's rule working; anything else is an error that
+  // reaches Sentry (C17) as well as the in-app alert, the dead letter and the recipients.
+  const level = failure.code === "window_closed" ? "warn" : "error";
+  p.logger[level]("send.failed", {
     traceId: data.traceId,
     businessId: data.businessId,
     conversationId: data.conversationId,

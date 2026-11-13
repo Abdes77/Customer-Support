@@ -2,9 +2,11 @@ import { defineCategory, GLOBAL_ONLY, setting } from "../define";
 import { f } from "../fields";
 
 /**
- * Rate limits and spend caps. Consumed by the pipeline's guards (C3) and by the limits of
- * C17; the widget's own limits are used by C8. A limit that is hit never drops a message:
- * the message is stored and shown in the inbox, and only the bot's reply is withheld.
+ * Rate limits and spend caps. Consumed by the pipeline's limits guard (C17,
+ * `packages/pipeline/src/limits`); the widget's own limits are used by C8. A limit that is hit
+ * never drops a message: the message is stored and shown in the inbox, only the bot's reply
+ * is withheld, the customer gets `limits.notice_message` once a day and the agency an alert.
+ * A message that may describe an emergency is still answered.
  */
 export const limitsSettings = defineCategory("limits", {
   "limits.contact_messages_per_hour": setting({
@@ -58,6 +60,13 @@ export const limitsSettings = defineCategory("limits", {
       ["handoff", "Hand the conversations to people"],
     ]),
     default: "pause_bot",
+  }),
+  "limits.notice_message": setting({
+    label: "Message when a limit stops the bot",
+    help: "Sent once a day to a customer whose conversation a limit or spend cap has stopped, so nobody is left without an answer. Leave empty to send nothing. A message that may describe an emergency is still answered by the bot, with its safety instructions, whatever the limits.",
+    field: f.text({ maxLength: 400, multiline: true }),
+    default:
+      "Thanks for your message. Our team will get back to you as soon as they can. If anyone is in danger right now, call 911.",
   }),
   "limits.max_inbound_characters": setting({
     label: "Longest customer message",

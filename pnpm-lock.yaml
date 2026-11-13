@@ -203,6 +203,9 @@ importers:
       '@repo/leads':
         specifier: workspace:*
         version: link:../../packages/leads
+      '@repo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@repo/pipeline':
         specifier: workspace:*
         version: link:../../packages/pipeline

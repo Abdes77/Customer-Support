@@ -103,7 +103,7 @@ Format of an entry:
   default `k1`). To rotate later: put the new key in `CREDENTIALS_ENCRYPTION_KEY` with a new
   id, and move the old one to `CREDENTIALS_ENCRYPTION_OLD_KEYS` as `k1:<old key>`. Old
   credentials keep working and are re-encrypted when they are next written; a command that
-  re-encrypts everything at once does not exist yet (C17 or C18).
+  re-encrypts everything at once does not exist yet (C18; THREAT_MODEL 4.9).
 - **Live check:** the last line of `pnpm db:doctor` ("Credential encryption key").
 
 ### 5. First agency and its admin (C1)
@@ -955,6 +955,48 @@ Format of an entry:
   (entries 11 to 17): each page must show it as connected, and after revoking the app's access
   at the provider, as needing a reconnect with the provider's reason.
 
+### 19. Error tracking, health checks, limits and the production switches (C17)
+
+- **What:** a Sentry project for server errors; a token for the readiness check; the network
+  topology in front of the app; a platform rate limit on the website chat's API; a look at the
+  default rate limits and spend caps.
+- **Where and variables:**
+  1. Sentry: https://sentry.io, create a project (platform "Node.js"), copy its DSN (Project
+     settings, Client Keys) into `SENTRY_DSN`. Without it nothing is reported (errors stay in
+     the logs). Events are built and scrubbed by our own client (`@repo/observability`), so no
+     Sentry build plugin is needed and `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` stay
+     unused. `NEXT_PUBLIC_SENTRY_DSN` is not used yet (browser errors are not reported,
+     THREAT_MODEL 4.10).
+  2. `HEALTH_CHECK_TOKEN`: `openssl rand -base64 32`. Point the uptime monitor at
+     `<APP_URL>/api/health` (liveness) and `<APP_URL>/api/health/ready` (503 when not ready);
+     with `Authorization: Bearer <token>` the readiness answer says which check failed and
+     which businesses' emergencies reach nobody.
+  3. `TRUSTED_PROXY_HOPS`: leave 1 on Vercel alone. Behind a CDN that appends to
+     `X-Forwarded-For` (Cloudflare in front of Vercel), set 2, or set `CLIENT_IP_HEADER` to the
+     header that CDN overwrites with the visitor's address (`cf-connecting-ip`).
+  4. Vercel Firewall (Project, Firewall, Rules): a rate limit on path prefix `/api/widget/v1`,
+     for example 300 requests per minute per IP. The app's own per-address limit counts per
+     server instance only (THREAT_MODEL 4.2).
+  5. Never set `DEVELOPMENT_MODE` on a deployment: it switches on the in-process job runner,
+     the offline model, local storage and the test channel's per-process secret, and
+     `/api/health/ready` fails while it is on and `APP_URL` is not this machine.
+  6. Review the defaults of `limits.*` with the agency (`docs/SETTINGS.md`): per customer 60
+     messages an hour, 100 bot replies and $5 of model spend a day; per business 3,000 replies
+     and $100 a day; no monthly or agency-wide cap. `limits.notice_message` is what a customer
+     past a limit is told once a day. Retention defaults (`data.*`) are in entry 6.
+- **Live checks that were skipped:**
+  - Sentry: run `SENTRY_DSN=<dsn> pnpm dev`, sign in, then stop the local database
+    (`pnpm services:down` or stop PostgreSQL) and open the inbox: the request errors must
+    arrive in Sentry, tagged with the route (`/inbox`), with no customer data, email address,
+    phone number or token in them. Then the same on a preview deployment. The envelope format
+    was written from Sentry's protocol documentation as remembered; the docs site was not
+    consulted from the build VM.
+  - Readiness against the deployment: `curl -s -H "authorization: Bearer $HEALTH_CHECK_TOKEN"
+    <APP_URL>/api/health/ready` must answer `"status":"ready"`.
+  - Retention: after the first night, the Inngest run of `retention-purge` lists what it
+    deleted (counts only).
+  - Backups and a test restore: `docs/BACKUP_RESTORE.md`.
+
 ## Local development without any account
 
 Not a to-do, a reminder: `cp .env.example .env.local`, set `LOCAL_AUTH_SECRET` and
@@ -981,7 +1023,6 @@ already listed and described in `.env.example`.
 | Account | Needed for | Variables (group in `.env.example`) | Entry added by |
 | --- | --- | --- | --- |
 | Meta developer app, business verification, App Review | WhatsApp, Instagram, Messenger | Meta | C9, C10, C18 |
-| Sentry project | Error tracking | Observability | C17 |
 | Vercel project | Hosting (root directory `apps/web`, Node.js 22, pnpm) | all of the above | C18 |
 
 ## Unverified against live services
@@ -1053,6 +1094,11 @@ already listed and described in `.env.example`.
   review) and, for Jobber, from Jobber's published app templates and an older schema dump plus
   memory; tested against recorded-style fakes of the five APIs and a local webhook receiver;
   no request reached a CRM (entry 17 lists what is confirmed per endpoint).
+- **Error tracking, health and limits (C17).** The Sentry envelope client was written from
+  Sentry's envelope protocol as remembered and tested against a fake transport; no event has
+  reached Sentry (entry 19). GoHighLevel's note listing and opportunity search, used when a
+  push whose answer was lost is recovered, are written from memory like the rest of that
+  connector (entry 17). The per-address widget limit counts per server instance.
 - **Supabase (C1).** The schema, the row-level security and both access paths are tested on
   plain PostgreSQL 16 with a compatibility bootstrap that creates Supabase's roles and
   `auth.uid()`. Not yet seen on a real project: the `postgres` role switching to

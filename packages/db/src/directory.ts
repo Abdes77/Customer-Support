@@ -145,6 +145,14 @@ export interface Directory {
 
   /** Finds a profile by email address, for invitations and the admin scripts. */
   findUserByEmail(email: string): Promise<{ readonly id: UserId; readonly email: string } | null>;
+
+  /**
+   * The estimated model spend of a whole agency since `since`, in millionths of a dollar,
+   * for the agency-wide spend cap (C17, `limits.agency_daily_spend_usd`). One number, no
+   * rows: calls of turns that escalated an emergency are left out (life-safety answers never
+   * count against a cap). The caller passes the agency it is already confined to.
+   */
+  agencyModelSpendSince(agencyId: AgencyId, since: Date): Promise<number>;
 }
 
 export function createDirectory(connection: Connection): Directory {
@@ -335,6 +343,20 @@ export function createDirectory(connection: Connection): Directory {
         name: row.name,
         scopes: row.scopes,
       };
+    },
+
+    async agencyModelSpendSince(agencyId, since) {
+      const rows = await db.execute(
+        sql`select coalesce(sum(mc.cost_micro_usd), 0)::text as total
+              from model_calls mc
+             where mc.agency_id = ${agencyId}::uuid
+               and mc.started_at >= ${since.toISOString()}::timestamptz
+               and not exists (
+                 select 1 from escalations e
+                  where e.agency_id = mc.agency_id and e.trace_id = mc.trace_id
+               )`,
+      );
+      return Number((rows[0] as { total?: string } | undefined)?.total ?? 0);
     },
 
     async findUserByEmail(email) {

@@ -132,10 +132,29 @@ export function createEmailComposer() {
           .join("\n")
           .trim();
 
+      // The bot never quotes the very first email of an address (C17: reflection). From is
+      // not authenticated: whoever forges someone's address would otherwise get their own
+      // text delivered to that person from the business's inbox. Once the address has written
+      // again (in reply to us, so from the real mailbox), quoting is safe.
+      const [written] =
+        conversation === undefined || input.author !== "bot"
+          ? []
+          : await ctx.tx
+              .select({ total: sql<number>`count(*)::int` })
+              .from(messages)
+              .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+              .where(
+                and(
+                  eq(conversations.contactId, conversation.contactId),
+                  eq(messages.direction, "inbound"),
+                ),
+              );
+      const firstContact = written !== undefined && written.total <= 1;
       const envelope = asRecord(asRecord(lastInbound?.payload)["email"]);
       const from = asRecord(envelope["from"]);
       const quote =
         values["channels.email.quote_original"] &&
+        !firstContact &&
         lastInbound !== undefined &&
         (lastInbound.text ?? "").trim().length > 0
           ? {

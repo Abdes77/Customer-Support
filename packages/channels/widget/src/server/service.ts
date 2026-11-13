@@ -43,10 +43,11 @@ import {
   messages,
   or,
   sql,
+  storedUploads,
   takeoverLocks,
   widgetSessions,
 } from "@repo/db";
-import type { TenantStorage } from "@repo/db/storage";
+import { type TenantStorage, uploadPath } from "@repo/db/storage";
 import { type AppSettings, channelSetting, renderTemplate } from "@repo/settings";
 import { loadSettings } from "@repo/settings/server";
 import { z } from "zod";
@@ -623,11 +624,18 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
       const photos: NormalizedInboundMessage["attachments"] = [];
       if (input.photo !== null && image !== null) {
         const fileName = photoFileName(input.photo.fileName, image);
-        const stored = await options
-          .storage(tenant)
-          .putUpload({ ownerId: session.id, uploadId: randomUUID(), fileName }, input.photo.bytes, {
-            contentType: image.mimeType,
-          });
+        const location = { ownerId: session.id, uploadId: randomUUID(), fileName };
+        // Recorded before the file is written, so a file whose message is never ingested is
+        // found and deleted by the retention job (C17).
+        await db.forBusiness(tenant.businessId, { agencyId: tenant.agencyId }).run((ctx) =>
+          ctx.tx
+            .insert(storedUploads)
+            .values({ ...ctx.tenant, path: uploadPath(tenant, location), source: "widget" })
+            .onConflictDoNothing(),
+        );
+        const stored = await options.storage(tenant).putUpload(location, input.photo.bytes, {
+          contentType: image.mimeType,
+        });
         photos.push({
           kind: "image",
           mimeType: image.mimeType,

@@ -1108,15 +1108,31 @@ describe("users (profiles)", () => {
     });
   });
 
-  it("a system scope sees the people of its agency only", async () => {
+  it("a business scope sees the agency's staff and its own client users, nobody else (C17)", async () => {
     const seen = await t.db
       .forBusiness(world.businesses.a1.tenant.businessId)
       .run(({ tx }) => tx.select({ id: users.id }).from(users));
     const ids = new Set(seen.map((row) => row.id));
-    expect(ids.has(world.users.aAdmin.id)).toBe(true);
-    expect(ids.has(world.users.a2Owner.id)).toBe(true);
-    expect(ids.has(world.users.bAdmin.id)).toBe(false);
-    expect(ids.has(world.users.outsider.id)).toBe(false);
+    for (const name of ["aAdmin", "aMember", "a1Owner", "a1Staff"] as const) {
+      expect(ids.has(world.users[name].id), `a1 scope sees ${name}`).toBe(true);
+    }
+    // Before C17 a job inside a1 could read the client users of a2 and a3 as well.
+    for (const name of ["a2Owner", "a3Owner", "bAdmin", "b1Owner", "outsider"] as const) {
+      expect(ids.has(world.users[name].id), `a1 scope sees ${name}`).toBe(false);
+    }
+  });
+
+  it("an agency-wide scope sees the people of its agency only", async () => {
+    const seen = await t.db
+      .forAgency(world.agencies.a.agencyId)
+      .run(({ tx }) => tx.select({ id: users.id }).from(users));
+    const ids = new Set(seen.map((row) => row.id));
+    for (const name of ["aAdmin", "aMember", "a1Owner", "a2Owner", "a3Owner"] as const) {
+      expect(ids.has(world.users[name].id), `agency scope sees ${name}`).toBe(true);
+    }
+    for (const name of ["bAdmin", "b1Owner", "outsider"] as const) {
+      expect(ids.has(world.users[name].id), `agency scope sees ${name}`).toBe(false);
+    }
   });
 });
 

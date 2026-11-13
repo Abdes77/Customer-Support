@@ -35,7 +35,10 @@ import { APP_PORT, APP_URL, type E2eState, SITE_URL, STATE_FILE } from "./config
 const ALL_DAY = [{ open: "00:00", close: "23:59" }];
 const APP_DIR = path.resolve(import.meta.dirname, "../..");
 
-/** The environment of the build and the server: in-process jobs, no Supabase, no Claude API. */
+/**
+ * The environment of the build and the server: in-process jobs, no Supabase, no Claude API,
+ * explicitly in development mode (`DEVELOPMENT_MODE=1`).
+ */
 function appEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -46,6 +49,9 @@ function appEnv(): NodeJS.ProcessEnv {
     LOCAL_AUTH_SECRET: "e2e-local-auth-secret-0123456789-abcdefgh",
     WIDGET_SESSION_SECRET: "e2e-widget-session-secret-0123456789-abcdefgh",
     AI_MODEL_MODE: "offline",
+    // A production build is production unless asked otherwise (C17): this one is a developer
+    // machine on 127.0.0.1, with in-process jobs, the offline model and local sign-in.
+    DEVELOPMENT_MODE: "1",
     NEXT_TELEMETRY_DISABLED: "1",
     // Meta's webhook secrets, so the WhatsApp and Messenger connection pages list what is
     // stored (C16). No Embedded Signup or Facebook Login configuration: those flows need a

@@ -264,6 +264,31 @@ export const deadLetters = pgTable(
 );
 
 /**
+ * Files stored before the message that will carry them exists (C17): website-chat photos and
+ * email attachments go to `{agency}/{business}/uploads/...` first and are ingested after.
+ * When ingest never happens (it failed, or the upload was a retried duplicate) nothing refers
+ * to the file; the retention job deletes such files a day later. A row whose path an
+ * attachment uses is simply dropped.
+ */
+export const storedUploads = pgTable(
+  "stored_uploads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ...tenantColumns(),
+    path: text("path").notNull(),
+    /** "widget" or "email". */
+    source: text("source").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    tenantFk("stored_uploads", t),
+    uniqueIndex("stored_uploads_path_key").on(t.businessId, t.path),
+    index("stored_uploads_created_idx").on(t.createdAt),
+    ...businessPolicies("stored_uploads"),
+  ],
+);
+
+/**
  * Fixed-window counters for rate limits and spend caps (C17), kept in PostgreSQL.
  * Count with one statement:
  * `insert ... on conflict (...) do update set value = usage_counters.value + excluded.value returning value`.

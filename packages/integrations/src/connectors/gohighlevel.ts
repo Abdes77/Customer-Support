@@ -92,6 +92,21 @@ const NoteAnswer = z.object({ note: z.object({ id: z.string().min(1) }).passthro
 const OpportunityAnswer = z.object({
   opportunity: z.object({ id: z.string().min(1) }).passthrough(),
 });
+const NotesList = z.object({
+  notes: z.array(z.object({ id: z.string().min(1), body: z.string().nullish() }).passthrough()),
+});
+const OpportunitySearch = z.object({
+  opportunities: z.array(
+    z
+      .object({
+        id: z.string().min(1),
+        status: z.string().nullish(),
+        source: z.string().nullish(),
+        pipelineId: z.string().nullish(),
+      })
+      .passthrough(),
+  ),
+});
 const LocationAnswer = z.object({
   location: z.object({ id: z.string().min(1), name: z.string().optional() }).passthrough(),
 });
@@ -168,6 +183,81 @@ async function writeNote(
   return created.ok ? ok(created.value.data.note.id) : created;
 }
 
+/**
+ * What a push whose answer was lost already made on the contact (C17): the report note
+ * (it names this lead's conversation), the transcript note and our open opportunity in the
+ * configured pipeline. Without this, a recovered push wrote a second note and opened a second
+ * opportunity. A lookup that fails fails the attempt, which is retried, rather than risk
+ * a duplicate.
+ */
+async function findWhatALostPushMade(
+  context: Context,
+  contactId: string,
+  payload: LeadSyncPayload,
+): Promise<Result<Record<string, string>, ConnectorError>> {
+  const found: Record<string, string> = {};
+  const notes = await vendorJson(
+    context.fetch,
+    VENDOR,
+    {
+      method: "GET",
+      url: joinUrl(GHL_API, `/contacts/${segment(contactId)}/notes`),
+      headers: headers(context),
+    },
+    NotesList,
+    context.now,
+  );
+  if (!notes.ok) return notes;
+  const marker = `Conversation: ${payload.conversation.url}`;
+  for (const note of notes.value.data.notes) {
+    const body = note.body ?? "";
+    if (
+      found["reportNoteId"] === undefined &&
+      body.startsWith("Lead report") &&
+      body.includes(marker)
+    ) {
+      found["reportNoteId"] = note.id;
+    }
+    if (
+      found["transcriptNoteId"] === undefined &&
+      body.startsWith("Conversation transcript") &&
+      payload.transcript != null &&
+      body.includes(payload.transcript.slice(0, 200))
+    ) {
+      found["transcriptNoteId"] = note.id;
+    }
+  }
+  if (context.config.pipelineId !== null) {
+    const query = new URLSearchParams({
+      location_id: context.config.locationId,
+      contact_id: contactId,
+      pipeline_id: context.config.pipelineId,
+    });
+    const search = await vendorJson(
+      context.fetch,
+      VENDOR,
+      {
+        method: "GET",
+        url: `${joinUrl(GHL_API, "/opportunities/search")}?${query.toString()}`,
+        headers: headers(context),
+      },
+      OpportunitySearch,
+      context.now,
+    );
+    if (!search.ok) return search;
+    const ours = search.value.data.opportunities.find(
+      (item) =>
+        item.status === "open" &&
+        (item.pipelineId === undefined ||
+          item.pipelineId === null ||
+          item.pipelineId === context.config.pipelineId) &&
+        item.source === context.options.leadSource,
+    );
+    if (ours !== undefined) found["opportunityId"] = ours.id;
+  }
+  return ok(found);
+}
+
 async function sync(
   context: Context,
   payload: LeadSyncPayload,
@@ -220,6 +310,11 @@ async function sync(
     contactId = created.value.data.contact.id;
   }
   const state: Record<string, string> = { ...previous?.state };
+  if (recovering) {
+    const made = await findWhatALostPushMade(context, contactId, payload);
+    if (!made.ok) return made;
+    Object.assign(state, made.value);
+  }
   const notes = [
     ["reportNoteId", context.options.includeReport ? reportNote(payload) : null],
     ["transcriptNoteId", context.options.includeTranscript ? transcriptNote(payload) : null],

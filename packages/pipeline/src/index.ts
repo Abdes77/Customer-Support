@@ -62,6 +62,19 @@ export { aggregateStatus, nextOutboundStatus } from "./send/deliveries";
 export { REPLY_FUNCTION_ID, REQUESTED_TURN_FUNCTION_ID, type ReplyRunOutcome } from "./reply/job";
 export { SEND_FUNCTION_ID } from "./send/job";
 export { SWEEPER_FUNCTION_ID, type SweepResult } from "./sweeper";
+export {
+  purgeAuditLog,
+  purgeBusiness,
+  type PurgeResult,
+  RETENTION_FUNCTION_ID,
+} from "./retention/purge";
+export {
+  createLimitsGuard,
+  EMERGENCY_TURNS_PAST_LIMIT,
+  mayDescribeEmergency,
+} from "./limits/guard";
+export { exceededLimit, LIMIT_KEYS, type LimitKey, type LimitUsage } from "./limits/usage";
+export { type MessageTrace, traceMessage } from "./trace";
 export { splitText } from "./send/split";
 export { optionsAsText, textToHtml } from "./send/prepare";
 export { messagingWindow } from "./send/window";

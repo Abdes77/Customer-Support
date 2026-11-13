@@ -46,7 +46,7 @@ import { createCalendlyWebhookHandler } from "./calendly-hook";
 import { createSchedulingConnectionService } from "./connections";
 import type { OutboundMessages, SchedulingDeps } from "./deps";
 import { schedulingActionHandlers } from "./handlers";
-import { STALE_HOLD_MINUTES } from "./bookings";
+import { createBookingService, STALE_HOLD_MINUTES } from "./bookings";
 import {
   createSchedulingJobs,
   planReminders,
@@ -1452,5 +1452,94 @@ describe("jobs", () => {
     expect(
       await t.admin.select().from(alerts).where(eq(alerts.businessId, booked.tenant.businessId)),
     ).toEqual([]);
+  });
+});
+
+describe("abandoned holds (C17)", () => {
+  async function staleHold(f: Fixture, provider: "google_calendar" | "outlook_calendar") {
+    const [lead] = await t.admin.select().from(leads).where(eq(leads.id, f.leadId));
+    const [held] = await t.admin
+      .insert(bookings)
+      .values({
+        ...f.tenant,
+        contactId: lead!.contactId,
+        conversationId: f.conversationId,
+        leadId: f.leadId,
+        integrationConnectionId: f.connectionId,
+        provider,
+        status: "pending",
+        startsAt: new Date("2026-11-12T14:00:00Z"),
+        endsAt: new Date("2026-11-12T15:00:00Z"),
+        // Held two hours before the service's clock: the attempt stopped long ago.
+        metadata: {
+          slotId: "2026-11-12T14:00Z",
+          version: 0,
+          heldAt: new Date(NOW.getTime() - 2 * 3600_000).toISOString(),
+        },
+      })
+      .returning({ id: bookings.id });
+    return held!.id;
+  }
+
+  it("releases a hold that stopped after creating its Google event, and deletes the event", async () => {
+    const fake = createFakeCalendarApis();
+    const f = await fixture();
+    const id = await staleHold(f, "google_calendar");
+    fake.google.calendars.get("primary")!.push({
+      id: googleEventId(id),
+      status: "confirmed",
+      start: { dateTime: "2026-11-12T14:00:00.000Z" },
+      end: { dateTime: "2026-11-12T15:00:00.000Z" },
+    });
+    // A fresh hold (a turn still running) is left alone.
+    const service = createBookingService(deps(fake));
+    const result = await service.releaseAbandonedHolds(f.tenant);
+    expect(result).toEqual({ released: 1, eventsRemoved: 1, alerted: 0 });
+    expect(fake.google.calendars.get("primary")![0]!.status).toBe("cancelled");
+    const [row] = await bookingOf(f);
+    expect(row).toMatchObject({ id, status: "cancelled" });
+    // Nothing left to do the next hour.
+    expect(await service.releaseAbandonedHolds(f.tenant)).toEqual({
+      released: 0,
+      eventsRemoved: 0,
+      alerted: 0,
+    });
+  });
+
+  it("alerts the team about an Outlook hold whose event id was never learned", async () => {
+    const fake = createFakeCalendarApis();
+    const f = await fixture({ provider: "outlook_calendar" });
+    const id = await staleHold(f, "outlook_calendar");
+    const result = await createBookingService(deps(fake)).releaseAbandonedHolds(f.tenant);
+    expect(result).toEqual({ released: 1, eventsRemoved: 0, alerted: 1 });
+    const raised = await t.admin
+      .select({ kind: alerts.kind, payload: alerts.payload })
+      .from(alerts)
+      .where(eq(alerts.businessId, f.tenant.businessId));
+    expect(raised).toEqual([
+      {
+        kind: "calendar_hold_abandoned",
+        payload: { bookingId: id, startsAt: "2026-11-12T14:00:00.000Z" },
+      },
+    ]);
+  });
+
+  it("leaves a hold younger than an hour alone", async () => {
+    const fake = createFakeCalendarApis();
+    const f = await fixture();
+    const [lead] = await t.admin.select().from(leads).where(eq(leads.id, f.leadId));
+    await t.admin.insert(bookings).values({
+      ...f.tenant,
+      contactId: lead!.contactId,
+      conversationId: f.conversationId,
+      leadId: f.leadId,
+      integrationConnectionId: f.connectionId,
+      provider: "google_calendar",
+      status: "pending",
+      metadata: { heldAt: new Date(NOW.getTime() - 10 * 60_000).toISOString() },
+    });
+    expect(await createBookingService(deps(fake)).releaseAbandonedHolds(f.tenant)).toMatchObject({
+      released: 0,
+    });
   });
 });

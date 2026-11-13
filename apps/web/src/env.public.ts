@@ -12,3 +12,9 @@ export const publicEnv = {
   metaAppId: process.env.NEXT_PUBLIC_META_APP_ID,
   sentryDsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 } as const;
+
+/**
+ * The runtime Next.js runs this code in ("nodejs" or "edge"), set by Next.js itself (not a
+ * person, so not in the env spec). `instrumentation.ts` starts error reporting on Node only.
+ */
+export const nextRuntime = process.env.NEXT_RUNTIME;

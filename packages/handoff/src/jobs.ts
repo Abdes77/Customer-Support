@@ -42,7 +42,7 @@ import {
   followUpPlannedEvent,
   followUpSendTime,
 } from "./follow-ups/plan";
-import { OPTED_OUT_NOTICE } from "./opt-out";
+import { LIMIT_REACHED_NOTICE, OPTED_OUT_NOTICE } from "./opt-out";
 import { emergencyReadiness } from "./readiness";
 import { activeLock, releaseTakeover, takeoverStartedEvent } from "./takeover/locks";
 
@@ -233,7 +233,7 @@ export function createHandoffJobs(
 
   /**
    * `handoff.attention_needed`: a conversation needs a person although nobody handed it over
-   * (an opted-out customer wrote and the bot did not answer). Alerts the recipients of
+   * (an opted-out customer wrote and the bot did not answer, or a limit stopped the bot, C17). Alerts the recipients of
    * "handoff" alerts, with the reason in front; the in-app alert was written with the event.
    */
   const alertAttention = defineEventJob({
@@ -258,7 +258,7 @@ export function createHandoffJobs(
             facts,
             appUrl: deps.appUrl,
             eventId: event.id ?? `${data.reason}:${data.conversationId}:${data.day}`,
-            notice: OPTED_OUT_NOTICE,
+            notice: data.reason === "limit_reached" ? LIMIT_REACHED_NOTICE : OPTED_OUT_NOTICE,
           });
           return rows.map((row) => row.id);
         }),

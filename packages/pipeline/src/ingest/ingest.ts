@@ -19,6 +19,7 @@ import {
   contactIdentities,
   contacts,
   conversations,
+  desc,
   eq,
   inArray,
   isNull,
@@ -26,6 +27,7 @@ import {
   sql,
 } from "@repo/db";
 import { isObjectPath, tenantPrefix } from "@repo/db/storage";
+import { loadSettings } from "@repo/settings/server";
 import { type AnyJobEvent, jobEvent } from "@repo/jobs";
 
 import type { InboundObserver, PipelineContext } from "../deps";
@@ -41,6 +43,62 @@ const RECEIVING_STATUSES = new Set(["pending", "active", "error"]);
  */
 export function isReplyableKind(kind: string): boolean {
   return kind !== "reaction";
+}
+
+/** Reactions that mean "yes" to a yes-or-no question (`channels.meta.reactions`). */
+const YES_REACTIONS = new Set(["👍", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿", "❤", "❤️", "♥️", "😍", "🥰"]);
+
+/**
+ * `channels.meta.reactions` = "treat_as_reply" (C17: the option did nothing before): on
+ * Messenger and Instagram, a thumbs-up or a heart on the bot's latest message, when that
+ * message asked a question, is stored as the customer's answer (a text message holding the
+ * emoji, with the reaction kept in the payload) and starts a turn like any message. Anything
+ * else stays a reaction: stored, shown, never answered.
+ */
+async function reactionAsAnswer(
+  ctx: BusinessContext,
+  message: NormalizedInboundMessage,
+  conversationId: ConversationId,
+  logger: Pick<PipelineContext, "logger">["logger"] | undefined,
+): Promise<boolean> {
+  const reaction = message.reaction;
+  if (message.kind !== "reaction" || reaction === null || reaction.removed) return false;
+  if (message.channel !== "messenger" && message.channel !== "instagram") return false;
+  if (reaction.emoji === null || !YES_REACTIONS.has(reaction.emoji.trim())) return false;
+  const settings = await loadSettings(ctx, ctx.tenant, logger === undefined ? {} : { logger });
+  if (settings.values["channels.meta.reactions"] !== "treat_as_reply") return false;
+  const [latest] = await ctx.tx
+    .select({
+      author: messages.author,
+      text: messages.text,
+      externalMessageId: messages.externalMessageId,
+      payload: messages.payload,
+    })
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), eq(messages.direction, "outbound")))
+    .orderBy(desc(messages.sequence))
+    .limit(1);
+  if (latest?.author !== "bot") return false;
+  if (!(latest.text ?? "").trim().endsWith("?")) return false;
+  // The reaction must be on that very message (or one of its parts).
+  const parts = (asParts(latest.payload) ?? []).concat(latest.externalMessageId ?? []);
+  return parts.includes(reaction.targetExternalMessageId);
+}
+
+function asParts(payload: unknown): string[] | null {
+  if (payload === null || typeof payload !== "object") return null;
+  const delivery = (payload as Record<string, unknown>)["delivery"];
+  if (delivery === null || typeof delivery !== "object") return null;
+  const parts = (delivery as Record<string, unknown>)["parts"];
+  if (!Array.isArray(parts)) return null;
+  return (parts as unknown[]).flatMap((part): string[] => {
+    const id: unknown =
+      part !== null && typeof part === "object"
+        ? ((part as Record<string, unknown>)["providerMessageId"] ??
+          (part as Record<string, unknown>)["externalMessageId"])
+        : part;
+    return typeof id === "string" ? [id] : [];
+  });
 }
 
 export interface StoredInbound {
@@ -283,7 +341,9 @@ export async function storeInbound(
     });
   }
 
-  const replyable = isReplyableKind(message.kind);
+  const answer = await reactionAsAnswer(ctx, message, conversationId, p?.logger);
+  const kind = answer ? "text" : message.kind;
+  const replyable = isReplyableKind(kind);
   const traceId = newTraceId();
   const inserted = await ctx.tx
     .insert(messages)
@@ -293,9 +353,9 @@ export async function storeInbound(
       channelConnectionId: ref.connectionId,
       direction: "inbound",
       author: "customer",
-      kind: message.kind,
-      text: message.text,
-      payload: payloadOf(message),
+      kind,
+      text: answer ? (message.reaction?.emoji ?? message.text) : message.text,
+      payload: answer ? { ...payloadOf(message), reactionAsAnswer: true } : payloadOf(message),
       externalMessageId: message.externalMessageId,
       replyToExternalMessageId: message.replyToExternalMessageId,
       sequence: counter.sequence,

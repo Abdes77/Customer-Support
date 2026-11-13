@@ -392,6 +392,19 @@ later chunks. Read it together with `docs/ARCHITECTURE.md`.
     mark that reply `failed`. Only a status; consider requiring the report to come through
     the provider's own bounce path (Gmail and Exchange deliver DSNs from their own daemons).
 
+- **Delivered, for C18:** `docs/THREAT_MODEL.md` (threats, mitigations, proofs, accepted
+  risks, every earlier note's outcome), `docs/BACKUP_RESTORE.md`, `@repo/observability`
+  (Sentry client and scrubbing, log listener, limiter, readiness rules), the limits guard
+  (`packages/pipeline/src/limits`), `retention-purge`, `traceMessage` and
+  `pnpm --filter @repo/pipeline trace`, `/api/health/ready`, stuck-work alerts, migration 0015
+  (`stored_uploads`, narrowed `app.scope_user_ids`, `app.purge_audit_log`), new variables
+  `DEVELOPMENT_MODE`, `HEALTH_CHECK_TOKEN`, `TRUSTED_PROXY_HOPS`, `CLIENT_IP_HEADER`, the
+  setting `limits.notice_message`, HUMAN_TODO 19. **For C18:** the runbook should cover
+  `/api/health/ready`, Sentry, the trace command, retention and the restore test of
+  `docs/BACKUP_RESTORE.md`; the load test should leave `limits.*` at their defaults and expect
+  no limit to trip for 50 businesses' bursts; the browser tests run with `DEVELOPMENT_MODE=1`
+  (`apps/web/e2e/support/app-server.ts`).
+
 ### C18 · End-to-end tests and launch preparation
 
 - **Owns:** `apps/web/e2e` journeys, the load test, `docs/RUNBOOK.md`, `docs/ONBOARDING.md`,

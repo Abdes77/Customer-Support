@@ -217,6 +217,8 @@ describe("composition", () => {
       "pipeline-requested-turn",
       "pipeline-send",
       "pipeline-sweeper",
+      // C17: deleting data past its retention.
+      "retention-purge",
       // C6: playbook generation and the website crawl.
       "knowledge-playbook-generate",
       "knowledge-import",

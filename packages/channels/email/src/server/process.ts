@@ -12,6 +12,7 @@ import {
   and,
   type BusinessContext,
   type BusinessTenant,
+  contacts,
   conversations,
   desc,
   eq,
@@ -20,11 +21,19 @@ import {
   messageParts,
   messages,
   sql,
+  storedUploads,
 } from "@repo/db";
+import { uploadPath } from "@repo/db/storage";
 import type { AppResolvedSettings } from "@repo/settings";
 
 import { cleanBody } from "../body/clean";
-import { businessAddressReason, classifyEmail, type EmailClass, replyAddressOf } from "../classify";
+import {
+  businessAddressReason,
+  classifyEmail,
+  type EmailClass,
+  failedDmarc,
+  replyAddressOf,
+} from "../classify";
 import { replyCore } from "../compose";
 import type { EmailConnectionConfig } from "../config";
 import { parseEmail, type ParsedEmail } from "../mime/parse";
@@ -48,6 +57,7 @@ export type ProcessOutcome =
   | "bounce"
   | "bounce_delayed"
   | "bounce_unmatched"
+  | "bounce_unverified"
   | "staff_reply"
   | "internal"
   | "ignored_sender"
@@ -135,20 +145,30 @@ export async function resolveThread(
 }
 
 /** The ids among `candidates` that are messages we sent from this connection. */
+/**
+ * Our outbound messages a delivery report names, among those sent to one of the recipients
+ * the report says failed (C17): a report forged by someone who knows a Message-ID (anyone
+ * the email was sent or forwarded to) must also name its real recipient, and can then only
+ * fail a message to that address.
+ */
 async function ourOutbound(
   ctx: BusinessContext,
   connectionId: ChannelConnectionId,
   candidates: readonly string[],
+  recipients: readonly string[],
 ): Promise<string[]> {
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0 || recipients.length === 0) return [];
   const rows = await ctx.tx
     .select({ id: messages.externalMessageId })
     .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .innerJoin(contacts, eq(contacts.id, conversations.contactId))
     .where(
       and(
         eq(messages.channelConnectionId, connectionId),
         eq(messages.direction, "outbound"),
         inArray(messages.externalMessageId, candidates.slice(0, 50)),
+        inArray(sql`lower(${contacts.email})`, recipients.slice(0, 20)),
       ),
     );
   return rows.map((row) => row.id).filter((id): id is string => id !== null);
@@ -276,15 +296,24 @@ async function storeAttachments(
   const out: InboundAttachment[] = [];
   const selected = selectAttachments(email);
   for (const [index, attachment] of selected.entries()) {
-    const location = await storage.putUpload(
-      {
-        ownerId: context.connectionId,
-        uploadId: uuidFrom(`${context.connectionId}\u0000${messageKey}\u0000${index}`),
-        fileName: attachment.fileName ?? `attachment-${index + 1}`,
-      },
-      attachment.bytes,
-      { contentType: attachment.mimeType },
-    );
+    const upload = {
+      ownerId: context.connectionId,
+      uploadId: uuidFrom(`${context.connectionId}\u0000${messageKey}\u0000${index}`),
+      fileName: attachment.fileName ?? `attachment-${index + 1}`,
+    };
+    // Recorded before the file is written: a file whose email is never ingested is found and
+    // deleted by the retention job (C17). A re-sync writes the same path again.
+    await deps.db
+      .forBusiness(context.tenant.businessId, { agencyId: context.tenant.agencyId })
+      .run((ctx) =>
+        ctx.tx
+          .insert(storedUploads)
+          .values({ ...ctx.tenant, path: uploadPath(context.tenant, upload), source: "email" })
+          .onConflictDoNothing(),
+      );
+    const location = await storage.putUpload(upload, attachment.bytes, {
+      contentType: attachment.mimeType,
+    });
     out.push({
       kind: attachmentKind(attachment.mimeType),
       mimeType: attachment.mimeType,
@@ -351,8 +380,9 @@ export async function processEmail(
 
     case "bounce": {
       if (!kind.failed) return "bounce_delayed";
+      if (kind.spoofed) return "bounce_unverified";
       const ours = await scope.run((ctx) =>
-        ourOutbound(ctx, context.connectionId, kind.candidates),
+        ourOutbound(ctx, context.connectionId, kind.candidates, kind.recipients),
       );
       if (ours.length === 0) return "bounce_unmatched";
       const statuses: DeliveryStatusUpdate[] = ours.map((id) => ({
@@ -447,7 +477,14 @@ export async function processEmail(
           metadata: {
             provider: config.provider,
             providerMessageId: fetched.providerMessageId.slice(0, 200),
-            ...(kind.kind === "automatic" ? { automated: kind.reason } : {}),
+            ...(kind.kind === "automatic"
+              ? { automated: kind.reason }
+              : // The receiving server says From is forged (DMARC failed): stored for the
+                // team, never answered by the bot, so nobody can make the business's inbox
+                // write to an address of their choosing (C17: reflection).
+                failedDmarc(email)
+                ? { automated: "dmarc_fail" }
+                : {}),
           },
         });
         await deps.ingest({ messages: [message], statuses: [], signals: [] });

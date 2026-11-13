@@ -8,6 +8,7 @@ import {
   type TraceId,
 } from "@repo/core";
 import {
+  alerts,
   and,
   type BusinessContext,
   bookings,
@@ -38,6 +39,7 @@ import {
   slotRules,
   zipCodeOf,
 } from "../availability";
+import { googleEventId } from "../calendars/google";
 import type { CalendarClient } from "../calendars/types";
 import { normalizeSchedulingUrl } from "../calendly/client";
 import { linkWithToken } from "../calendly/webhook";
@@ -382,7 +384,22 @@ export interface BookingService {
   ): Promise<ActionOutcome>;
   book(request: BookingRequest & { readonly slotId: string }): Promise<ActionOutcome>;
   cancel(request: BookingRequest & { readonly reason: string }): Promise<ActionOutcome>;
+  /**
+   * Holds that never finished (C17): a booking attempt that stopped after its calendar event
+   * was created and was never retried left a `pending` hold and an event in the calendar.
+   * Holds an hour old are released (cancelled); Google's event, whose id comes from the
+   * booking, is deleted; an event whose id we never learned (Outlook) is named in an in-app
+   * alert for the team to delete. A move that never finished is alerted the same way.
+   */
+  releaseAbandonedHolds(tenant: Tenant): Promise<{
+    readonly released: number;
+    readonly eventsRemoved: number;
+    readonly alerted: number;
+  }>;
 }
+
+/** A hold older than this cannot belong to a turn still running (the lease is minutes). */
+export const ABANDONED_HOLD_MS = 60 * MINUTE_MS;
 
 export function createBookingService(deps: SchedulingDeps): BookingService {
   const clients = calendarClients(deps);
@@ -1192,6 +1209,135 @@ export function createBookingService(deps: SchedulingDeps): BookingService {
         bookingId: existing.id,
       });
       return applied(`Cancelled: the meeting on ${when} is off.`, { cancelled: when });
+    },
+
+    async releaseAbandonedHolds(tenant) {
+      const now = clock();
+      const before = new Date(now.getTime() - ABANDONED_HOLD_MS).toISOString();
+      const stale = await scope(tenant).run((ctx) =>
+        ctx.tx
+          .update(bookings)
+          .set({
+            status: "cancelled",
+            cancelledAt: now,
+            cancelReason: "The booking did not finish; its hold was released.",
+          })
+          .where(
+            and(
+              eq(bookings.status, "pending"),
+              inArray(bookings.provider, ["google_calendar", "outlook_calendar"]),
+              sql`coalesce((${bookings.metadata} ->> 'heldAt')::timestamptz, ${bookings.createdAt}) < ${before}::timestamptz`,
+            ),
+          )
+          .returning({
+            id: bookings.id,
+            provider: bookings.provider,
+            startsAt: bookings.startsAt,
+            conversationId: bookings.conversationId,
+            externalEventId: bookings.externalEventId,
+          }),
+      );
+      const moves = await scope(tenant).run(async (ctx) => {
+        const rows = await ctx.tx
+          .select({ id: bookings.id, conversationId: bookings.conversationId })
+          .from(bookings)
+          .where(
+            and(
+              eq(bookings.status, "confirmed"),
+              sql`(${bookings.metadata} -> 'moveHold' ->> 'heldAt')::timestamptz < ${before}::timestamptz`,
+            ),
+          );
+        for (const row of rows) {
+          await ctx.tx
+            .update(bookings)
+            .set({ metadata: sql`${bookings.metadata} - 'moveHold'` })
+            .where(eq(bookings.id, row.id));
+        }
+        return rows;
+      });
+
+      let eventsRemoved = 0;
+      let alerted = 0;
+      const alert = (
+        bookingId: string,
+        conversationId: string | null,
+        subject: string,
+        startsAt: Date | null,
+      ) =>
+        scope(tenant).run(async (ctx) => {
+          await ctx.tx
+            .insert(alerts)
+            .values({
+              ...ctx.tenant,
+              conversationId: conversationId as never,
+              kind: "calendar_hold_abandoned",
+              severity: "warning",
+              channel: "in_app",
+              recipient: "agency",
+              subject,
+              payload: { bookingId, startsAt: startsAt?.toISOString() ?? null },
+              dedupeKey: `calendar_hold_abandoned:${bookingId}`,
+            })
+            .onConflictDoNothing();
+          alerted += 1;
+        });
+
+      for (const hold of stale) {
+        const provider = hold.provider as SchedulingProvider;
+        const eventId =
+          provider === "google_calendar" ? googleEventId(hold.id) : hold.externalEventId;
+        let removed = false;
+        if (eventId !== null) {
+          try {
+            const ready = await scope(tenant).run(async (ctx) => {
+              const connection = await activeConnection(ctx, provider);
+              if (connection === null) return null;
+              return { connection, token: await accessToken(deps, ctx, connection) };
+            });
+            if (ready !== null) {
+              // Deleting an event that was never made is "already gone": done.
+              await calendarClient(provider).cancelEvent(ready.token, {
+                calendarId: calendarConfigOf(ready.connection).bookingCalendarId,
+                eventId,
+                notifyAttendees: true,
+              });
+              removed = true;
+              eventsRemoved += 1;
+            }
+          } catch (error) {
+            deps.logger.warn("scheduling.abandoned_hold_cleanup_failed", {
+              businessId: tenant.businessId,
+              bookingId: hold.id,
+              error,
+            });
+          }
+        }
+        if (!removed) {
+          await alert(
+            hold.id,
+            hold.conversationId,
+            "A booking did not finish. Check the calendar for an event at this time and delete it if it is there.",
+            hold.startsAt,
+          );
+        }
+      }
+      for (const move of moves) {
+        await alert(
+          move.id,
+          move.conversationId,
+          "Moving a meeting did not finish. Check that the calendar event is at the time the conversation shows.",
+          null,
+        );
+      }
+      if (stale.length > 0 || moves.length > 0) {
+        deps.logger.warn("scheduling.abandoned_holds", {
+          businessId: tenant.businessId,
+          released: stale.length,
+          eventsRemoved,
+          movesAlerted: moves.length,
+        });
+      }
+      return { released: stale.length, eventsRemoved, alerted };
     },
   };
 }

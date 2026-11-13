@@ -31,6 +31,7 @@ import {
   sql,
   takeoverLocks,
 } from "@repo/db";
+import type { AnyJobEvent } from "@repo/jobs";
 import { type AppResolvedSettings, channelSetting } from "@repo/settings";
 import { loadSettings } from "@repo/settings/server";
 
@@ -60,7 +61,13 @@ export type PlanResult =
 export type ClaimResult =
   | { readonly kind: "done"; readonly reason: string }
   | { readonly kind: "busy" }
-  | { readonly kind: "skipped"; readonly turnId: string; readonly reason: string }
+  | {
+      readonly kind: "skipped";
+      readonly turnId: string;
+      readonly reason: string;
+      /** What the guard that stopped the turn wants sent after the claim (C17). */
+      readonly events?: readonly AnyJobEvent[];
+    }
   | ClaimedTurn;
 
 export interface ClaimedTurn {
@@ -283,8 +290,17 @@ export async function claimTurn(
     .where(eq(conversations.id, conversation.id));
 
   const settings = await loadSettings(ctx, ctx.tenant, { logger: p.logger });
-  const reason = await guardReason(ctx, p, conversation, settings, now, "inbound_message");
-  if (reason !== null) {
+  const stop = await guardReason(
+    ctx,
+    p,
+    conversation,
+    settings,
+    now,
+    "inbound_message",
+    data.traceId,
+  );
+  if (stop !== null) {
+    const { reason, events } = stop;
     await finishSkipped(ctx, plan.turnId, conversation.id, throughSeq, reason, now);
     p.logger.info("turn.skipped", {
       traceId: data.traceId,
@@ -292,7 +308,7 @@ export async function claimTurn(
       conversationId: conversation.id,
       reason,
     });
-    return { kind: "skipped", turnId: plan.turnId, reason };
+    return { kind: "skipped", turnId: plan.turnId, reason, events };
   }
   return claimedTurn(ctx, { ...conversation }, plan.turnId, data.traceId, throughSeq);
 }
@@ -362,6 +378,34 @@ async function guardReason(
   settings: AppResolvedSettings,
   now: Date,
   trigger: TurnTrigger,
+  traceId: string,
+): Promise<{ readonly reason: string; readonly events: readonly AnyJobEvent[] } | null> {
+  const reason = await builtInGuardReason(ctx, conversation, settings, trigger);
+  if (reason !== null) return { reason, events: [] };
+
+  const facts: TurnFacts = {
+    tenant: ctx.tenant,
+    conversationId: conversation.id,
+    contactId: conversation.contactId,
+    channel: conversation.channel,
+    trigger,
+    settings,
+    now,
+    traceId,
+  };
+  for (const guard of p.guards) {
+    const events: AnyJobEvent[] = [];
+    const stopped = await guard.check(ctx, { ...facts, emit: (more) => events.push(...more) });
+    if (stopped !== null) return { reason: `${guard.name}:${stopped}`, events };
+  }
+  return null;
+}
+
+async function builtInGuardReason(
+  ctx: BusinessContext,
+  conversation: ConversationState,
+  settings: AppResolvedSettings,
+  trigger: TurnTrigger,
 ): Promise<string | null> {
   if (conversation.status !== "open") return "conversation_closed";
 
@@ -422,20 +466,6 @@ async function guardReason(
     );
   if ((replies?.total ?? 0) >= settings.values["conversation.max_bot_replies"]) {
     return "max_bot_replies";
-  }
-
-  const facts: TurnFacts = {
-    tenant: ctx.tenant,
-    conversationId: conversation.id,
-    contactId: conversation.contactId,
-    channel: conversation.channel,
-    trigger,
-    settings,
-    now,
-  };
-  for (const guard of p.guards) {
-    const reason = await guard.check(ctx, facts);
-    if (reason !== null) return `${guard.name}:${reason}`;
   }
   return null;
 }
@@ -533,8 +563,9 @@ export async function claimRequestedTurn(
     .where(eq(conversations.id, conversation.id));
 
   const settings = await loadSettings(ctx, ctx.tenant, { logger: p.logger });
-  const reason = await guardReason(ctx, p, conversation, settings, now, data.trigger);
-  if (reason !== null) {
+  const stop = await guardReason(ctx, p, conversation, settings, now, data.trigger, data.traceId);
+  if (stop !== null) {
+    const { reason, events } = stop;
     await finishSkipped(ctx, turnId, conversation.id, throughSeq, reason, now);
     p.logger.info("turn.skipped", {
       traceId: data.traceId,
@@ -543,7 +574,7 @@ export async function claimRequestedTurn(
       trigger: data.trigger,
       reason,
     });
-    return { kind: "skipped", turnId, reason };
+    return { kind: "skipped", turnId, reason, events };
   }
   return claimedTurn(ctx, conversation, turnId, data.traceId, throughSeq);
 }

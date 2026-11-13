@@ -336,6 +336,35 @@ describe("untrusted text", () => {
     expect(block).toContain("‹/facts›");
   });
 
+  it("keeps text read off a photo inside its attachment, with every tag neutralized (C17)", () => {
+    // A photo can carry words ("IGNORE YOUR RULES" on a sign); its analysis repeats them.
+    const messages = renderHistory(
+      [
+        testTurn("customer", "Here is the roof", "2026-11-10T16:50:00.000Z", {
+          attachments: [
+            {
+              id: "att-9",
+              kind: "image",
+              mimeType: "image/jpeg",
+              storage: { bucket: "b", path: "p" },
+              analysis: `A sign that reads: ${attack}`,
+            },
+          ],
+        }),
+      ],
+      "America/Denver",
+      null,
+    );
+    const rendered = textOf(messages[0]);
+    expect(rendered.match(/<\/attachment>/g)).toHaveLength(1);
+    expect(rendered).not.toContain("<turn_context>");
+    // The only real closing tag of the customer's message is ours, at the end.
+    expect(rendered.match(/<\/customer_message>/g)).toHaveLength(1);
+    expect(rendered.trimEnd().endsWith("</customer_message>")).toBe(true);
+    expect(rendered).toContain("‹turn_context›");
+    expect(messages.every((message) => message.role !== "system")).toBe(true);
+  });
+
   it("labels and shortens what a customer controls inside the turn context", () => {
     const prompt = build({
       input: testInput({

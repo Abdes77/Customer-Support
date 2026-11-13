@@ -5,7 +5,7 @@ import { type AppSettings, renderTemplate } from "@repo/settings";
 import { loadSettings } from "@repo/settings/server";
 
 import { addDays, localMoment, meetingLabel, MINUTE_MS, minutesOf, zonedInstant } from "../time";
-import { bookingChangedEvent } from "./bookings";
+import { bookingChangedEvent, createBookingService } from "./bookings";
 import { activeConnection } from "./connections";
 import { clockOf, type OutboundMessages, type SchedulingDeps } from "./deps";
 import { meetingTypeLabel } from "./event-text";
@@ -155,6 +155,7 @@ export function createSchedulingJobs(
 ): JobDefinition[] {
   const clock = clockOf(deps);
   const log = deps.logger.child({ component: "scheduling-jobs" });
+  const holds = createBookingService(deps);
 
   const reminders = defineEventJob({
     id: REMINDERS_FUNCTION_ID,
@@ -360,6 +361,7 @@ export function createSchedulingJobs(
     async handler({ step }) {
       const businesses = await step.run("businesses", () => deps.db.directory.listBusinesses());
       let emitted = 0;
+      let released = 0;
       for (const business of businesses) {
         const events = await step.run(`sweep-${business.businessId}`, () =>
           deps.db
@@ -399,8 +401,20 @@ export function createSchedulingJobs(
           });
           emitted += events.length;
         }
+        // Holds of booking attempts that stopped and were never retried (C17).
+        released += await step.run(`holds-${business.businessId}`, async () => {
+          try {
+            return (await holds.releaseAbandonedHolds(business)).released;
+          } catch (error) {
+            deps.logger.error("scheduling.abandoned_holds_failed", {
+              businessId: business.businessId,
+              error,
+            });
+            return 0;
+          }
+        });
       }
-      return { emitted };
+      return { emitted, released };
     },
   });
 

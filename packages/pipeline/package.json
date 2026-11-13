@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
-    "live:roundtrip": "tsx scripts/live-roundtrip.ts"
+    "live:roundtrip": "tsx scripts/live-roundtrip.ts",
+    "trace": "tsx scripts/trace.ts"
   },
   "dependencies": {
     "@repo/ai": "workspace:*",

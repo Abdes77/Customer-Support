@@ -1,6 +1,7 @@
 /**
  * Structured JSON logger with redaction. It has no dependencies so it runs in Node, the edge
- * and tests. C17 swaps the sink (Sentry breadcrumbs, tracing) without changing call sites.
+ * and tests. Process-wide listeners (`addLogListener`) see every record after redaction; C17
+ * reports error records to Sentry through one, without changing call sites.
  *
  * Rules for callers:
  * - Log ids, counts, durations and outcomes. Never log message bodies, emails, phone numbers,
@@ -162,6 +163,33 @@ function levelFromEnv(): LogLevel {
   return raw === "debug" || raw === "info" || raw === "warn" || raw === "error" ? raw : "info";
 }
 
+/**
+ * Receives every record a logger writes, after redaction (C17: error reporting to Sentry).
+ * Listeners run after the sink; one that throws is ignored, so reporting can never break
+ * the code that logged.
+ */
+export type LogListener = (record: LogRecord) => void;
+
+const listeners = new Set<LogListener>();
+
+/** Adds a process-wide listener; returns the function that removes it again. */
+export function addLogListener(listener: LogListener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notify(record: LogRecord): void {
+  for (const listener of listeners) {
+    try {
+      listener(record);
+    } catch {
+      // Reporting must never break the code that logged.
+    }
+  }
+}
+
 export function createLogger(options: LoggerOptions = {}): Logger {
   const threshold = LEVEL_ORDER[options.level ?? levelFromEnv()];
   const sink = options.sink ?? consoleSink;
@@ -171,7 +199,9 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   function write(level: LogLevel, msg: string, fields?: LogFields): void {
     if (LEVEL_ORDER[level] < threshold) return;
     const safe = redact({ ...bindings, ...fields }) as Record<string, unknown>;
-    sink({ ...safe, level, time: now().toISOString(), msg });
+    const record: LogRecord = { ...safe, level, time: now().toISOString(), msg };
+    sink(record);
+    if (listeners.size > 0) notify(record);
   }
 
   return {

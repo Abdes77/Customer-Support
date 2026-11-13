@@ -304,6 +304,21 @@ describe("resolver", () => {
       "voice.volume: unknown_key",
     ]);
 
+    // Every other read path obeys the same rule (C17): the snapshot a pipeline turn takes
+    // (`loadSettings`) and the settings screen's view. A row written behind the store's back
+    // is never in force anywhere.
+    const turn = await t.db
+      .forBusiness(a1.tenant.businessId)
+      .run((ctx) => loadSettings(ctx, a1.tenant));
+    expect(turn.values["voice.tone"]).toBe("professional");
+    expect(turn.values["limits.agency_daily_spend_usd"]).toBeNull();
+    expect(turn.values["model.reply.model"]).toBe("claude-fable-5-2");
+    const view = await service.viewForUser(world.users.aAdmin, businessOf("a1"));
+    const inForce = (key: string) => view.entries.find((entry) => entry.key === key)?.value;
+    expect(inForce("voice.tone")).toBe("professional");
+    expect(inForce("pricing.disclosure")).toBe("never");
+    expect(inForce("model.reply.model")).toBe("claude-fable-5-2");
+
     // Logged once, by key and reason; the stored values stay out of the log.
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ level: "warn", msg: "settings.rows_skipped" });

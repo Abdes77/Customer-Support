@@ -105,6 +105,7 @@ describe("migrations on an empty database", () => {
       "segments",
       "setting_values",
       "setting_versions",
+      "stored_uploads",
       "takeover_locks",
       "usage_counters",
       "users",
