@@ -451,8 +451,9 @@ the public API `/api/widget/v1` in `apps/web`.
 - **Browser script.** One IIFE (about 7 KB gzipped, budget 12 KB, checked by a test with the
   freshness of `src/bundle.generated.ts`), drawn in a shadow root; one request on page load;
   full screen under 640 px; session and open state kept in `localStorage` per key.
-- **End to end.** `pnpm e2e` (Playwright, `apps/web/e2e`): a sample site on an allowed and a
-  refused origin, a qualifying conversation with a photo at 1280×800 and 390×844.
+- **End to end.** `pnpm e2e` (Playwright, `apps/web/e2e`, against a production build of the app on
+  a fresh database: DECISIONS 257): a sample site on an allowed and a refused origin, a
+  qualifying conversation with a photo at 1280×800 and 390×844.
 
 ### As built (C9)
 

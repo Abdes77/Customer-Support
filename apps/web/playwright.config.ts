@@ -5,11 +5,13 @@ import { defineConfig } from "@playwright/test";
 import { APP_URL, SITE_PORT, SITE_URL } from "./e2e/support/config";
 
 /**
- * `pnpm e2e`: browser tests against `next dev` on a fresh database (e2e/support/app-server.ts)
- * and a sample business website on two origins (e2e/support/sample-site.ts). Needs local
- * PostgreSQL (`pnpm services:up`) and a Chromium for Playwright (`pnpm exec playwright
- * install chromium`, or set PLAYWRIGHT_CHROMIUM_PATH). Port 3100 must be free, and no other
- * `next dev` of this app may run at the same time (they share `.next`).
+ * `pnpm e2e`: browser tests against a production build of the app (`next build`, then `next
+ * start`) on a fresh database (e2e/support/app-server.ts) and a sample business website on two
+ * origins (e2e/support/sample-site.ts). Needs local PostgreSQL (`pnpm services:up`) and a
+ * Chromium for Playwright (`pnpm exec playwright install chromium`, or set
+ * PLAYWRIGHT_CHROMIUM_PATH). Port 3100 must be free. The build replaces `apps/web/.next` (not
+ * `.next/dev`, so a running `pnpm dev` is unaffected); do not run another `next build` of this
+ * app at the same time.
  */
 const chromium =
   process.env["PLAYWRIGHT_CHROMIUM_PATH"] ??
@@ -49,10 +51,12 @@ export default defineConfig({
   webServer: [
     {
       command: "pnpm exec tsx e2e/support/app-server.ts",
-      url: `${APP_URL}/api/health`,
+      // Ready when the sign-in page renders (proxy, page and database), not just the process.
+      url: `${APP_URL}/sign-in`,
       // SIGTERM lets the script drop its database (the default is SIGKILL).
       gracefulShutdown: { signal: "SIGTERM", timeout: 15_000 },
-      timeout: 240_000,
+      // `next build` (about 30 to 60 s here, longer on a cold CI machine), then the database.
+      timeout: 480_000,
       reuseExistingServer: false,
       stdout: "ignore",
       stderr: "pipe",

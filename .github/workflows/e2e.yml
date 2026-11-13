@@ -1,7 +1,8 @@
 name: e2e
 
-# Browser tests (`pnpm e2e`, Playwright in apps/web/e2e) against `next dev` on a fresh local
-# database. No vendor account: jobs run in-process and the offline model answers.
+# Browser tests (`pnpm e2e`, Playwright in apps/web/e2e) against a production build of the app
+# (`next build`, then `next start`, both started by apps/web/e2e/support/app-server.ts) on a
+# fresh local database. No vendor account: jobs run in-process and the offline model answers.
 on:
   pull_request:
   push:
