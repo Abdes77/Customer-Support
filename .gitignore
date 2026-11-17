@@ -1,0 +1,4 @@
+autobuild/logs/
+node_modules/
+.env
+.env.local
