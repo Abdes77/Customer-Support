@@ -31,8 +31,12 @@
       "review": "applied"
     },
     "T4": {
-      "status": "todo",
-      "attempts": 0
+      "status": "done",
+      "attempts": 1,
+      "done_at": "2026-11-17T13:50:50Z",
+      "model": "haiku",
+      "effort": "low",
+      "review": "none"
     }
   },
   "known": [
