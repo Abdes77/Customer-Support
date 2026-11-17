@@ -5,13 +5,19 @@
  *
  * Every variable here must also be declared in packages/core/src/env/spec.ts.
  */
+/** A variable that is set to nothing counts as not set. */
+function nonEmpty(value: string | undefined): string | undefined {
+  return value === undefined || value === "" ? undefined : value;
+}
+
 export const publicEnv = {
   appUrl: process.env.NEXT_PUBLIC_APP_URL,
   supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
   // Supabase's integration on Vercel provides the key under its newer name (`ENV_ALIASES`
   // in `@repo/core/env` does the same for server code).
   supabaseAnonKey:
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+    nonEmpty(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) ??
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
   metaAppId: process.env.NEXT_PUBLIC_META_APP_ID,
   sentryDsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 } as const;
