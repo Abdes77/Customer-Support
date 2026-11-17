@@ -167,6 +167,34 @@ function boot(script: HTMLScriptElement): void {
 
   let token: string | null = load().token ?? null;
 
+  // The page the chat sits on may open it, or send a line for the visitor (a "Chat with us"
+  // button, a suggested question):
+  //   document.dispatchEvent(new CustomEvent("hsrb-chat:open"))
+  //   document.dispatchEvent(new CustomEvent("hsrb-chat:send", { detail: "My roof leaks" }))
+  // A request that arrives before the chat is drawn is kept and carried out once it is. A
+  // page that may ask even before this script has run checks `window.hsrbChatListening` and
+  // otherwise pushes `[name, detail]` onto the array `window.hsrbChatQueue`.
+  type PageRequest = readonly [name: string, detail: unknown];
+  const waiting: PageRequest[] = [];
+  let carryOut: ((request: PageRequest) => void) | null = null;
+  const fromPage = (request: PageRequest) => {
+    if (carryOut === null) waiting.push(request);
+    else carryOut(request);
+  };
+  for (const name of ["hsrb-chat:open", "hsrb-chat:send"]) {
+    document.addEventListener(name, (event) =>
+      fromPage([name, (event as CustomEvent<unknown>).detail]),
+    );
+  }
+  const queued = globals["hsrbChatQueue"];
+  if (Array.isArray(queued)) {
+    for (const item of queued as unknown[]) {
+      if (Array.isArray(item) && typeof item[0] === "string") fromPage([item[0], item[1]]);
+    }
+  }
+  globals["hsrbChatQueue"] = undefined;
+  globals["hsrbChatListening"] = true;
+
   async function call<T>(
     path: string,
     init: { method?: string; json?: unknown; form?: FormData; auth?: boolean } = {},
@@ -712,18 +740,14 @@ function boot(script: HTMLScriptElement): void {
       if (!document.hidden && session !== null) void poll();
       else schedule();
     });
-    // The page the chat sits on may open it, or send a line for the visitor (a "Chat with
-    // us" button, a suggested question):
-    //   document.dispatchEvent(new CustomEvent("hsrb-chat:open"))
-    //   document.dispatchEvent(new CustomEvent("hsrb-chat:send", { detail: "My roof leaks" }))
-    document.addEventListener("hsrb-chat:open", () => {
+    // What the page asked for (see `fromPage` in `boot`), now that the chat is drawn.
+    carryOut = ([name, detail]) => {
       if (!isOpen) setOpen(true);
-    });
-    document.addEventListener("hsrb-chat:send", (event) => {
-      const text: unknown = (event as CustomEvent<unknown>).detail;
-      if (!isOpen) setOpen(true);
-      if (typeof text === "string") void sendText(text.slice(0, config.maxTextLength));
-    });
+      if (name === "hsrb-chat:send" && typeof detail === "string") {
+        void sendText(detail.slice(0, config.maxTextLength));
+      }
+    };
+    for (const request of waiting.splice(0)) carryOut(request);
 
     // --- start -----------------------------------------------------------------------------
     const stored = load();

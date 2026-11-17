@@ -1030,7 +1030,9 @@ of C8, the conversation runs through the pipeline and the engine, the lead is th
   every 2.5 s.
 - **Driving the chat from the page.** The browser script listens on `document` for
   `hsrb-chat:open` and `hsrb-chat:send` (detail: the text), which any page it is embedded on
-  may send: the demo's "Chat with ..." button and its sample questions.
+  may send: the demo's "Chat with ..." button and its sample questions. A request made before
+  the chat is drawn is kept and carried out once it is; one made before the script has run
+  waits in `window.hsrbChatQueue` (`components/demo/chat-actions.tsx`).
 - **Sample businesses.** `pnpm demo:setup` (`apps/web/scripts/demo-setup.ts`,
   `apps/web/src/server/demo/provision.ts`, content in `sample-businesses.ts`): five invented
   businesses in one agency, each through the existing paths: `assignSegment` (the trade's

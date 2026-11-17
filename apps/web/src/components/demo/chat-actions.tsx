@@ -8,12 +8,26 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
  * send.
  */
 
+/**
+ * Tells the chat script what the visitor asked for. A click can come before the script has
+ * run (it loads on its own): the request then waits in `window.hsrbChatQueue`, which the
+ * script reads when it starts.
+ */
+function tellChat(name: "hsrb-chat:open" | "hsrb-chat:send", detail?: string): void {
+  const page = window as unknown as { hsrbChatListening?: boolean; hsrbChatQueue?: unknown[] };
+  if (page.hsrbChatListening === true) {
+    document.dispatchEvent(new CustomEvent(name, { detail }));
+  } else {
+    (page.hsrbChatQueue ??= []).push([name, detail]);
+  }
+}
+
 function openChat(): void {
-  document.dispatchEvent(new CustomEvent("hsrb-chat:open"));
+  tellChat("hsrb-chat:open");
 }
 
 function sendToChat(text: string): void {
-  document.dispatchEvent(new CustomEvent("hsrb-chat:send", { detail: text }));
+  tellChat("hsrb-chat:send", text);
 }
 
 export function OpenChatButton({
