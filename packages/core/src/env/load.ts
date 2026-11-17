@@ -17,6 +17,32 @@ export type EnvSource = Readonly<Record<string, string | undefined>>;
 const HUMAN_TODO_HINT = "See docs/HUMAN_TODO.md for where to get each value.";
 
 /**
+ * Other names a value may arrive under. Supabase's integration on Vercel sets its own names
+ * on the project it is connected to (its database strings, and the newer publishable and
+ * secret keys in place of the anon and service-role ones); with these the integration alone
+ * configures the database, sign-in and storage. The spec's own name wins when both are set.
+ */
+export const ENV_ALIASES: Readonly<Partial<Record<EnvName, readonly string[]>>> = {
+  DATABASE_URL: ["POSTGRES_URL"],
+  DATABASE_URL_DIRECT: ["POSTGRES_URL_NON_POOLING"],
+  NEXT_PUBLIC_SUPABASE_URL: ["SUPABASE_URL"],
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: [
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_PUBLISHABLE_KEY",
+  ],
+  SUPABASE_SERVICE_ROLE_KEY: ["SUPABASE_SECRET_KEY"],
+};
+
+/** The value of the first of these names that is set to something. */
+function firstSet(source: EnvSource, names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const value = source[name]?.trim();
+    if (value !== undefined && value !== "") return value;
+  }
+  return undefined;
+}
+
+/**
  * Parses and validates environment variables. Unset and empty variables are treated the same.
  * Throws one ConfigError naming every malformed variable; values never appear in the message.
  */
@@ -26,8 +52,7 @@ export function loadEnv(source: EnvSource): Env {
 
   for (const name of ENV_NAMES) {
     const spec: EnvVarSpec = ENV_SPEC[name];
-    const raw = source[name];
-    const value = raw === undefined || raw.trim() === "" ? spec.default : raw.trim();
+    const value = firstSet(source, [name, ...(ENV_ALIASES[name] ?? [])]) ?? spec.default;
     if (value === undefined) {
       parsed[name] = undefined;
       continue;

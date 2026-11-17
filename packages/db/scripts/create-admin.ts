@@ -32,13 +32,16 @@ async function main(): Promise<void> {
       password: { type: "string" },
     },
   });
-  const { agency, slug, email, password } = values;
+  const { agency, slug, email } = values;
   if (slug === undefined || email === undefined) {
     throw new ValidationError(
       'Usage: pnpm db:create-admin --agency "Agency name" --slug agency-slug --email person@example.com',
     );
   }
   const env = getEnv();
+  // From the environment when a deployment's build creates the first login (`predeploy`): a
+  // password on a command line would end up in the build log.
+  const password = values.password ?? env.DEPLOY_ADMIN_PASSWORD;
   if (env.DATABASE_URL === undefined) throw new ConfigError("Set DATABASE_URL.");
   const db = createDatabase({ url: env.DATABASE_URL, max: 2, applicationName: "hsrb-admin" });
   try {

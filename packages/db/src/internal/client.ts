@@ -33,11 +33,33 @@ export interface Connection {
   readonly db: RawDatabase;
 }
 
+/**
+ * Connection strings handed out for other clients carry parameters that are not PostgreSQL
+ * settings: Supabase's integration on Vercel appends `supa=base-pooler.x`, strings written
+ * for Prisma `pgbouncer=true` or `connection_limit=1`. postgres.js sends every parameter it
+ * does not know to the server as a setting, and PostgreSQL refuses the connection over one
+ * it does not have. They mean nothing here (prepared statements are off for every
+ * connection), so they are dropped. A string that is not a URL is passed on as it is.
+ */
+const FOREIGN_PARAMETERS = ["supa", "pgbouncer", "connection_limit", "pool_timeout", "workaround"];
+
+export function cleanConnectionUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (!FOREIGN_PARAMETERS.some((name) => parsed.searchParams.has(name))) return url;
+  for (const name of FOREIGN_PARAMETERS) parsed.searchParams.delete(name);
+  return parsed.toString();
+}
+
 const JSON_OID = 114;
 const JSONB_OID = 3802;
 
 export function connect(url: string, options: ConnectOptions = {}): Connection {
-  const client = postgres(url, {
+  const client = postgres(cleanConnectionUrl(url), {
     max: options.max ?? 5,
     // The Supabase pooler in transaction mode cannot keep prepared statements.
     prepare: false,

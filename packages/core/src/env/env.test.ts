@@ -41,6 +41,34 @@ describe("loadEnv", () => {
     expect(env.CREDENTIALS_ENCRYPTION_KEY).toBe(VALID_KEY);
   });
 
+  it("takes the values Supabase's integration on Vercel sets under its own names", () => {
+    const env = loadEnv({
+      POSTGRES_URL: "postgres://u:p@pooler.example.com:6543/postgres?supa=base-pooler.x",
+      POSTGRES_URL_NON_POOLING: "postgres://u:p@pooler.example.com:5432/postgres",
+      SUPABASE_URL: "https://abc.supabase.co",
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_x",
+      SUPABASE_SECRET_KEY: "sb_secret_x",
+    });
+    expect(env.DATABASE_URL).toContain(":6543/");
+    expect(env.DATABASE_URL_DIRECT).toContain(":5432/");
+    expect(env.NEXT_PUBLIC_SUPABASE_URL).toBe("https://abc.supabase.co");
+    expect(env.NEXT_PUBLIC_SUPABASE_ANON_KEY).toBe("sb_publishable_x");
+    expect(env.SUPABASE_SERVICE_ROLE_KEY).toBe("sb_secret_x");
+    expect(hasEnv(env, "DATABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")).toBe(true);
+    expect(missingProductionEnv(env)).not.toContain("DATABASE_URL");
+  });
+
+  it("prefers a variable's own name over the integration's, and skips an empty one", () => {
+    const env = loadEnv({
+      DATABASE_URL: "postgresql://own",
+      POSTGRES_URL: "postgres://integration",
+      SUPABASE_SERVICE_ROLE_KEY: " ",
+      SUPABASE_SECRET_KEY: "sb_secret_x",
+    });
+    expect(env.DATABASE_URL).toBe("postgresql://own");
+    expect(env.SUPABASE_SERVICE_ROLE_KEY).toBe("sb_secret_x");
+  });
+
   it("rejects an encryption key with characters outside the base64 alphabet", () => {
     expect(() => loadEnv({ CREDENTIALS_ENCRYPTION_KEY: `!${VALID_KEY}` })).toThrow(ConfigError);
     expect(() => loadEnv({ CREDENTIALS_ENCRYPTION_KEY: VALID_KEY.slice(0, 20) })).toThrow(

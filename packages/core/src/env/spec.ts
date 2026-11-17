@@ -106,6 +106,24 @@ export const ENV_SPEC = {
     secret: false,
     required: "optional",
   },
+  DEPLOY_ADMIN_EMAIL: {
+    schema: z.email(),
+    group: "app",
+    description:
+      "With DEPLOY_MIGRATE=1 and DEPLOY_DEMO_AGENCY: the build makes the person with this email address an admin of that agency (what pnpm db:create-admin does), creating their login when it does not exist yet. For the first sign-in on a new installation.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
+  DEPLOY_ADMIN_PASSWORD: {
+    schema: nonEmpty,
+    group: "app",
+    description:
+      "The password of the login the build creates for DEPLOY_ADMIN_EMAIL (at least 8 characters). Used once, when that login does not exist yet; remove the variable after the first sign-in.",
+    example: "",
+    secret: true,
+    required: "optional",
+  },
   HEALTH_CHECK_TOKEN: {
     schema: z.string().min(24),
     group: "app",

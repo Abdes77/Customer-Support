@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { auditLog } from "../schema/tables";
 import { createTestDatabase, createWorld, type TestDatabase, type World } from "../testing";
+import { cleanConnectionUrl, connect } from "./client";
 
 let t: TestDatabase;
 let world: World;
@@ -92,5 +93,41 @@ describe("json and jsonb columns", () => {
       sql`select '"55408"'::jsonb as b, '{"a":"true"}'::json as j`,
     )) as unknown as readonly Record<string, unknown>[];
     expect(rows[0]).toStrictEqual({ b: '"55408"', j: '{"a":"true"}' });
+  });
+});
+
+describe("connection strings written for other clients", () => {
+  it("drops the parameters that are not PostgreSQL settings", () => {
+    // Supabase's integration on Vercel, and strings written for Prisma.
+    expect(
+      cleanConnectionUrl(
+        "postgres://postgres.ref:pw@aws-0-eu.pooler.supabase.com:6543/postgres?sslmode=require&supa=base-pooler.x",
+      ),
+    ).toBe("postgres://postgres.ref:pw@aws-0-eu.pooler.supabase.com:6543/postgres?sslmode=require");
+    expect(cleanConnectionUrl("postgresql://u:p@h:6543/d?pgbouncer=true&connection_limit=1")).toBe(
+      "postgresql://u:p@h:6543/d",
+    );
+  });
+
+  it("leaves every other string exactly as it is", () => {
+    for (const url of [
+      "postgresql://hsrb:hsrb@127.0.0.1:5432/hsrb_dev",
+      "postgresql://u:p%40ss@h/d?sslmode=require&application_name=x",
+      "not a url",
+    ]) {
+      expect(cleanConnectionUrl(url)).toBe(url);
+    }
+  });
+
+  it("connects with such a string, which PostgreSQL itself would refuse", async () => {
+    const { client } = connect(`${t.url}${t.url.includes("?") ? "&" : "?"}supa=base-pooler.x`, {
+      max: 1,
+    });
+    try {
+      const rows = await client`select 1 as ok`;
+      expect(rows[0]?.["ok"]).toBe(1);
+    } finally {
+      await client.end({ timeout: 2 });
+    }
   });
 });
