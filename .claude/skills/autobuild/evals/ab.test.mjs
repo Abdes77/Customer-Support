@@ -18,8 +18,19 @@ const SCRIPT = path.join(HERE, '..', 'scripts', 'ab.mjs');
 const exists = (f) => `node -e "process.exit(require('fs').existsSync('${f}')?0:1)"`;
 const VERIFY = `node -e "process.exit(require('fs').existsSync('broken.txt')?1:0)"`;
 
+// Every command acts as one fixed cloud session unless a test says otherwise.
+process.env.AUTOBUILD_SESSION = 'session_planner0001';
+process.env.AUTOBUILD_START_WAIT_S = '0';
+
 let dir;
 const sh = (cmd, args, opts = {}) => spawnSync(cmd, args, { cwd: dir, encoding: 'utf8', ...opts });
+// Run a command as another cloud session.
+const abAs = (session, ...a) => {
+  const r = sh('node', ['autobuild/ab.mjs', ...a], { env: { ...process.env, AUTOBUILD_SESSION: session } });
+  let json = null;
+  try { json = JSON.parse(r.stdout); } catch { /* plain text */ }
+  return { status: r.status, json, text: r.stdout + r.stderr };
+};
 const git = (...a) => sh('git', a);
 const ab = (...a) => {
   const r = sh('node', ['autobuild/ab.mjs', ...a]);
@@ -593,6 +604,130 @@ test('works outside git', () => {
   assert.equal(ab('init').json.result, 'ready');
   next(); build('A1');
   assert.equal(gate().result, 'pass');
+});
+
+// ----------------------------------- two sessions -------------------------------------------
+
+const RULES = `# Rules\n\n## Rules for every builder\n\n1. Never ask.\n\n## Rules for reviewers\n\n1. Find what the checks cannot.\n\n## Environment\n\n- Node 22.\n`;
+
+test('only the session that runs the build may act on it', () => {
+  project([step('A1')]);
+  ab('init');
+  assert.equal(readJ('autobuild/state.json').runner, 'planner0001');
+  assert.equal(abAs('session_stranger0002', 'next').json.action, 'not_runner');
+  assert.equal(abAs('cse_stranger0002', 'gate').status, 1);
+  assert.equal(abAs('session_stranger0002', 'pause', 'x').status, 1);
+  const hook = (session) => sh('node', ['autobuild/ab.mjs', 'hook-stop'], { input: '{}', env: { ...process.env, AUTOBUILD_SESSION: session } }).stdout;
+  assert.equal(hook('session_stranger0002'), '', 'the stop hook leaves other sessions alone');
+  assert.ok(hook('cse_planner0001').includes('"decision": "block"'), 'the id prefix does not matter');
+  assert.equal(next().action, 'build');
+  const t = abAs('session_stranger0002', 'takeover').json;
+  assert.deepEqual([t.result, t.from], ['taken_over', 'session_planner0001']);
+  assert.equal(next().action, 'not_runner', 'after a takeover the old runner is refused');
+  const st = abAs('session_stranger0002', 'start').json;
+  assert.deepEqual([st.result, st.next.action, st.next.attempt], ['started', 'build', 1]);
+});
+
+test('lean agent types are generated from the rules and guarded', () => {
+  project([step('A1')]);
+  write('autobuild/RULES.md', RULES);
+  const a = ab('agents').json;
+  assert.equal(a.result, 'written');
+  const b = readT('.claude/agents/autobuild-builder.md');
+  assert.ok(b.startsWith('---\nname: autobuild-builder\n'));
+  assert.ok(b.includes('tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch'));
+  assert.ok(b.includes('1. Never ask.') && b.includes('- Node 22.') && !b.includes('Find what the checks cannot'));
+  const r = readT('.claude/agents/autobuild-reviewer.md');
+  assert.ok(r.includes('Find what the checks cannot') && r.includes('1. Never ask.'));
+  ab('init');
+  assert.equal(ab('lean', 'on').json.lean_agents, true);
+  const n = next();
+  assert.equal(n.agent.subagent_type, 'autobuild-builder');
+  assert.ok(n.agent.prompt.includes('Your rules are part of your instructions') && !n.agent.prompt.includes('RULES.md'));
+  assert.ok(n.then.if_the_agent_type_does_not_exist.includes('lean off'));
+  write('.claude/agents/autobuild-builder.md', 'tampered\n');
+  build('A1');
+  const g = gate();
+  assert.equal(g.result, 'fail');
+  assert.ok(g.summary.includes('autobuild-builder.md'));
+  assert.ok(readT('.claude/agents/autobuild-builder.md').includes('name: autobuild-builder'), 'restored');
+  const off = ab('lean', 'off').json;
+  assert.deepEqual([off.lean_agents, off.next.agent.subagent_type], [false, 'general-purpose']);
+  assert.ok(off.next.agent.prompt.includes('autobuild/RULES.md'));
+});
+
+test('a step can ask for the full agent even when lean agents are on', () => {
+  project([step('A1', { full_agent: true }), step('A2', { review: OPUS })]);
+  write('autobuild/RULES.md', RULES);
+  ab('agents'); ab('init'); ab('lean', 'on');
+  assert.equal(next().agent.subagent_type, 'general-purpose');
+  build('A1');
+  const g = gate();
+  assert.equal(g.next.agent.subagent_type, 'autobuild-builder');
+  build('A2');
+  assert.equal(gate().next.agent.subagent_type, 'autobuild-reviewer');
+});
+
+test('handoff: the build session starts from its own clone and the planning session is locked out', () => {
+  project([step('A1'), step('A2', { depends_on: ['A1'] })]);
+  write('autobuild/RULES.md', RULES);
+  const planning = dir, remote = `${dir}-remote.git`, building = `${dir}-build`;
+  spawnSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+  git('remote', 'add', 'origin', remote);
+  ab('agents');
+  assert.equal(ab('init').json.push, 'pushed');
+  ab('watchdog', 'trig_planning');
+  assert.equal(ab('handoff').status, 1, 'needs the id of the build session');
+  assert.equal(ab('handoff', 'session_planner0001').status, 1, 'not to itself');
+  const h = ab('handoff', 'session_builder00003').json;
+  assert.deepEqual([h.result, h.runner, h.lean_agents], ['handed_off', 'session_builder00003', true], JSON.stringify(h));
+  assert.ok(h.now[0].includes('trig_planning'), 'the planning session is told to delete its own check-in');
+  assert.equal(next().action, 'not_runner');
+  assert.equal(ab('gate').status, 1);
+  assert.equal(ab('status', '--remote', '--json').json.runner_started_at, null);
+
+  spawnSync('git', ['clone', '-q', remote, building]);
+  dir = building;
+  git('config', 'user.name', 'build'); git('config', 'user.email', 'build@example.com');
+  const B = 'cse_builder00003';
+  const st = abAs(B, 'start').json;
+  assert.deepEqual([st.result, st.lean_agents, st.report_to], ['started', true, 'session_planner0001'], JSON.stringify(st));
+  assert.ok(st.check_in.create_scheduled_task.prompt.includes('git checkout main'), 'the build session is told to create its own check-in');
+  assert.deepEqual([st.next.action, st.next.id, st.next.agent.subagent_type], ['build', 'A1', 'autobuild-builder']);
+  assert.equal(abAs(B, 'watchdog', 'trig_build').json.watchdog, 'trig_build');
+  build('A1');
+  const g = abAs(B, 'gate', '--wait', '60').json;
+  assert.deepEqual([g.result, g.push, g.next.id], ['pass', 'pushed', 'A2'], JSON.stringify(g));
+  assert.equal(abAs(B, 'start').json.result, 'resumed', 'start is also how a run is resumed');
+
+  dir = planning;
+  const seen = ab('status', '--remote', '--json').json;
+  assert.deepEqual([seen.progress.done, seen.runner, !!seen.runner_started_at], [1, 'session_builder00003', true], 'the planning session can watch');
+  assert.ok(ab('status', '--remote').text.includes('[x] A1'));
+
+  dir = building;
+  build('A2');
+  abAs(B, 'gate', '--wait', '60');
+  const f = abAs(B, 'finish').json;
+  assert.deepEqual([f.result, f.report_to], ['finished', 'session_planner0001']);
+  assert.ok(f.still_to_do.some((x) => x.includes('send_message')) && f.still_to_do.some((x) => x.includes('trig_build')));
+  fs.rmSync(remote, { recursive: true, force: true });
+  fs.rmSync(planning, { recursive: true, force: true });
+});
+
+test('a build session that starts before it was handed the run is refused', () => {
+  project([step('A1')]);
+  ab('init');
+  const r = abAs('session_builder00003', 'start');
+  assert.equal(r.status, 1);
+  assert.ok(r.json.message.includes('run by another session'));
+});
+
+test('the check-in to schedule names the build branch', () => {
+  project([step('A1')]);
+  const c = ab('checkin').json.create_scheduled_task;
+  assert.deepEqual([c.name, c.cron_expression, c.initiation], ['Autobuild check-in', '0 * * * *', 'own_followup']);
+  assert.ok(c.prompt.includes('git checkout main') && c.prompt.includes('ab.mjs start'));
 });
 
 console.log(`\n${passed} tests passed`);

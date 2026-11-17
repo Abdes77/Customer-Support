@@ -6,6 +6,12 @@
 //
 //   validate              lint autobuild/plan.json and the step briefs
 //   init                  validate, create state.json and .gitignore entries, commit, push
+//   agents                write the lean agent types (.claude/agents/) from RULES.md
+//   checkin               print the scheduled check-in to create (name, schedule, prompt)
+//   handoff <session id>  give the run to a build session started for it
+//   start                 begin or resume the run in this session; prints the first action
+//   takeover [--lean]     make this session the runner when the previous runner is gone
+//   lean on|off           use the lean agent types, or the general-purpose agent
 //   next                  print the next action as JSON (build, review, rescue, finish, ...)
 //   gate [--wait N]       check the action just issued: report, verify command, step checks
 //   replan                re-validate after the plan was edited (rescue or milestone refresh)
@@ -13,11 +19,14 @@
 //   block "<reason>"      rescue option: give up on the step; its dependents are skipped
 //   pause "<reason>"      stop issuing actions (also lets the Stop hook release the session)
 //   resume                undo pause
-//   status [--json]       progress table
+//   status [--json] [--remote]   progress table (--remote: as pushed, for a session that is not the runner)
 //   settings              print the suggested .claude/settings.json (allow rules + Stop hook)
 //   watchdog <id>|clear   remember the id of the scheduled check-in so finish can name it
 //   finish                close the run once no step is left
 //   hook-stop             Stop hook: keeps the session going while steps remain
+//
+// One session at a time runs a build. In a cloud session the script knows which session it is
+// in, and refuses to act for any session other than the runner recorded in state.json.
 //
 // A gate result carries the following action under "next", so the loop is: start the agent,
 // run the gate, start the next agent. An agent that runs longer than a moment is moved to the
@@ -49,6 +58,11 @@ const P = {
   self: `${AB}/${path.basename(SELF)}`,
 };
 const ME = `node ${P.self}`;
+const AGENTS = { builder: '.claude/agents/autobuild-builder.md', reviewer: '.claude/agents/autobuild-reviewer.md' };
+
+// The cloud session this script runs in, without the id's prefix; null on a local machine.
+const sessionKey = (id) => (id ? String(id).trim().replace(/^[a-z]+_/i, '') : null);
+const MY_SESSION = sessionKey(process.env.AUTOBUILD_SESSION || process.env.CLAUDE_CODE_REMOTE_SESSION_ID);
 
 const TIERS = ['haiku', 'sonnet', 'opus', 'fable'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -258,6 +272,8 @@ function validate() {
 
     if (s.protect !== undefined && !(Array.isArray(s.protect) && s.protect.every((x) => str(x) && !x.startsWith('/') && !x.split('/').includes('..')))) E(`${at}: protect must be an array of paths inside the repository (the files this step may not change)`);
 
+    if (s.full_agent !== undefined && typeof s.full_agent !== 'boolean') E(`${at}: full_agent must be true or false`);
+
     // What would catch a wrong result? Only commands that always run count.
     const own = checks ? checks.filter((c) => c && alwaysRun(c)).length : 0;
     const viaVerify = str(s.id) && !s.skip_verify && (!plan.verify_from || steps.findIndex((x) => x && x.id === plan.verify_from) <= i);
@@ -356,6 +372,14 @@ function saveState(s) {
 }
 const st = (s, id) => (s.steps[id] ??= { status: 'todo', attempts: 0 });
 
+// Why this session may not act on the run, or null when it may.
+function notRunner(s) {
+  if (!s || !s.runner || !MY_SESSION || s.runner === MY_SESSION) return null;
+  return `This build is run by another session (session_${s.runner}). Do not run it here. Only if that session is gone and the user asked you to continue the build in this session, run "${ME} takeover" first.`;
+}
+const agentsExist = () => Object.values(AGENTS).every((f) => read(f) !== null);
+const hasRemote = () => isRepo() && git('remote', 'get-url', 'origin').status === 0;
+
 function counts(plan, s) {
   const c = { total: plan.steps.length, done: 0, blocked: 0, skipped: 0, todo: 0 };
   for (const step of plan.steps) { const x = (s.steps[step.id] || {}).status || 'todo'; c[x === 'todo' ? 'todo' : x]++; }
@@ -383,11 +407,11 @@ function pick(plan, s) {
 
 // ---------- prompts ----------
 
-function buildPrompt(plan, step, c, failure) {
+function buildPrompt(plan, step, c, failure, lean) {
   const lines = [
     `You are building one step of an unattended software build. Nobody is watching and nobody can answer a question.`,
     `The repository root is ${ROOT}. Work there; every path below is relative to it.`,
-    `1. Read ${P.rules} and follow the section "Rules for every builder".`,
+    lean ? `1. Your rules are part of your instructions. Follow them.` : `1. Read ${P.rules} and follow the section "Rules for every builder".`,
     `2. Read ${P.steps}/${step.id}.md and build exactly that step: ${step.id} "${step.title}".`,
     `3. Finish by writing ${P.reports}/${step.id}.md the way the rules describe. Its first line must be "STATUS: DONE" or "STATUS: BLOCKED". Writing it is your last action: after it, change nothing and run nothing.`,
   ];
@@ -398,11 +422,11 @@ function buildPrompt(plan, step, c, failure) {
   return lines.join('\n');
 }
 
-function reviewPrompt(plan, step, c, failure) {
+function reviewPrompt(plan, step, c, failure, lean) {
   const lines = [
     `You are reviewing one step of an unattended software build. Nobody is watching and nobody can answer a question.`,
     `The repository root is ${ROOT}. Work there; every path below is relative to it.`,
-    `1. Read ${P.rules} and follow the section "Rules for reviewers".`,
+    lean ? `1. Your rules are part of your instructions. Follow them.` : `1. Read ${P.rules} and follow the section "Rules for reviewers".`,
     `2. Read ${P.steps}/${step.id}.md, the brief for step ${step.id} "${step.title}".`,
     c.base && c.built ? `3. The step's changes are: git diff ${c.base} ${c.built}` : `3. The step's changes are the most recent commit: git show HEAD`,
     `4. Fix what you find in the working tree, keep "${plan.verify}" passing, and write ${P.reports}/${step.id}.review.md. Writing it is your last action: after it, change nothing and run nothing.`,
@@ -423,7 +447,7 @@ function reviewPrompt(plan, step, c, failure) {
 
 function guardFiles() {
   const briefs = fs.existsSync(P.steps) ? fs.readdirSync(P.steps).filter((f) => f.endsWith('.md')).sort().map((f) => `${P.steps}/${f}`) : [];
-  return [P.plan, P.rules, P.orch, P.self, P.state, ...briefs];
+  return [P.plan, P.rules, P.orch, P.self, P.state, ...briefs, ...Object.values(AGENTS).filter((f) => read(f) !== null)];
 }
 function setGuard(protect) {
   const files = {};
@@ -488,18 +512,21 @@ function cmdInit() {
   fs.rmSync(`${P.logs}/hook.json`, { force: true });
   ensureIgnore();
   let s = loadState();
-  if (!s) { s = { version: 1, status: 'running', started_at: now(), current: null, steps: {}, known: plan.steps.map((x) => x.id), watchdog: null }; notes.push('New run.'); }
+  const nr = notRunner(s);
+  if (nr) die(nr);
+  if (!s) { s = { version: 1, status: 'running', started_at: now(), runner: MY_SESSION, lean: false, current: null, steps: {}, known: plan.steps.map((x) => x.id), watchdog: null }; notes.push('New run.'); }
   else { s.known = plan.steps.map((x) => x.id); notes.push(`Existing run kept: ${counts(plan, s).done} steps already done.`); }
   saveState(s);
   const c = commit(`autobuild: plan for ${plan.project} (${plan.steps.length} steps)`, plan);
   if (!c.ok) notes.push(`Commit failed: ${c.error}`);
-  out({ result: 'ready', steps: plan.steps.length, warnings, notes, push: push(s), then: `${ME} next` });
+  out({ result: 'ready', steps: plan.steps.length, warnings, notes, push: push(s), then: `${ME} start` });
 }
 
 function cmdReplan() {
   const { errors, warnings, plan } = validate();
   if (errors.length) { out({ result: 'invalid', errors, warnings, hint: 'Fix the plan and run replan again. The run does not continue until the plan is valid.' }); process.exit(1); }
   const s = loadState() || die(`No ${P.state}. Run init first.`);
+  if (notRunner(s)) die(notRunner(s));
   if (s.current && s.current.phase !== 'rescue') die(`Step ${s.current.id} is in progress (${s.current.phase}). Finish it with next and gate before changing the plan.`);
   const fresh = plan.steps.map((x) => x.id).filter((id) => !(s.known || []).includes(id));
   let parked = null;
@@ -527,6 +554,7 @@ function nextAction() {
   if (!s) return { action: 'init', hint: `No state yet. Run "${ME} init".` };
   if (s.status === 'paused') return { action: 'paused', reason: s.reason || '', hint: `Run "${ME} resume" to continue.` };
   if (s.status === 'finished') return { action: 'finished', hint: 'The run is closed. Nothing to do.' };
+  if (notRunner(s)) return { action: 'not_runner', hint: notRunner(s) };
   const wb = wrongBranch(plan);
   if (wb) return { action: 'wrong_branch', hint: wb };
   delete s.hold_at;
@@ -589,22 +617,25 @@ function nextAction() {
   if (fresh) setGuard(c.phase === 'build' ? step.protect : null);
 
   const failure = s.last_failure && s.last_failure.id === step.id ? s.last_failure : null;
+  // Lean agent types carry far fewer tool definitions, which every one of their turns re-reads.
+  const lean = !!s.lean && !step.full_agent;
   const then = {
     when_the_agent_has_finished: `${ME} gate --wait 540`, tool_timeout_ms: 600000,
     if_it_was_launched_in_the_background: 'End your turn and start nothing else. You are notified when the agent finishes; run the gate then.',
   };
+  if (lean) then.if_the_agent_type_does_not_exist = `Run "${ME} lean off" and use the action it prints.`;
   if (c.phase === 'build') {
     const { model, effort } = ladder(plan, step, c.attempt, c.top);
     return {
       action: 'build', id: step.id, title: step.title, attempt: c.attempt, of: maxAttempts(plan), progress, note,
-      agent: { subagent_type: 'general-purpose', model, effort, run_in_background: false, description: `${step.id} build`, prompt: buildPrompt(plan, step, c, failure) },
+      agent: { subagent_type: lean ? 'autobuild-builder' : 'general-purpose', model, effort, run_in_background: false, description: `${step.id} build`, prompt: buildPrompt(plan, step, c, failure, lean) },
       then,
     };
   }
   const { model, effort } = reviewer(plan, step, c.review_try);
   return {
     action: 'review', id: step.id, title: step.title, review_try: c.review_try, progress, note,
-    agent: { subagent_type: 'general-purpose', model, effort, run_in_background: false, description: `${step.id} review`, prompt: reviewPrompt(plan, step, c, failure) },
+    agent: { subagent_type: lean ? 'autobuild-reviewer' : 'general-purpose', model, effort, run_in_background: false, description: `${step.id} review`, prompt: reviewPrompt(plan, step, c, failure, lean) },
     then,
   };
 }
@@ -852,6 +883,7 @@ async function cmdGate(args) {
   const { plan, error } = loadPlan();
   if (!plan) die(error);
   const s = loadState() || die(`No ${P.state}. Run init first.`);
+  if (notRunner(s)) die(notRunner(s));
   const wb = wrongBranch(plan);
   if (wb) die(wb);
   const c = s.current;
@@ -937,6 +969,7 @@ function rescueContext(name) {
   const { plan, error } = loadPlan();
   if (!plan) die(error);
   const s = loadState() || die(`No ${P.state}.`);
+  if (notRunner(s)) die(notRunner(s));
   if (!s.current || s.current.phase !== 'rescue') die(`${name} is only for a step in rescue (see the "rescue" action from next).`);
   return { plan, s, step: plan.steps[stepIndex(plan, s.current.id)] };
 }
@@ -963,6 +996,7 @@ function cmdBlock(reason) {
 
 function cmdPause(reason, paused) {
   const s = loadState() || die(`No ${P.state}.`);
+  if (notRunner(s)) die(`${notRunner(s)} To pause or resume it, send that session a message asking it to.`);
   if (s.status === 'finished') die('The run is finished.');
   if (!paused) fs.rmSync(`${P.logs}/hook.json`, { force: true });
   s.status = paused ? 'paused' : 'running';
@@ -971,12 +1005,29 @@ function cmdPause(reason, paused) {
   out({ result: s.status, then: paused ? `${ME} resume` : `${ME} next` });
 }
 
-function cmdStatus(json) {
-  const { plan, error } = loadPlan();
+// The plan and state as last pushed, for a session that is not the one running the build.
+function pushedView() {
+  const local = loadPlan().plan;
+  const b = local && str(local.branch) ? local.branch : branch();
+  if (!hasRemote()) die('There is no git remote to read the pushed state from.');
+  git('fetch', '-q', 'origin', b);
+  const show = (f) => { const r = git('show', `origin/${b}:${f}`); return r.status === 0 ? r.stdout : null; };
+  let plan = null, s = null;
+  try { plan = JSON.parse(show(P.plan)); } catch { /* not pushed yet */ }
+  try { s = JSON.parse(show(P.state)); } catch { /* not pushed yet */ }
+  if (!plan) die(`No ${P.plan} on origin/${b} yet.`);
+  const last = git('log', '-1', '--format=%cr: %s', `origin/${b}`).stdout.trim();
+  return { plan, s, last };
+}
+
+function cmdStatus(json, remote) {
+  const view = remote ? pushedView() : null;
+  const { plan, error } = view ? { plan: view.plan } : loadPlan();
   if (!plan) die(error);
-  const s = loadState() || { status: 'not started', steps: {}, current: null };
+  const s = (view ? view.s : loadState()) || { status: 'not started', steps: {}, current: null };
+  if (view && !json) console.log(`As pushed to origin/${plan.branch} (last commit ${view.last})${s.runner ? `, run by session_${s.runner}` : ''}${s.runner_started_at ? '' : ', the build session has not started yet'}`);
   const prog = counts(plan, s);
-  if (json) { out({ status: s.status, reason: s.reason, progress: prog, current: s.current, steps: plan.steps.map((p) => ({ id: p.id, title: p.title, model: p.model, effort: p.effort, ...(s.steps[p.id] || { status: 'todo' }) })), last_failure: s.last_failure || null }); return; }
+  if (json) { out({ status: s.status, reason: s.reason, runner: s.runner ? `session_${s.runner}` : null, runner_started_at: s.runner_started_at || null, last_pushed_commit: view ? view.last : undefined, progress: prog, current: s.current, steps: plan.steps.map((p) => ({ id: p.id, title: p.title, model: p.model, effort: p.effort, ...(s.steps[p.id] || { status: 'todo' }) })), last_failure: s.last_failure || null }); return; }
   console.log(`${plan.project}: ${s.status}${s.reason ? ` (${s.reason})` : ''} — ${prog.done}/${prog.total} done, ${prog.blocked} blocked, ${prog.skipped} skipped`);
   if (s.current) console.log(`Current: ${s.current.id} ${s.current.phase}, attempt ${s.current.attempt}`);
   for (const m of plan.milestones) {
@@ -1001,6 +1052,7 @@ function cmdSettings() {
 
 function cmdWatchdog(id) {
   const s = loadState() || die(`No ${P.state}. Run init first.`);
+  if (notRunner(s)) die(notRunner(s));
   s.watchdog = !id || id === 'clear' ? null : id;
   saveState(s);
   out({ result: 'ok', watchdog: s.watchdog });
@@ -1010,6 +1062,7 @@ function cmdFinish() {
   const { plan, error } = loadPlan();
   if (!plan) die(error);
   const s = loadState() || die(`No ${P.state}.`);
+  if (notRunner(s)) die(notRunner(s));
   if (s.status !== 'finished') {
     if (s.current || pick(plan, s)) die('Steps remain. Run next.');
     s.status = 'finished'; s.finished_at = now();
@@ -1026,7 +1079,12 @@ function cmdFinish() {
     flaky_checks: of((x) => (x.flaky_checks || []).length).map((p) => ({ id: p.id, checks: s.steps[p.id].flaky_checks })),
     kpis: plan.kpis, kpi_readings: readJSON(P.kpi) || `no ${P.kpi} was written`,
     push: push(s),
-    still_to_do: [s.watchdog ? `Delete the scheduled check-in ${s.watchdog}.` : null, 'Open the pull request if the user chose one.', 'Give the final report.'].filter(Boolean),
+    report_to: s.report_to ? `session_${s.report_to}` : null,
+    still_to_do: [
+      s.watchdog ? `Delete the scheduled check-in ${s.watchdog}.` : null,
+      'Open the pull request if the user chose one.',
+      s.report_to ? `Send the final report to the planning session session_${s.report_to} with send_message, so the user finds it where they asked. Then give it here as well.` : 'Give the final report.',
+    ].filter(Boolean),
   });
 }
 
@@ -1036,6 +1094,8 @@ function cmdHookStop() {
   const session = input && input.session_id ? String(input.session_id) : null;
   const s = loadState();
   if (!s || s.status !== 'running') process.exit(0);
+  if (notRunner(s)) process.exit(0);
+  try { writeJSON(`${P.logs}/hook-last.json`, { at: now(), fields: Object.keys(input || {}), background_tasks: input && input.background_tasks !== undefined ? input.background_tasks : 'absent' }); } catch { /* read-only tree */ }
   // After "no_work" the session is meant to stop and wait for the scheduled check-in.
   if (s.hold_at && Date.now() - Date.parse(s.hold_at) < HOLD_MS) process.exit(0);
   const { plan } = loadPlan();
@@ -1068,6 +1128,131 @@ function cmdHookStop() {
   out({ decision: 'block', reason });
 }
 
+// ---------- commands: agents, checkin, handoff, start, takeover, lean ----------
+
+// Lean agent types: the same builder and reviewer, but with only the tools a build step needs
+// and with the rules as their instructions. Claude Code loads agent types when a session
+// starts, so they serve a build session started after they were committed.
+function cmdAgents() {
+  const rules = read(P.rules) || die(`${P.rules} not found.`);
+  const section = (title) => {
+    const m = rules.split(/^## /m).find((x) => x.toLowerCase().startsWith(title.toLowerCase()));
+    return m ? `## ${m.trim()}` : '';
+  };
+  const builder = section('Rules for every builder'), reviewer = section('Rules for reviewers'), environment = section('Environment');
+  if (!builder || !reviewer) die(`${P.rules} must have the sections "Rules for every builder" and "Rules for reviewers".`);
+  const tools = 'Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch';
+  const head = (name, what) => `---\nname: ${name}\ndescription: ${what} Started only by the autobuild orchestrator; never use it for anything else.\ntools: ${tools}\n---\n\n`;
+  const made = `Generated from ${P.rules} by "${ME} agents". Edit that file and generate again; do not edit this one.`;
+  writeFile(AGENTS.builder, `${head('autobuild-builder', 'Builds one step of an unattended autobuild run.')}You build one step of an unattended software build. Nobody is watching and nobody can answer a question. Your prompt names the step and where its brief is. These are your rules.\n\n${builder}\n\n${environment}\n\n<!-- ${made} -->\n`);
+  writeFile(AGENTS.reviewer, `${head('autobuild-reviewer', 'Reviews one step of an unattended autobuild run.')}You review one step of an unattended software build. Nobody is watching and nobody can answer a question. Your prompt names the step, where its brief is and which changes to review. These are your rules, followed by the builders' rules they refer to.\n\n${reviewer}\n\n${builder}\n\n${environment}\n\n<!-- ${made} -->\n`);
+  out({ result: 'written', files: Object.values(AGENTS), tools, note: 'Commit and push them. Only a session started after that can use them, which is why the build runs in a build session.' });
+}
+
+function checkin(b) {
+  return {
+    name: 'Autobuild check-in', cron_expression: '0 * * * *', initiation: 'own_followup',
+    prompt: `Automatic autobuild check-in, not a message from the user. If an agent you started for the build is still running, or you are in the middle of the autobuild loop, answer with one short line and do nothing else. Otherwise make sure the checkout is on ${b} (git fetch origin ${b}, git checkout ${b}). Then: if ${P.state} exists, read ${P.orch} and run "${ME} start". If that says another session runs this build, or that the run is finished, delete this scheduled task and stop. If ${P.state} does not exist yet, continue the autobuild planning from what is committed.`,
+  };
+}
+function cmdCheckin() {
+  const { plan } = loadPlan();
+  out({ create_scheduled_task: checkin((plan && str(plan.branch) && plan.branch) || branch() || 'the build branch'), then: `${ME} watchdog <id of the scheduled task>  (after init)` });
+}
+
+// Give the run to a build session. That session starts from a fresh clone, so the handoff
+// only counts once it is pushed.
+function cmdHandoff(id) {
+  const { plan, error } = loadPlan();
+  if (!plan) die(error);
+  const s = loadState() || die(`No ${P.state}. Run init first.`);
+  if (notRunner(s)) die(notRunner(s));
+  const key = sessionKey(id);
+  if (!key || !/^[A-Za-z0-9]{8,}$/.test(key)) die('Give the id of the build session: handoff <session id>');
+  if (key === MY_SESSION) die('That is this session. A handoff goes to another session.');
+  if (s.current) die(`Step ${s.current.id} is in progress here. Hand off before the first step.`);
+  if (!hasRemote()) die('A handoff needs a git remote: the build session works from its own clone.');
+  const before = JSON.stringify(s);
+  const oldCheckIn = s.watchdog || null;
+  Object.assign(s, { runner: key, report_to: MY_SESSION, lean: agentsExist(), watchdog: null, handed_off_at: now() });
+  delete s.runner_started_at;
+  saveState(s);
+  commit('autobuild: handed to the build session', plan);
+  const p = push(s);
+  if (p !== 'pushed') {
+    const back = JSON.parse(before);
+    for (const k of Object.keys(s)) delete s[k];
+    Object.assign(s, back);
+    saveState(s);
+    commit('autobuild: handoff undone', plan);
+    die(`The handoff could not be pushed (${p}), so the build session cannot see it. The build stays in this session: stop that session and run "${ME} start" here.`);
+  }
+  out({
+    result: 'handed_off', runner: `session_${key}`, lean_agents: s.lean,
+    now: [
+      oldCheckIn ? `Delete your own scheduled check-in ${oldCheckIn}; the build session creates its own.` : null,
+      `This session no longer runs the build: next and gate refuse to work here. To see progress run "${ME} status --remote".`,
+    ].filter(Boolean),
+  });
+}
+
+// Begin or resume the run in this session.
+function cmdStart() {
+  const { plan, error } = loadPlan();
+  if (!plan) die(error);
+  const wb = wrongBranch(plan);
+  if (wb) die(wb);
+  let pull = null;
+  const sync = () => {
+    if (!hasRemote()) return;
+    const r = git('pull', '--ff-only', '-q', 'origin', plan.branch);
+    pull = r.status === 0 ? 'up to date with origin' : `pull failed: ${tail(r.stderr || '', 200)}`;
+  };
+  sync();
+  let s = loadState();
+  // A build session can start a moment before the handoff commit is pushed: wait for it.
+  const waitS = Number(process.env.AUTOBUILD_START_WAIT_S ?? 180);
+  for (let i = 0; i < Math.ceil(waitS / 15) && notRunner(s); i++) { sleep(15000); sync(); s = loadState(); }
+  if (!s) die(`No ${P.state}. Run "${ME} init" first.`);
+  if (notRunner(s)) die(notRunner(s));
+  if (s.status === 'finished') { out({ result: 'finished', hint: 'The run is closed. Nothing to do.' }); return; }
+  fs.mkdirSync(P.logs, { recursive: true });
+  fs.rmSync(`${P.logs}/hook.json`, { force: true });
+  const first = !s.runner_started_at;
+  if (first) { s.runner_started_at = now(); saveState(s); commit('autobuild: build session started', plan); }
+  const prog = counts(plan, s);
+  const res = { result: first ? 'started' : 'resumed', project: plan.project, progress: `${prog.done} of ${prog.total} steps done`, lean_agents: !!s.lean, pull, push: push(s), then: `${ME} next` };
+  if (!s.watchdog) res.check_in = { missing: 'No scheduled check-in is recorded. If you can schedule a recurring message into this session, create this one before anything else.', create_scheduled_task: checkin(plan.branch), then: `${ME} watchdog <id of the scheduled task>` };
+  if (s.report_to) res.report_to = `session_${s.report_to}`;
+  emit(res);
+}
+
+function cmdTakeover(args) {
+  const { plan, error } = loadPlan();
+  if (!plan) die(error);
+  if (hasRemote()) git('pull', '--ff-only', '-q', 'origin', plan.branch);
+  const s = loadState() || die(`No ${P.state}.`);
+  if (s.status === 'finished') die('The run is finished.');
+  const from = s.runner ? `session_${s.runner}` : 'nobody';
+  Object.assign(s, { runner: MY_SESSION, lean: args.includes('--lean') && agentsExist(), watchdog: null, taken_over_at: now() });
+  delete s.report_to;
+  if (s.current && s.current.phase !== 'rescue') s.current.issued = false; // the agent the old runner started is gone with it
+  fs.rmSync(`${P.logs}/hook.json`, { force: true });
+  saveState(s);
+  commit('autobuild: taken over', plan);
+  out({ result: 'taken_over', from, lean_agents: s.lean, push: push(s), then: `${ME} start` });
+}
+
+function cmdLean(arg) {
+  const s = loadState() || die(`No ${P.state}.`);
+  if (notRunner(s)) die(notRunner(s));
+  if (!['on', 'off'].includes(arg)) die('Usage: lean on|off');
+  if (arg === 'on' && !agentsExist()) die(`The lean agent types are not in ${path.dirname(AGENTS.builder)}/. Run "${ME} agents" first.`);
+  s.lean = arg === 'on';
+  saveState(s);
+  emit({ result: 'ok', lean_agents: s.lean, then: `${ME} next` });
+}
+
 // ---------- main ----------
 
 const [cmd, ...args] = process.argv.slice(2);
@@ -1082,12 +1267,18 @@ switch (cmd) {
   case 'block': cmdBlock(args.join(' ')); break;
   case 'pause': cmdPause(args.join(' '), true); break;
   case 'resume': cmdPause('', false); break;
-  case 'status': cmdStatus(args.includes('--json')); break;
+  case 'status': cmdStatus(args.includes('--json'), args.includes('--remote')); break;
+  case 'agents': cmdAgents(); break;
+  case 'checkin': cmdCheckin(); break;
+  case 'handoff': cmdHandoff(args[0]); break;
+  case 'start': cmdStart(); break;
+  case 'takeover': cmdTakeover(args); break;
+  case 'lean': cmdLean(args[0]); break;
   case 'settings': cmdSettings(); break;
   case 'watchdog': cmdWatchdog(args[0]); break;
   case 'finish': cmdFinish(); break;
   case 'hook-stop': cmdHookStop(); break;
   default:
-    console.log(`Usage: ${ME} validate | init | next | gate [--wait N] | replan | retry | block "<reason>" | pause "<reason>" | resume | status [--json] | settings | watchdog <id>|clear | finish`);
+    console.log(`Usage: ${ME} validate | init | agents | checkin | handoff <session id> | start | takeover [--lean] | lean on|off | next | gate [--wait N] | replan | retry | block <reason> | pause <reason> | resume | status [--json] [--remote] | settings | watchdog <id>|clear | finish`);
     process.exit(cmd ? 1 : 0);
 }
