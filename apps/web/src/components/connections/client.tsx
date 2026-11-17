@@ -292,3 +292,52 @@ export function ImapConnectForm({ businessId }: { readonly businessId: string })
     />
   );
 }
+
+/**
+ * Connects a WhatsApp number with an access token the agency holds
+ * (`POST /api/channels/whatsapp/token`). The token is typed here, checked against Meta by the
+ * server and stored encrypted; it is never shown again.
+ */
+export function WhatsAppTokenForm({ businessId }: { readonly businessId: string }) {
+  return (
+    <JsonConnectForm
+      endpoint="/api/channels/whatsapp/token"
+      fixed={{ businessId }}
+      testId="whatsapp-token-form"
+      submitLabel="Check and connect"
+      fields={[
+        {
+          name: "businessAccountId",
+          label: "WhatsApp Business Account ID",
+          required: true,
+          help: "Digits only. In Meta: WhatsApp, API Setup.",
+        },
+        {
+          name: "phoneNumberId",
+          label: "Phone number ID",
+          required: true,
+          help: "Digits only: the ID next to the number, not the number itself.",
+        },
+        {
+          name: "accessToken",
+          label: "Access token",
+          type: "password",
+          required: true,
+          help: "A system user token that does not expire, with the two WhatsApp permissions.",
+        },
+        {
+          name: "pin",
+          label: "Two-step PIN",
+          type: "password",
+          help: "Leave empty unless the number still has to be registered with the Cloud API.",
+        },
+      ]}
+      build={(values) => ({
+        businessAccountId: (values["businessAccountId"] ?? "").trim(),
+        phoneNumberId: (values["phoneNumberId"] ?? "").trim(),
+        accessToken: (values["accessToken"] ?? "").trim(),
+        pin: (values["pin"] ?? "").trim() === "" ? null : (values["pin"] ?? "").trim(),
+      })}
+    />
+  );
+}

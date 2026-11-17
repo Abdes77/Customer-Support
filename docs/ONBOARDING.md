@@ -109,6 +109,11 @@ it from your own phone or email before the client's customers do.
   the follow-up and staff-reply templates in Settings (`channels.whatsapp.follow_up_template`,
   `channels.whatsapp.staff_reply_template`): outside 24 hours after the customer's last message
   WhatsApp only delivers approved templates.
+  For a number the agency already runs on the Cloud API with its own Meta app, open "Connect a
+  number with an access token" instead: the WhatsApp Business Account ID, the phone number ID
+  and a system user token that does not expire. The token is checked with Meta, stored
+  encrypted and never shown again. Messages arrive only when that app's webhook points at
+  the address the page shows, with the verify token of `META_WEBHOOK_VERIFY_TOKEN`.
 - **Messenger and Instagram.** "Connect with Facebook" (Facebook Login), choose the client's
   Page (its Instagram professional account comes with it). In the client's Meta Business Suite,
   leave the app as the Page's messaging app and turn off any other automated replies; on

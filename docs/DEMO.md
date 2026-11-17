@@ -67,77 +67,69 @@ safe to run again: it updates what it wrote and keeps facts and settings a perso
 
 ## Put it online
 
-What is needed, and nothing else: a database, a job runner, hosting and a Claude API key. The
-steps below are the short path through `docs/HUMAN_TODO.md` (its step numbers are given for
-the details); everything else in that checklist can wait.
+What is needed, and nothing else: hosting, a database with sign-in, a job runner and a Claude
+API key. On Vercel the database and the job runner are two integrations that configure
+themselves, so there is nothing to copy between dashboards. (Setting every variable by hand
+still works: the table at the end of this section.)
 
-1. **Claude API key** (HUMAN_TODO 4): https://platform.claude.com, Settings, API keys. The
-   workspace needs 30-day data retention for the default reply model, `claude-fable-5-2`.
-2. **Supabase project** (HUMAN_TODO 5): https://supabase.com/dashboard, New project. Copy the
-   Project URL, the anon key, the service_role key, the JWT secret, the Transaction pooler
-   connection string (port 6543) and the Session pooler or Direct connection string (port 5432).
-   Create a private Storage bucket named `attachments` (photos sent in the chat go there).
-3. **Vercel project** (HUMAN_TODO 9): https://vercel.com, Add New, Project, import this
+1. **Vercel project** (HUMAN_TODO 9): https://vercel.com, Add New, Project, import this
    repository. Root Directory `apps/web`, framework Next.js, Node.js 22.x; leave the commands
-   alone (the repository's `apps/web/vercel.json` sets the build command). Note the address
-   Vercel gives the project (Settings, Domains), for example `https://your-demo.vercel.app`.
-4. **Inngest** (HUMAN_TODO 7): in the Vercel project, Integrations, add **Inngest** from the
-   Marketplace and connect it to this project. It sets `INNGEST_EVENT_KEY` and
-   `INNGEST_SIGNING_KEY` and registers the app's jobs on every deployment. Without it the chat
-   stores messages and never answers.
-5. **Two secrets of the app's own** (HUMAN_TODO 6). Run each once in a terminal and keep the
-   results in your password manager:
-
-   ```
-   openssl rand -base64 32
-   ```
-
-   for `CREDENTIALS_ENCRYPTION_KEY`, and
-
-   ```
-   openssl rand -base64 48
-   ```
-
-   for `WIDGET_SESSION_SECRET`.
-6. **Variables**: Vercel, the project, Settings, Environment Variables, for **Production**:
+   alone (`apps/web/vercel.json` sets the build command). Note the address Vercel gives the
+   project (Settings, Domains), for example `https://your-demo.vercel.app`.
+2. **Database, sign-in and storage**: in the project, Storage, Create Database, **Supabase**
+   (a new Supabase project, free plan to start; no environment variable prefix), connected to
+   this project. The integration sets `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`,
+   `SUPABASE_URL`, the publishable and secret keys and `SUPABASE_JWT_SECRET`; the app reads
+   them under these names.
+3. **Jobs** (HUMAN_TODO 7): Vercel Marketplace, **Inngest**, Install, this project. It sets
+   `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` and registers the app's jobs on every
+   deployment. Without it the chat stores messages and never answers.
+4. **Variables**: the project, Settings, Environment Variables, for **Production**:
 
    | Variable | Value |
    | --- | --- |
-   | `APP_URL`, `NEXT_PUBLIC_APP_URL` | the project's address from step 3, both the same |
-   | `DATABASE_URL` | the Transaction pooler string (port 6543) |
-   | `DATABASE_URL_DIRECT` | the Session pooler or Direct string (port 5432) |
-   | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET` | from step 2 |
-   | `CREDENTIALS_ENCRYPTION_KEY`, `WIDGET_SESSION_SECRET` | from step 5 |
-   | `ANTHROPIC_API_KEY` | from step 1 |
+   | `APP_URL`, `NEXT_PUBLIC_APP_URL`, `INNGEST_SERVE_ORIGIN` | the project's address from step 1, all three the same |
+   | `CREDENTIALS_ENCRYPTION_KEY` | the output of `openssl rand -base64 32`; keep a copy in your password manager |
+   | `WIDGET_SESSION_SECRET` | the output of `openssl rand -base64 48` |
+   | `ANTHROPIC_API_KEY` | from https://platform.claude.com, Settings, API keys (HUMAN_TODO 4: the workspace needs 30-day data retention for `claude-fable-5-2`) |
    | `DEPLOY_MIGRATE` | `1` |
    | `DEPLOY_DEMO_AGENCY` | your agency's name as the demo site should show it |
+   | `DEPLOY_ADMIN_EMAIL`, `DEPLOY_ADMIN_PASSWORD` | the email address and a password (8 characters or more) for your own login to the admin panel |
 
-   The last two make the build do the database work: with `DEPLOY_MIGRATE=1` every deployment
-   first applies pending migrations (`pnpm db:migrate`), and with `DEPLOY_DEMO_AGENCY` it then
-   stores the sample businesses in that agency, creating it when it is new (`pnpm demo:setup`).
-   Both are safe to repeat and a failure stops the deployment before anything is published.
-   Without them, run the two commands from a computer as HUMAN_TODO 17 describes.
-7. **Deploy**: Vercel, Deployments, Redeploy (or push to the branch Vercel deploys). The build
-   log shows the migrations and the five sample businesses. Then open `<APP_URL>/demo`.
+   The `DEPLOY_` variables make the build do the setup. With `DEPLOY_MIGRATE=1` every
+   deployment first applies pending migrations (`pnpm db:migrate`) and makes sure the private
+   Storage bucket for chat photos exists. With `DEPLOY_DEMO_AGENCY` it stores the sample
+   businesses in that agency, creating it when it is new (`pnpm demo:setup`). With
+   `DEPLOY_ADMIN_EMAIL` it makes that person an admin of the agency, creating the login with
+   `DEPLOY_ADMIN_PASSWORD` when it does not exist (`pnpm db:create-admin`); the password is
+   used once, so remove that variable after your first sign-in. Every step is safe to repeat,
+   and a failure stops the deployment before anything is published. A build that finds no
+   database yet says so and finishes, so the order of steps 2 to 4 does not matter.
+5. **Deploy**: Vercel, Deployments, Redeploy (or push to the branch Vercel deploys). The build
+   log shows the migrations, the five sample businesses and the admin. Then open
+   `<APP_URL>/demo`, and sign in at `<APP_URL>/sign-in`.
 
 **Pass:** the front page lists the five businesses; on a business's page the chat answers
 within seconds, and the panel next to it fills in. In Inngest's dashboard the app shows its
-functions, `pipeline-reply` and `pipeline-send` among them, and a run for each reply.
+functions, `pipeline-reply` and `pipeline-send` among them, and a run for each reply. Signed
+in, the inbox shows the conversation you just had.
 
-If the chat stays silent: Inngest is not connected (step 4; Inngest dashboard, Apps) or the
-Claude API refused the key or the model (Vercel, Logs; a 400 that mentions data retention is
-step 1). If the chat does not appear at all: open the browser's console; a 403 on
-`/api/widget/v1/config` means the business's "Public demo page" setting is off, a 503 that
-`WIDGET_SESSION_SECRET` is missing. The checks of
-HUMAN_TODO 21 apply to this deployment as to any other.
+If the chat stays silent: Inngest is not connected (step 3; Inngest dashboard, Apps; `curl -X
+PUT <APP_URL>/api/inngest` registers the app by hand) or the Claude API refused the key or
+the model (Vercel, Logs; a 400 that mentions data retention is HUMAN_TODO 4). If the chat does
+not appear at all: open the browser's console; a 403 on `/api/widget/v1/config` means the
+business's "Public demo page" setting is off, a 503 that `WIDGET_SESSION_SECRET` is missing.
+If the demo front page says the demo is not set up: the build found no database (step 2) or
+`DEPLOY_DEMO_AGENCY` is not set. The checks of HUMAN_TODO 21 apply to this deployment as to
+any other, and so does HUMAN_TODO 5 before client logins are handed out (sign-ups off, the
+email templates, the Data API): the integration creates the Supabase project with Supabase's
+defaults.
 
-**The admin panel** (to read the demo conversations as the business would): in Supabase,
-Authentication, Users, add yourself with a password ("Auto Confirm User"), then on a computer
-with the repository and the production `DATABASE_URL` in `.env.local` (HUMAN_TODO 20):
-
-```
-pnpm db:create-admin --slug <the agency's slug the build log printed> --email you@example.com
-```
+**Without the integrations**, set the database and Supabase variables yourself (HUMAN_TODO 5
+and 16): `DATABASE_URL` (transaction pooler, port 6543), `DATABASE_URL_DIRECT` (session pooler
+or direct, port 5432), `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, and `INNGEST_EVENT_KEY` and
+`INNGEST_SIGNING_KEY` from https://app.inngest.com.
 
 ## Before showing it to anyone
 

@@ -415,6 +415,7 @@ async function main(): Promise<void> {
   fakes = await startFakes({
     port: FAKES_PORT,
     whatsappPhoneNumberIds: [CHANNEL_IDS.whatsappPhoneNumberId],
+    whatsappBusinessAccountIds: [CHANNEL_IDS.whatsappBusinessAccountId],
     mailAddress,
     mailPassword,
   });

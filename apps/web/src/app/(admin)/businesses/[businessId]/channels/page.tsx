@@ -18,7 +18,12 @@ import {
   widgetRotateAction,
   widgetSetUpAction,
 } from "@/app/(admin)/_actions/connections";
-import { CopyField, ImapConnectForm, OAuthStartButton } from "@/components/connections/client";
+import {
+  CopyField,
+  ImapConnectForm,
+  OAuthStartButton,
+  WhatsAppTokenForm,
+} from "@/components/connections/client";
 import { FacebookLoginButton, WhatsAppSignupButton } from "@/components/connections/meta-connect";
 import {
   ConnectionBadge,
@@ -92,6 +97,7 @@ export default async function ChannelsPage({
   const { tenant } = page;
   const query = await searchParams;
   const appUrl = getEnv().APP_URL ?? "http://localhost:3000";
+  const webhookUrl = `${appUrl.replace(/\/$/, "")}/api/webhooks/whatsapp`;
   const here = `/businesses/${tenant.businessId}/channels`;
 
   const widget = await getDatabase()
@@ -316,6 +322,25 @@ export default async function ChannelsPage({
                   config={whatsapp.signupConfig()!}
                 />
               )}
+              <details
+                className="rounded-md border border-slate-200 p-3"
+                data-testid="whatsapp-token"
+              >
+                <summary className="cursor-pointer text-sm font-medium text-slate-800">
+                  Connect a number with an access token
+                </summary>
+                <div className="mt-3 space-y-3">
+                  <p className="text-sm text-slate-600">
+                    For a number you already run on the WhatsApp Cloud API with your own Meta app.
+                    Messages reach this panel only when that app&apos;s webhook points here:
+                    callback URL <code className="font-mono text-xs">{webhookUrl}</code>, the verify
+                    token from <code className="font-mono text-xs">META_WEBHOOK_VERIFY_TOKEN</code>,
+                    and the field <code className="font-mono text-xs">messages</code> subscribed.
+                    The token is checked with Meta, stored encrypted and never shown again.
+                  </p>
+                  <WhatsAppTokenForm businessId={tenant.businessId} />
+                </div>
+              </details>
             </>
           )}
         </CardBody>

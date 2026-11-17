@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { logger } from "@repo/core";
+
 import { ModelNotice } from "@/components/demo/model-notice";
 import { type DemoListing, demoPrompts, listDemoBusinesses } from "@/server/demo/site";
 
@@ -67,7 +69,12 @@ function Card({ listing }: { readonly listing: DemoListing }) {
 }
 
 export default async function DemoHomeRoute() {
-  const listings = await listDemoBusinesses();
+  // A deployment whose database is not connected yet still shows the page, with the note
+  // below, instead of an error.
+  const listings = await listDemoBusinesses().catch((error: unknown) => {
+    logger.error("demo.listing_failed", { error });
+    return [] as DemoListing[];
+  });
   const agency = listings[0]?.agencyName ?? null;
 
   return (

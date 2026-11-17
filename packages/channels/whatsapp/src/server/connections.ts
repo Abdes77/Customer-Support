@@ -49,6 +49,24 @@ export const EmbeddedSignupInput = z.object({
 });
 export type EmbeddedSignupInput = z.input<typeof EmbeddedSignupInput>;
 
+/** What the admin panel's "connect with an access token" form sends. */
+export const TokenConnectInput = z.object({
+  businessAccountId: GraphId,
+  phoneNumberId: GraphId,
+  /** Letters, digits and the few signs Meta's tokens use: never anything that needs escaping. */
+  accessToken: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_|.-]{20,2000}$/, "This does not look like an access token."),
+  /** The number's two-step PIN: only for a number that is not registered with the Cloud API. */
+  pin: z
+    .string()
+    .regex(/^\d{6}$/, "The PIN has six digits.")
+    .nullable()
+    .optional(),
+});
+export type TokenConnectInput = z.input<typeof TokenConnectInput>;
+
 const PhoneNumber = z
   .object({
     id: z.union([z.string(), z.number()]).transform(String),
@@ -128,6 +146,164 @@ export function createConnectionService(deps: WhatsAppServerDeps) {
     });
   }
 
+  /**
+   * What both ways of connecting share once there is a token: check that the number belongs
+   * to the account as seen with that token (the proof of control), subscribe the app to the
+   * account's webhooks, register the number where that is asked for, then store the
+   * connection and the encrypted credentials and read the account's templates.
+   */
+  async function connectNumber(
+    tenant: BusinessTenant,
+    userId: UserId | null,
+    input: {
+      readonly accessToken: string;
+      readonly businessAccountId: string;
+      readonly phoneNumberId: string;
+      readonly businessPortfolioId: string | null;
+      /** "with_new_pin": Embedded Signup. "as_given": only when `pin` is set. */
+      readonly register: "with_new_pin" | "as_given";
+      readonly pin?: string | undefined;
+    },
+  ): Promise<WhatsAppConnectionView> {
+    const { accessToken } = input;
+    const numbers = await deps.graph.request(
+      {
+        method: "GET",
+        path: `/${input.businessAccountId}/phone_numbers`,
+        token: accessToken,
+        query: { fields: "id,display_phone_number,verified_name,quality_rating" },
+      },
+      PhoneNumbers,
+    );
+    const number = numbers.data.find((item) => item.id === input.phoneNumberId);
+    if (number === undefined) {
+      throw new ValidationError("This phone number is not part of the WhatsApp account.");
+    }
+    await deps.graph.request(
+      {
+        method: "POST",
+        path: `/${input.businessAccountId}/subscribed_apps`,
+        token: accessToken,
+      },
+      Success,
+    );
+
+    // Reconnecting a number of this business keeps its PIN: a registered number refuses
+    // a new one.
+    const previous = await scope(tenant).run(async (ctx) => {
+      const [row] = await ctx.tx
+        .select({ id: channelConnections.id })
+        .from(channelConnections)
+        .where(
+          and(
+            eq(channelConnections.channel, "whatsapp"),
+            eq(channelConnections.externalAccountId, input.phoneNumberId),
+          ),
+        )
+        .limit(1);
+      if (row === undefined) return null;
+      return deps.db.secrets.channel.read(ctx, row.id, WhatsAppCredentials);
+    });
+    // Embedded Signup registers the number for the Cloud API with a PIN of ours. A number
+    // connected with a token is registered already unless its PIN was given with it.
+    const pin =
+      input.register === "with_new_pin"
+        ? (previous?.pin ?? String(randomInt(0, 1_000_000)).padStart(6, "0"))
+        : (input.pin ?? previous?.pin);
+    let registerError: string | null = null;
+    if (input.register === "with_new_pin" || input.pin !== undefined) {
+      try {
+        await deps.graph.request(
+          {
+            method: "POST",
+            path: `/${input.phoneNumberId}/register`,
+            token: accessToken,
+            json: { messaging_product: "whatsapp", pin },
+          },
+          Success,
+        );
+      } catch (error) {
+        if (!(error instanceof GraphApiError)) throw error;
+        // The connection is stored anyway, marked with the problem, so the admin panel can
+        // show it and the agency can fix it in WhatsApp Manager and reconnect.
+        registerError = `Registering the number failed: ${error.message}`.slice(0, 500);
+        log.warn("whatsapp.register_failed", {
+          businessId: tenant.businessId,
+          graphCode: error.graphCode,
+        });
+      }
+    }
+
+    const config: WhatsAppConfig = {
+      businessAccountId: input.businessAccountId,
+      phoneNumberId: input.phoneNumberId,
+      displayPhoneNumber: number.display_phone_number ?? null,
+      verifiedName: number.verified_name ?? null,
+      businessPortfolioId: input.businessPortfolioId,
+      qualityRating: number.quality_rating ?? null,
+    };
+    const now = clock();
+    const connectionId = await scope(tenant)
+      .run(async (ctx) => {
+        const values = {
+          displayName: config.displayPhoneNumber ?? config.phoneNumberId,
+          status: registerError === null ? ("active" as const) : ("error" as const),
+          config,
+          lastError: registerError,
+          lastErrorAt: registerError === null ? null : now,
+          connectedBy: userId,
+          connectedAt: now,
+        };
+        const [row] = await ctx.tx
+          .insert(channelConnections)
+          .values({
+            ...ctx.tenant,
+            channel: "whatsapp",
+            externalAccountId: input.phoneNumberId,
+            ...values,
+          })
+          .onConflictDoUpdate({
+            target: [channelConnections.channel, channelConnections.externalAccountId],
+            set: values,
+            // Never take over another tenant's row (RLS would refuse it too).
+            setWhere: eq(channelConnections.businessId, ctx.tenant.businessId),
+          })
+          .returning({ id: channelConnections.id });
+        if (row === undefined) {
+          throw new AppError("conflict", "This WhatsApp number is connected to another business.", {
+            retryable: false,
+          });
+        }
+        await deps.db.secrets.channel.write(
+          ctx,
+          row.id,
+          pin === undefined ? { accessToken } : { accessToken, pin },
+        );
+        return row.id;
+      })
+      .catch((error: unknown) => {
+        if (isUniqueViolation(error)) {
+          throw new AppError("conflict", "This WhatsApp number is connected to another business.", {
+            retryable: false,
+          });
+        }
+        throw error;
+      });
+    log.info("whatsapp.connected", {
+      businessId: tenant.businessId,
+      connectionId,
+      registered: registerError === null,
+    });
+
+    try {
+      await templates.sync(tenant, connectionId);
+    } catch (error) {
+      log.warn("whatsapp.template_sync_failed", { businessId: tenant.businessId, error });
+    }
+    const all = await scope(tenant).run((ctx) => views(ctx));
+    return all.find((item) => item.connectionId === connectionId)!;
+  }
+
   return {
     templates,
 
@@ -174,137 +350,47 @@ export function createConnectionService(deps: WhatsAppServerDeps) {
         appSecret: app.appSecret,
         code: input.code,
       });
-      const numbers = await deps.graph.request(
-        {
-          method: "GET",
-          path: `/${input.businessAccountId}/phone_numbers`,
-          token: accessToken,
-          query: { fields: "id,display_phone_number,verified_name,quality_rating" },
-        },
-        PhoneNumbers,
-      );
-      const number = numbers.data.find((item) => item.id === input.phoneNumberId);
-      if (number === undefined) {
-        throw new ValidationError("This phone number is not part of the WhatsApp account.");
-      }
-      await deps.graph.request(
-        {
-          method: "POST",
-          path: `/${input.businessAccountId}/subscribed_apps`,
-          token: accessToken,
-        },
-        Success,
-      );
-
-      // Reconnecting a number of this business keeps its PIN: a registered number refuses
-      // a new one.
-      const previous = await scope(tenant).run(async (ctx) => {
-        const [row] = await ctx.tx
-          .select({ id: channelConnections.id })
-          .from(channelConnections)
-          .where(
-            and(
-              eq(channelConnections.channel, "whatsapp"),
-              eq(channelConnections.externalAccountId, input.phoneNumberId),
-            ),
-          )
-          .limit(1);
-        if (row === undefined) return null;
-        return deps.db.secrets.channel.read(ctx, row.id, WhatsAppCredentials);
-      });
-      const pin = previous?.pin ?? String(randomInt(0, 1_000_000)).padStart(6, "0");
-      let registerError: string | null = null;
-      try {
-        await deps.graph.request(
-          {
-            method: "POST",
-            path: `/${input.phoneNumberId}/register`,
-            token: accessToken,
-            json: { messaging_product: "whatsapp", pin },
-          },
-          Success,
-        );
-      } catch (error) {
-        if (!(error instanceof GraphApiError)) throw error;
-        // The connection is stored anyway, marked with the problem, so the admin panel can
-        // show it and the agency can fix it in WhatsApp Manager and reconnect.
-        registerError = `Registering the number failed: ${error.message}`.slice(0, 500);
-        log.warn("whatsapp.register_failed", {
-          businessId: tenant.businessId,
-          graphCode: error.graphCode,
-        });
-      }
-
-      const config: WhatsAppConfig = {
+      return connectNumber(tenant, userId, {
+        accessToken,
         businessAccountId: input.businessAccountId,
         phoneNumberId: input.phoneNumberId,
-        displayPhoneNumber: number.display_phone_number ?? null,
-        verifiedName: number.verified_name ?? null,
         businessPortfolioId: input.businessPortfolioId,
-        qualityRating: number.quality_rating ?? null,
-      };
-      const now = clock();
-      const connectionId = await scope(tenant)
-        .run(async (ctx) => {
-          const values = {
-            displayName: config.displayPhoneNumber ?? config.phoneNumberId,
-            status: registerError === null ? ("active" as const) : ("error" as const),
-            config,
-            lastError: registerError,
-            lastErrorAt: registerError === null ? null : now,
-            connectedBy: userId,
-            connectedAt: now,
-          };
-          const [row] = await ctx.tx
-            .insert(channelConnections)
-            .values({
-              ...ctx.tenant,
-              channel: "whatsapp",
-              externalAccountId: input.phoneNumberId,
-              ...values,
-            })
-            .onConflictDoUpdate({
-              target: [channelConnections.channel, channelConnections.externalAccountId],
-              set: values,
-              // Never take over another tenant's row (RLS would refuse it too).
-              setWhere: eq(channelConnections.businessId, ctx.tenant.businessId),
-            })
-            .returning({ id: channelConnections.id });
-          if (row === undefined) {
-            throw new AppError(
-              "conflict",
-              "This WhatsApp number is connected to another business.",
-              {
-                retryable: false,
-              },
-            );
-          }
-          await deps.db.secrets.channel.write(ctx, row.id, { accessToken, pin });
-          return row.id;
-        })
-        .catch((error: unknown) => {
-          if (isUniqueViolation(error)) {
-            throw new AppError(
-              "conflict",
-              "This WhatsApp number is connected to another business.",
-              { retryable: false },
-            );
-          }
-          throw error;
-        });
-      log.info("whatsapp.connected", {
-        businessId: tenant.businessId,
-        connectionId,
-        registered: registerError === null,
+        register: "with_new_pin",
       });
+    },
 
-      try {
-        await templates.sync(tenant, connectionId);
-      } catch (error) {
-        log.warn("whatsapp.template_sync_failed", { businessId: tenant.businessId, error });
+    /**
+     * Connects a number with an access token the agency already holds: a system user token
+     * of its own Meta app with `whatsapp_business_messaging` and
+     * `whatsapp_business_management`. For a number that is already on the Cloud API; give its
+     * two-step PIN only when the number still has to be registered. Messages reach this
+     * deployment only if that app's webhook points here and its secret is `META_APP_SECRET`.
+     * Call it only after checking that the user may manage this business's channels.
+     */
+    async connectWithToken(
+      tenant: BusinessTenant,
+      userId: UserId | null,
+      raw: TokenConnectInput,
+    ): Promise<WhatsAppConnectionView> {
+      if (deps.app == null) {
+        throw new ConfigError("WhatsApp is not configured: set META_APP_ID and META_APP_SECRET.");
       }
-      const all = await scope(tenant).run((ctx) => views(ctx));
-      return all.find((item) => item.connectionId === connectionId)!;
+      const input = TokenConnectInput.parse(raw);
+      // A number belongs to one business: refuse before touching Meta if another has it.
+      const owner = await deps.db.directory.findChannelConnection("whatsapp", input.phoneNumberId);
+      if (owner !== null && owner.businessId !== tenant.businessId) {
+        throw new AppError("conflict", "This WhatsApp number is connected to another business.", {
+          retryable: false,
+        });
+      }
+      return connectNumber(tenant, userId, {
+        accessToken: input.accessToken,
+        businessAccountId: input.businessAccountId,
+        phoneNumberId: input.phoneNumberId,
+        businessPortfolioId: null,
+        register: "as_given",
+        pin: input.pin ?? undefined,
+      });
     },
 
     /**

@@ -32,10 +32,25 @@ async function readBody(request: IncomingMessage): Promise<string> {
 export async function startFakes(options: {
   readonly port: number;
   readonly whatsappPhoneNumberIds: readonly string[];
+  /** WhatsApp Business Accounts whose own calls (numbers, subscription, templates) are WhatsApp's. */
+  readonly whatsappBusinessAccountIds?: readonly string[];
   readonly mailAddress: string;
   readonly mailPassword: string;
 }): Promise<RunningFakes> {
   const whatsapp = createFakeGraph();
+  // The numbers of the test businesses belong to the fake account, so that a number can be
+  // connected through the admin panel (the token form) as well as stored directly.
+  for (const id of options.whatsappPhoneNumberIds) {
+    whatsapp.phoneNumbers.push({
+      id,
+      display_phone_number: "+1 612-555-0100",
+      verified_name: "Northside Roofing & Gutters",
+    });
+  }
+  const whatsappPaths = [
+    ...options.whatsappPhoneNumberIds,
+    ...(options.whatsappBusinessAccountIds ?? []),
+  ];
   const pages = createFakeMetaGraph();
   const calls: GraphCallRecord[] = [];
   const mail = await startLocalMailServer({
@@ -87,7 +102,7 @@ export async function startFakes(options: {
       });
       const isWhatsApp =
         json?.["messaging_product"] === "whatsapp" ||
-        options.whatsappPhoneNumberIds.some((id) => path.startsWith(`/${id}`));
+        whatsappPaths.some((id) => path.startsWith(`/${id}`));
       const target = isWhatsApp ? whatsapp : pages;
       const answer = await target.fetch(`https://graph.facebook.com${url.pathname}${url.search}`, {
         method: request.method ?? "GET",

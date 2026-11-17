@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createGraphClient } from "@repo/channel-meta";
+import { createGraphClient, GraphApiError } from "@repo/channel-meta";
 import { type ChannelConnectionId, createLogger, type MessageId } from "@repo/core";
 import {
   type BusinessTenant,
@@ -251,6 +251,121 @@ describe("Embedded Signup", () => {
     await expect(connections.disconnect(other, view.connectionId)).rejects.toMatchObject({
       code: "not_found",
     });
+  });
+});
+
+describe("Connecting with an access token", () => {
+  const TOKEN = "EAAGtoken0123456789abcdefghijklmnop";
+
+  it("checks the number with the token, subscribes the app and stores it, without registering", async () => {
+    const graph = createFakeGraph();
+    const phone = numberIn(graph);
+    const { connections } = servicesFor(graph);
+    const tenant = await newBusiness();
+    const view = await connections.connectWithToken(tenant, null, {
+      businessAccountId: FIXTURE_WABA_ID,
+      phoneNumberId: phone,
+      accessToken: ` ${TOKEN} `,
+    });
+    expect(view).toMatchObject({
+      status: "active",
+      phoneNumberId: phone,
+      businessAccountId: FIXTURE_WABA_ID,
+      displayPhoneNumber: "+1 555-010-0000",
+      lastError: null,
+    });
+    // No code to exchange and no registration: the number is on the Cloud API already.
+    expect(graph.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      `GET /${FIXTURE_WABA_ID}/phone_numbers`,
+      `POST /${FIXTURE_WABA_ID}/subscribed_apps`,
+      `GET /${FIXTURE_WABA_ID}/message_templates`,
+    ]);
+    expect(graph.calls.every((call) => call.token === TOKEN)).toBe(true);
+    // Stored encrypted, never in the connection row or in what the admin panel gets.
+    expect(await credentialsOf(tenant, view.connectionId)).toEqual({ accessToken: TOKEN });
+    expect(JSON.stringify(await connectionRow(view.connectionId))).not.toContain(TOKEN);
+    expect(JSON.stringify(view)).not.toContain(TOKEN);
+    const [secret] = await t.admin
+      .select()
+      .from(channelConnectionSecrets)
+      .where(eq(channelConnectionSecrets.connectionId, view.connectionId));
+    expect(secret!.ciphertext).not.toContain("EAAG");
+
+    // A new token for the same number replaces the old one on the same connection.
+    const again = await connections.connectWithToken(tenant, null, {
+      businessAccountId: FIXTURE_WABA_ID,
+      phoneNumberId: phone,
+      accessToken: `${TOKEN}2`,
+    });
+    expect(again.connectionId).toBe(view.connectionId);
+    expect(await credentialsOf(tenant, view.connectionId)).toEqual({ accessToken: `${TOKEN}2` });
+
+    // Another business cannot take the number: refused before any call to Meta.
+    const intruder = await newBusiness();
+    const before = graph.calls.length;
+    await expect(
+      connections.connectWithToken(intruder, null, {
+        businessAccountId: FIXTURE_WABA_ID,
+        phoneNumberId: phone,
+        accessToken: TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect(graph.calls.length).toBe(before);
+  });
+
+  it("registers the number only when its PIN is given, and keeps that PIN", async () => {
+    const graph = createFakeGraph();
+    const phone = numberIn(graph);
+    const { connections } = servicesFor(graph);
+    const tenant = await newBusiness();
+    const view = await connections.connectWithToken(tenant, null, {
+      businessAccountId: FIXTURE_WABA_ID,
+      phoneNumberId: phone,
+      accessToken: TOKEN,
+      pin: "246810",
+    });
+    const register = graph.calls.find((call) => call.path.endsWith("/register"));
+    expect(register?.json).toMatchObject({ messaging_product: "whatsapp", pin: "246810" });
+    expect(await credentialsOf(tenant, view.connectionId)).toEqual({
+      accessToken: TOKEN,
+      pin: "246810",
+    });
+  });
+
+  it("refuses a token Meta refuses, a number outside the account and a malformed token", async () => {
+    const graph = createFakeGraph();
+    const phone = numberIn(graph);
+    const { connections } = servicesFor(graph);
+    const tenant = await newBusiness();
+    graph.failNext(/phone_numbers$/, { code: 190, details: "Invalid OAuth access token." });
+    await expect(
+      connections.connectWithToken(tenant, null, {
+        businessAccountId: FIXTURE_WABA_ID,
+        phoneNumberId: phone,
+        accessToken: TOKEN,
+      }),
+    ).rejects.toBeInstanceOf(GraphApiError);
+    await expect(
+      connections.connectWithToken(tenant, null, {
+        businessAccountId: FIXTURE_WABA_ID,
+        phoneNumberId: "999999999999999",
+        accessToken: TOKEN,
+      }),
+    ).rejects.toMatchObject({ code: "validation_failed" });
+    for (const accessToken of [
+      "short",
+      "has spaces in the middle of it 0123456789",
+      "<script>".repeat(5),
+    ]) {
+      await expect(
+        connections.connectWithToken(tenant, null, {
+          businessAccountId: FIXTURE_WABA_ID,
+          phoneNumberId: phone,
+          accessToken,
+        }),
+      ).rejects.toThrow();
+    }
+    expect(await connections.list(tenant)).toEqual([]);
   });
 });
 

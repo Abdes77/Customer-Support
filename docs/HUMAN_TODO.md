@@ -238,6 +238,13 @@ for `META_WEBHOOK_VERIFY_TOKEN` (step 10).
     `messaging_postbacks`, `message_reactions`, `messaging_referral`, `messaging_seen`,
     `standby`. Connecting a Page later subscribes it to the app (`subscribed_apps`).
   - Meta signs every delivery with the app secret.
+- **Without Embedded Signup** (the agency's own number, no Tech Provider status needed): set
+  `META_APP_ID`, `NEXT_PUBLIC_META_APP_ID`, `META_APP_SECRET` and `META_WEBHOOK_VERIFY_TOKEN`,
+  configure the WhatsApp webhook above, then connect the number on a business's Channels page
+  with "Connect a number with an access token": the WhatsApp Business Account ID, the phone
+  number ID (both on WhatsApp, API Setup) and a system user token that does not expire, with
+  `whatsapp_business_messaging` and `whatsapp_business_management` (Business settings, System
+  users). `META_WHATSAPP_SIGNUP_CONFIG_ID` stays unset.
 - **Embedded Signup** (WhatsApp): Facebook Login for Business, Configurations, create one for
   "WhatsApp Embedded Signup"; its id is `META_WHATSAPP_SIGNUP_CONFIG_ID`. Add the app's domain
   to the allowed domains.

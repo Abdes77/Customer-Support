@@ -391,6 +391,15 @@ export const ENV_SPEC = {
     secret: true,
     required: "optional",
   },
+  INNGEST_SERVE_ORIGIN: {
+    schema: url,
+    group: "inngest",
+    description:
+      "The public address Inngest reaches the app at, the same as APP_URL. Read by the Inngest SDK itself. Set it on Vercel, where the address of each single deployment is behind a login.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
   INNGEST_DEV: {
     schema: flag,
     group: "inngest",

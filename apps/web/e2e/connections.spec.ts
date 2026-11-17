@@ -85,6 +85,38 @@ test("the channels page shows each channel's stored state", async ({ page }) => 
   await noSideScroll(page);
 });
 
+test("a WhatsApp number is connected with an access token typed into the page", async ({
+  page,
+}) => {
+  const { channels } = state();
+  const token = "EAAGe2etoken0123456789abcdefghijklmnop";
+  await signIn(page, "admin@brightline.test");
+  await page.goto(`${APP_URL}/businesses/${channels.businessId}/channels`);
+  const whatsapp = page.getByTestId("channel-whatsapp");
+  await whatsapp.getByText("Connect a number with an access token").click();
+  // The page says where Meta's webhook has to point.
+  await expect(whatsapp.getByTestId("whatsapp-token")).toContainText(
+    `${APP_URL}/api/webhooks/whatsapp`,
+  );
+  const form = whatsapp.getByTestId("whatsapp-token-form");
+
+  // A token Meta would never issue is refused before anything is asked of Meta.
+  await form.getByLabel("WhatsApp Business Account ID").fill("300000000000002");
+  await form.getByLabel("Phone number ID").fill(channels.whatsappPhoneNumberId);
+  await form.getByLabel("Access token").fill("not a token");
+  await form.getByRole("button", { name: "Check and connect" }).click();
+  await expect(form.getByRole("alert")).toBeVisible();
+
+  // The real thing: checked against (the fake of) Meta, stored, and never shown again.
+  await form.getByLabel("Access token").fill(token);
+  await form.getByRole("button", { name: "Check and connect" }).click();
+  await expect(form.getByRole("status")).toContainText("Connected.");
+  await expect(whatsapp.getByTestId("whatsapp-number")).toContainText("Connected");
+  await expect(form.getByLabel("Access token")).toHaveValue("");
+  expect(await page.content()).not.toContain(token);
+  await noSideScroll(page);
+});
+
 test("the integrations page shows calendars, CRMs, webhooks and alerts", async ({ page }) => {
   const { businessId } = state();
   await signIn(page, "admin@brightline.test");

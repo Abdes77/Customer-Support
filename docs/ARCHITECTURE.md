@@ -1001,7 +1001,7 @@ Security and reliability across the system; the threats, their mitigations and p
 ### As built (the demo site, after C18)
 
 A public site at `/demo` that shows the assistant on sample businesses (`docs/DEMO.md`,
-DECISIONS 306 to 315). Nothing in it is a second implementation: the chat is the website chat
+DECISIONS 306 to 319). Nothing in it is a second implementation: the chat is the website chat
 of C8, the conversation runs through the pipeline and the engine, the lead is the lead of C5.
 
 - **Who is listed.** The business-only setting `channels.widget.demo_page` (off by default).
@@ -1042,8 +1042,16 @@ of C8, the conversation runs through the pipeline and the engine, the lead is th
   switch, the look, a one-second reply wait, no follow-ups, low spend caps).
 - **Deploying without a command line.** `apps/web/vercel.json` builds with
   `pnpm run build:deploy` (`scripts/predeploy.ts`, then `next build`). The script does nothing
-  unless `DEPLOY_MIGRATE=1`: then it runs `pnpm db:migrate` and, with `DEPLOY_DEMO_AGENCY`,
-  `pnpm demo:setup` for that agency.
+  unless `DEPLOY_MIGRATE=1`; then, once a database is connected, it runs `pnpm db:migrate`,
+  makes sure the Storage bucket exists, with `DEPLOY_DEMO_AGENCY` runs `pnpm demo:setup` for
+  that agency and with `DEPLOY_ADMIN_EMAIL` `pnpm db:create-admin` (DECISIONS 317). Supabase's
+  integration on Vercel is taken as it comes: `ENV_ALIASES` (`packages/core/src/env/load.ts`)
+  and `cleanConnectionUrl` (`packages/db/src/internal/client.ts`), DECISIONS 316.
+- **WhatsApp with a token** (DECISIONS 318). `ConnectionService.connectWithToken` shares
+  `connectNumber` with Embedded Signup (the number checked with the token, the app subscribed,
+  the connection and the encrypted credentials stored, the templates read) without the code
+  exchange and without registering the number; `POST /api/channels/whatsapp/token` and the
+  form on the Channels page (`WhatsAppTokenForm`) apply the same checks as the signup route.
 - **Tests.** `service.db.test.ts` (the origin rule, the lead endpoint), `edge.test.ts`
   (`requestOrigin`), `apps/web/src/server/demo/provision.test.ts` (setup, a second run, the
   listing), `apps/web/e2e/demo.spec.ts` (the journey at both widths against a production build).

@@ -18,6 +18,7 @@ export {
   createConnectionService,
   type EmbeddedSignupConfig,
   EmbeddedSignupInput,
+  TokenConnectInput,
   type WhatsAppConnectionView,
 } from "./connections";
 export { createWhatsAppEventHandler } from "./events";

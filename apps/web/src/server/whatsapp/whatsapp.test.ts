@@ -46,7 +46,7 @@ import { applySettingChanges } from "@repo/settings/server";
 import { buildServerPipeline, type ServerPipeline } from "@/server/pipeline";
 import { createWebhookHandler } from "@/server/pipeline/webhook-route";
 
-import { createEmbeddedSignupHandler } from "./routes";
+import { createEmbeddedSignupHandler, createTokenConnectHandler } from "./routes";
 
 /*
  * WhatsApp end to end, without Meta: recorded-style webhooks signed with the app secret go
@@ -516,6 +516,108 @@ describe("POST /api/oauth/meta/whatsapp (Embedded Signup)", () => {
 
     const unconfigured = createEmbeddedSignupHandler({
       getAccess: async () => null,
+      getWhatsApp: () => null,
+      directory: t.db.directory,
+    });
+    expect((await unconfigured(post(body))).status).toBe(503);
+  });
+});
+
+describe("POST /api/channels/whatsapp/token (connect with an access token)", () => {
+  const TOKEN = "EAAGtoken0123456789abcdefghijklmnop";
+
+  function post(body: unknown, headers: Record<string, string> = {}) {
+    return new Request("http://localhost:3000/api/channels/whatsapp/token", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost:3000", ...headers },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("connects a number for agency staff, keeps the token out of every answer, and refuses everyone else", async () => {
+    const admin = await t.db.localAuth.upsertUser({
+      email: `admin-${randomUUID()}@example.com`,
+      fullName: "Admin",
+    });
+    graph.phoneNumbers.push({
+      id: "200000000000002",
+      display_phone_number: "+1 555-020-0002",
+      verified_name: "Summit Roofing",
+    });
+    const body = {
+      businessId: tenant.businessId,
+      businessAccountId: FIXTURE_WABA_ID,
+      phoneNumberId: "200000000000002",
+      accessToken: TOKEN,
+    };
+    const staff = {
+      user: { id: admin.id, email: null },
+      access: {
+        userId: admin.id,
+        agencies: [{ agencyId: tenant.agencyId, role: "agency_member" as const }],
+        businesses: [],
+      },
+    };
+    const asStaff = createTokenConnectHandler({
+      getAccess: async () => staff,
+      getWhatsApp: () => server.whatsapp,
+      directory: t.db.directory,
+      logger: quiet,
+    });
+    const response = await asStaff(post(body));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(JSON.parse(text)).toMatchObject({
+      connection: { status: "active", phoneNumberId: "200000000000002" },
+    });
+    expect(text).not.toContain(TOKEN);
+    // The number now sends with that token.
+    const numbers = await server.whatsapp!.list(tenant);
+    expect(numbers.some((number) => number.phoneNumberId === "200000000000002")).toBe(true);
+
+    // Meta refuses the token: the page gets Meta's sentence, never the token.
+    graph.failNext(/phone_numbers$/, { code: 190, details: "Invalid OAuth access token." });
+    const refused = await asStaff(post({ ...body, phoneNumberId: "200000000000002" }));
+    expect(refused.status).toBe(502);
+    expect(await refused.text()).not.toContain(TOKEN);
+
+    const asClient = createTokenConnectHandler({
+      getAccess: async () => ({
+        user: { id: admin.id, email: null },
+        access: {
+          userId: admin.id,
+          agencies: [],
+          businesses: [
+            {
+              businessId: tenant.businessId,
+              agencyId: tenant.agencyId,
+              role: "client_owner" as const,
+              enabled: true,
+            },
+          ],
+        },
+      }),
+      getWhatsApp: () => server.whatsapp,
+      directory: t.db.directory,
+      logger: quiet,
+    });
+    expect((await asClient(post(body))).status).toBe(403);
+    const anonymous = createTokenConnectHandler({
+      getAccess: async () => null,
+      getWhatsApp: () => server.whatsapp,
+      directory: t.db.directory,
+      logger: quiet,
+    });
+    expect((await anonymous(post(body))).status).toBe(401);
+    expect((await asStaff(post(body, { origin: "https://evil.example" }))).status).toBe(403);
+    expect((await asStaff(post(body, { "sec-fetch-site": "cross-site" }))).status).toBe(403);
+    expect((await asStaff(post(body, { "content-type": "text/plain" }))).status).toBe(415);
+    expect((await asStaff(post({ ...body, accessToken: "no good" }))).status).toBe(400);
+    expect((await asStaff(post({ ...body, phoneNumberId: "../1" }))).status).toBe(400);
+    expect((await asStaff(post({ ...body, pin: "12" }))).status).toBe(400);
+    expect((await asStaff(post({ ...body, businessId: randomUUID() }))).status).toBe(404);
+    const unconfigured = createTokenConnectHandler({
+      getAccess: async () => staff,
       getWhatsApp: () => null,
       directory: t.db.directory,
     });
