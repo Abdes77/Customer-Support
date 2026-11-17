@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "status": "running",
+  "status": "finished",
   "started_at": "2026-11-17T13:46:04Z",
   "runner": "016VpDmob1gfdcFNybj6a2gR",
   "lean": true,
@@ -48,5 +48,6 @@
   "watchdog": "trig_01SaZHkiFbQcxQNggbuz24p2",
   "report_to": "016VpDmkLUzWE6L58nbRnwbn",
   "handed_off_at": "2026-11-17T13:46:37Z",
-  "runner_started_at": "2026-11-17T13:46:44Z"
+  "runner_started_at": "2026-11-17T13:46:44Z",
+  "finished_at": "2026-11-17T13:50:54Z"
 }
