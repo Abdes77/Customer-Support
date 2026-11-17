@@ -15,8 +15,12 @@
       "review": "none"
     },
     "T2": {
-      "status": "todo",
-      "attempts": 0
+      "status": "done",
+      "attempts": 1,
+      "done_at": "2026-11-17T13:49:44Z",
+      "model": "haiku",
+      "effort": "medium",
+      "review": "none"
     },
     "T3": {
       "status": "todo",
