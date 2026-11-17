@@ -194,14 +194,15 @@ When an action is `finish`, every step is done, blocked or skipped.
      KPIs were missed and which can only be measured in production;
    - what is unverified: blocked or skipped steps, steps not reviewed, live checks not run,
      flaky checks;
-   - the pull request link, and the first item of `docs/HUMAN_TODO.md`, which is the user's
-     next action.
+   - the pull request link if there is one, and the first item of `docs/HUMAN_TODO.md`, which
+     is the user's next action.
 5. If the finish output has `report_to`, send that report, complete, to that session with
    `send_message`: the user reads it there. Then give the same report as your own final
    message, and only now end your turn for good.
 
 Leave `autobuild/` and `.claude/agents/` as they are, and mention in the report that both can
-be deleted once the pull request is merged.
+be deleted once the work is merged (or, without a pull request, once the user has looked at
+the result).
 
 ## If something outside the script fails
 
