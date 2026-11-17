@@ -712,6 +712,18 @@ function boot(script: HTMLScriptElement): void {
       if (!document.hidden && session !== null) void poll();
       else schedule();
     });
+    // The page the chat sits on may open it, or send a line for the visitor (a "Chat with
+    // us" button, a suggested question):
+    //   document.dispatchEvent(new CustomEvent("hsrb-chat:open"))
+    //   document.dispatchEvent(new CustomEvent("hsrb-chat:send", { detail: "My roof leaks" }))
+    document.addEventListener("hsrb-chat:open", () => {
+      if (!isOpen) setOpen(true);
+    });
+    document.addEventListener("hsrb-chat:send", (event) => {
+      const text: unknown = (event as CustomEvent<unknown>).detail;
+      if (!isOpen) setOpen(true);
+      if (typeof text === "string") void sendText(text.slice(0, config.maxTextLength));
+    });
 
     // --- start -----------------------------------------------------------------------------
     const stored = load();

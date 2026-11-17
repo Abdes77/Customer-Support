@@ -65,9 +65,40 @@ export function clientIp(
   return ip === null ? null : ip.slice(0, 64);
 }
 
+/**
+ * The site the request came from. A browser sends `Origin` on every cross-origin request the
+ * chat makes, but not on a same-origin GET: the chat on a page this app serves itself (the
+ * public demo site) would have none. `Sec-Fetch-Site: same-origin` is set by the browser and
+ * cannot be set by a page's script, so such a request comes from this app's own origin, read
+ * from the page's address (`Referer`) or, when the browser withholds it, from the address the
+ * request was sent to. Whether that origin may use a business's chat is still the service's
+ * decision. Anything else without an `Origin` (an image tag or a no-cors request from another
+ * site) stays without one and is refused.
+ */
+export function requestOrigin(request: Request): string | null {
+  const origin = request.headers.get("origin");
+  if (origin !== null) return origin;
+  if (request.headers.get("sec-fetch-site") !== "same-origin") return null;
+  const referer = request.headers.get("referer");
+  if (referer !== null) {
+    try {
+      return new URL(referer).origin;
+    } catch {
+      // Fall through to the request's own address.
+    }
+  }
+  const first = (value: string | null) => value?.split(",")[0]?.trim() ?? "";
+  const host = first(request.headers.get("x-forwarded-host")) || first(request.headers.get("host"));
+  if (host === "") return null;
+  const scheme =
+    first(request.headers.get("x-forwarded-proto")) ||
+    new URL(request.url).protocol.replace(":", "");
+  return `${scheme}://${host}`;
+}
+
 export function requestInfo(request: Request): WidgetRequestInfo {
   return {
-    origin: request.headers.get("origin"),
+    origin: requestOrigin(request),
     ip: clientIp(request),
     userAgent: request.headers.get("user-agent"),
   };

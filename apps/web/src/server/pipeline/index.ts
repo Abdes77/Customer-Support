@@ -603,6 +603,8 @@ export function buildServerPipeline(options: ServerPipelineOptions): ServerPipel
           storage,
           secret: widgetSecret,
           realtime: realtime === null ? null : { url: realtime.url, apiKey: realtime.apiKey },
+          // The public demo site (/demo) embeds the chat on this app's own pages.
+          appOrigin: appUrl,
           logger,
         });
   // Without a key on a developer machine a playbook is the built-in starter document and

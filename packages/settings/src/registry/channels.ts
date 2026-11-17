@@ -129,6 +129,13 @@ export const channelsSettings = defineCategory("channels", {
       default: [],
       scopes: BUSINESS_ONLY,
     }),
+    "channels.widget.demo_page": setting({
+      label: "Public demo page",
+      help: "Lists this business on the public demo site (/demo), where anyone can chat with its assistant and watch the lead being scored. The chat then also works on that page without adding it to the list above. For sample businesses used in sales demos: everything a visitor writes there becomes a conversation and a lead like any other, and the visitor sees the score, the collected answers and the lead report of their own conversation.",
+      field: f.boolean(),
+      default: false,
+      scopes: BUSINESS_ONLY,
+    }),
   }),
 
   ...group("WhatsApp", {

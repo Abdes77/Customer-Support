@@ -92,6 +92,18 @@ export function listMessagesHandler(getWidget?: Get) {
     );
 }
 
+/** The lead of the visitor's own conversation, for the public demo page only. */
+export function demoLeadHandler(getWidget?: Get) {
+  return (request: Request) =>
+    withWidget(
+      request,
+      "demo.lead",
+      async (widget) =>
+        outcomeResponse(request, await widget.demoLead(bearerToken(request), requestInfo(request))),
+      getWidget,
+    );
+}
+
 export function postMessageHandler(getWidget?: Get) {
   return (request: Request) =>
     withWidget(

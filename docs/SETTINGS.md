@@ -130,7 +130,7 @@ placeholder a setting does not list is a validation error.
 
 ## Catalogue
 
-351 settings in 22 categories.
+352 settings in 22 categories.
 
 | Category | Settings | What it covers |
 | --- | --- | --- |
@@ -149,7 +149,7 @@ placeholder a setting does not list is a validation error.
 | [Handoff and human takeover](#handoff) | 10 | When a person takes over a conversation and when the bot resumes. |
 | [Alerts](#alerts) | 9 | Who is told about leads, and how. |
 | [Scheduling](#scheduling) | 32 | Calendars, meeting slots, booking rules and reminders. |
-| [Channels](#channels) | 37 | Options of the website widget, WhatsApp, Instagram, Messenger and email. |
+| [Channels](#channels) | 38 | Options of the website widget, WhatsApp, Instagram, Messenger and email. |
 | [CRM and webhooks](#integrations) | 16 | When leads are pushed to a CRM, field mapping and outgoing webhooks. |
 | [Knowledge](#knowledge) | 7 | How business knowledge is gathered and used in replies. |
 | [Client portal](#client_portal) | 10 | What the business's own users may see and do when they have a login. |
@@ -1301,6 +1301,7 @@ Options of the website widget, WhatsApp, Instagram, Messenger and email.
 | `channels.widget.privacy_url` | **Privacy policy link.** The privacy note links here when both are set. | web address, or empty (no link) | `null` | all | yes |
 | `channels.widget.session_days` | **Remember a visitor for.** A returning visitor sees their earlier conversation for this long. | whole number, 1 to 365 days | `30` | all |  |
 | `channels.widget.allowed_origins` | **Websites that may show the chat.** The chat only works on these sites. Add every address the site is served from, for example https://www.example.com and https://example.com. With none, the chat works nowhere. | list (up to 30) of: site origin (scheme and host, no path) | `[]` | business |  |
+| `channels.widget.demo_page` | **Public demo page.** Lists this business on the public demo site (/demo), where anyone can chat with its assistant and watch the lead being scored. The chat then also works on that page without adding it to the list above. For sample businesses used in sales demos: everything a visitor writes there becomes a conversation and a lead like any other, and the visitor sees the score, the collected answers and the lead report of their own conversation. | yes / no | `false` | business |  |
 | `channels.whatsapp.voice_messages` | **Voice messages.** What happens when a customer sends a voice message. | one of: `ask_to_type`, `transcribe` | `"ask_to_type"` | all |  |
 | `channels.whatsapp.buttons` | **Buttons and lists.** The bot may offer tap-to-answer buttons and lists where they make a question easier, such as picking a time. | yes / no | `true` | all |  |
 | `channels.whatsapp.follow_up_template` | **Follow-up template.** Name of the approved message template used for nudges outside the 24-hour window. Empty: no nudge is sent once the window has closed. | text, up to 120 characters, or empty (no template) | `null` | all |  |

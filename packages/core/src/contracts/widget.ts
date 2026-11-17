@@ -8,7 +8,9 @@ import { z } from "zod";
  * types only, so none of Zod ends up in the bundle a business's website loads.
  *
  * Nothing here may ever carry a secret, a staff-only field (scores, reports, notes, internal
- * ids beyond the visitor's own messages) or another visitor's data.
+ * ids beyond the visitor's own messages) or another visitor's data. The one deliberate
+ * exception is `WidgetDemoLead`: the lead of the visitor's own conversation, served only for
+ * a business that switched its public demo page on (`channels.widget.demo_page`).
  */
 
 /** Public key of a business's widget: names the business and grants nothing else. */
@@ -129,6 +131,40 @@ export interface WidgetMessages {
   readonly cursor: string;
   /** True while a reply is being written. */
   readonly typing: boolean;
+}
+
+/**
+ * What the public demo page shows next to the chat: the lead the assistant is building from
+ * the visitor's own conversation, as the business would see it in its inbox. Only ever served
+ * for a business whose `channels.widget.demo_page` setting is on, and only for the session
+ * that asks.
+ */
+export interface WidgetDemoLead {
+  /** False until the visitor's first message has been answered and scored. */
+  readonly started: boolean;
+  /** 0 to 100. */
+  readonly score: number | null;
+  readonly band: string | null;
+  readonly status: string | null;
+  /** What the business's routing settings decided: book, call back, disqualify... */
+  readonly routingOutcome: string | null;
+  readonly routingReasons: readonly string[];
+  /** What the assistant has learned so far, in the order of the business's criteria. */
+  readonly fields: readonly WidgetDemoLeadField[];
+  /** Criteria the assistant is still working toward. */
+  readonly open: readonly string[];
+  readonly report: { readonly summary: string; readonly markdown: string } | null;
+  readonly updatedAt: string | null;
+}
+
+export interface WidgetDemoLeadField {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+  /** 0 = a guess, 1 = stated outright by the customer. */
+  readonly confidence: number;
+  /** The customer's words the value rests on. */
+  readonly evidence: string | null;
 }
 
 export const WIDGET_ERROR_CODES = [

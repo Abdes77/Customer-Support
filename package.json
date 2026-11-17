@@ -31,6 +31,7 @@
     "db:reset": "pnpm --filter @repo/db run reset",
     "db:doctor": "pnpm --filter @repo/db run doctor",
     "db:create-admin": "pnpm --filter @repo/db run create-admin",
+    "demo:setup": "pnpm --filter @repo/web run demo:setup",
     "services:up": "bash scripts/dev-services.sh up",
     "services:down": "bash scripts/dev-services.sh down",
     "services:status": "bash scripts/dev-services.sh status"

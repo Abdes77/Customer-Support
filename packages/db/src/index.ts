@@ -36,10 +36,12 @@ export type {
   ApiKeyRef,
   BusinessRef,
   ChannelConnectionRef,
+  DemoBusinessRef,
   IntegrationConnectionRef,
   Directory,
   TenantRef,
 } from "./directory";
+export { DEMO_PAGE_SETTING_KEY } from "./directory";
 export type { Platform } from "./platform";
 export type { LocalAuthStore, LocalAuthUser } from "./local-auth";
 export { createSupabaseAuthAdmin, type SupabaseAuthAdmin } from "./supabase-auth-admin";

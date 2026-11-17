@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { businessHoursState, describeNextOpen } from "@repo/ai";
+import { businessHoursState, describeNextOpen, leadFieldCatalogue } from "@repo/ai";
 import {
   type AgencyId,
   type BusinessId,
@@ -13,6 +13,7 @@ import {
   WIDGET_MAX_TEXT_LENGTH,
   WidgetClientMessageId,
   type WidgetConfig,
+  type WidgetDemoLead,
   type WidgetError,
   type WidgetErrorCode,
   type WidgetMessage,
@@ -40,8 +41,12 @@ import {
   gt,
   inArray,
   isNull,
+  leadFields,
+  leadReports,
+  leads,
   messages,
   or,
+  routingDecisions,
   sql,
   storedUploads,
   takeoverLocks,
@@ -85,6 +90,12 @@ export interface WidgetServiceOptions {
   readonly secret: string;
   /** Supabase Realtime for live pokes; null makes the browser poll. */
   readonly realtime: { readonly url: string; readonly apiKey: string } | null;
+  /**
+   * The app's own origin (APP_URL). The chat of a business whose public demo page is on
+   * (`channels.widget.demo_page`) also works on pages served from here. Null or absent: only
+   * the business's own list counts.
+   */
+  readonly appOrigin?: string | null;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
@@ -112,6 +123,14 @@ export interface WidgetService {
     after: string | null,
     request: WidgetRequestInfo,
   ): Promise<WidgetOutcome<WidgetMessages>>;
+  /**
+   * The lead of the visitor's own conversation, for the public demo page. Answers "not
+   * found" unless the business switched `channels.widget.demo_page` on.
+   */
+  demoLead(
+    token: string | null,
+    request: WidgetRequestInfo,
+  ): Promise<WidgetOutcome<WidgetDemoLead>>;
 }
 
 const TYPING_WINDOW_MS = 2 * 60 * 1000;
@@ -210,6 +229,43 @@ type Checked =
       readonly image: SniffedImage | null;
     };
 
+const EMPTY_DEMO_LEAD: WidgetDemoLead = {
+  started: false,
+  score: null,
+  band: null,
+  status: null,
+  routingOutcome: null,
+  routingReasons: [],
+  fields: [],
+  open: [],
+  report: null,
+  updatedAt: null,
+};
+
+/**
+ * A stored lead value as one line of text for the demo page. The canonical values of the
+ * enumerated criteria read "this_week" or "homeowner": `choice` shows them as "This week".
+ */
+function demoValue(value: unknown, choice = false): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text === "") return null;
+    return choice && /^[a-z0-9]+(_[a-z0-9]+)*$/.test(text)
+      ? text.charAt(0).toUpperCase() + text.slice(1).replaceAll("_", " ")
+      : text.slice(0, 400);
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((part) => demoValue(part, choice))
+      .filter((part): part is string => part !== null);
+    return parts.length === 0 ? null : parts.join(", ").slice(0, 400);
+  }
+  return null;
+}
+
 const Cursor = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d{1,9})$/;
 
 /**
@@ -241,6 +297,17 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
     if (ref?.channel !== "widget" || ref.status !== "active") return null;
     if (ref.businessStatus === "archived") return null;
     return ref;
+  }
+
+  const appOrigin = normalizeOrigin(options.appOrigin);
+
+  /**
+   * Whether the chat may run on the site the request came from: a site on the business's
+   * list, or this app's own pages when the business has its public demo page on.
+   */
+  function siteAllowed(origin: string, values: AppSettings): boolean {
+    if (isOriginAllowed(origin, values["channels.widget.allowed_origins"])) return true;
+    return values["channels.widget.demo_page"] && appOrigin !== null && origin === appOrigin;
   }
 
   function realtimeFor(connectionId: string, visitorId: string): WidgetSession["realtime"] {
@@ -320,7 +387,7 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
             return widgetFailure(404, "widget_not_found");
           }
           const settings = await loadSettings(ctx, ctx.tenant, { logger: log });
-          if (!isOriginAllowed(origin, settings.values["channels.widget.allowed_origins"])) {
+          if (!siteAllowed(origin, settings.values)) {
             return widgetFailure(403, "origin_not_allowed");
           }
           return work({ ctx, session, key: connection.key, values: settings.values });
@@ -342,7 +409,7 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
       return db.forBusiness(ref.businessId, { agencyId: ref.agencyId }).run(async (ctx) => {
         const settings = await loadSettings(ctx, ctx.tenant, { logger: log });
         const values = settings.values;
-        if (!isOriginAllowed(origin, values["channels.widget.allowed_origins"])) {
+        if (!siteAllowed(origin, values)) {
           return widgetFailure(403, "origin_not_allowed");
         }
         const business = await businessRow(ctx);
@@ -406,7 +473,7 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
       return db.forBusiness(ref.businessId, { agencyId: ref.agencyId }).run(async (ctx) => {
         const settings = await loadSettings(ctx, ctx.tenant, { logger: log });
         const values = settings.values;
-        if (!isOriginAllowed(origin, values["channels.widget.allowed_origins"])) {
+        if (!siteAllowed(origin, values)) {
           return widgetFailure(403, "origin_not_allowed");
         }
         const expiresAt = new Date(
@@ -844,6 +911,90 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
           messages: list,
           cursor: `${conversationId}:${cursorSeq}`,
           typing,
+        });
+      });
+    },
+
+    async demoLead(token, request) {
+      return authed(token, request, async ({ ctx, session, values }) => {
+        // Scores and reports are staff-only everywhere else: without the switch this route
+        // does not exist for the business.
+        if (!values["channels.widget.demo_page"]) return widgetFailure(404, "widget_not_found");
+        const limited = await readLimit(ctx, session, clock());
+        if (limited !== null) return limited;
+        const found = await findConversation(ctx, session);
+        if (found === null) return ok(EMPTY_DEMO_LEAD);
+        const [lead] = await ctx.tx
+          .select()
+          .from(leads)
+          .where(eq(leads.conversationId, found.conversationId))
+          .limit(1);
+        if (lead === undefined) return ok(EMPTY_DEMO_LEAD);
+        const stored = await ctx.tx
+          .select({
+            key: leadFields.key,
+            value: leadFields.value,
+            confidence: leadFields.confidence,
+            evidence: leadFields.evidence,
+          })
+          .from(leadFields)
+          .where(eq(leadFields.leadId, lead.id));
+        const [report] = await ctx.tx
+          .select({ summary: leadReports.summary, markdown: leadReports.markdown })
+          .from(leadReports)
+          .where(eq(leadReports.leadId, lead.id))
+          .orderBy(desc(leadReports.version))
+          .limit(1);
+        const [decision] = await ctx.tx
+          .select({ reasons: routingDecisions.reasons })
+          .from(routingDecisions)
+          .where(eq(routingDecisions.leadId, lead.id))
+          .orderBy(desc(routingDecisions.sequence), desc(routingDecisions.decidedAt))
+          .limit(1);
+
+        // In the order of the business's own criteria; what is stored under a key the
+        // settings no longer list comes last under its key.
+        const byKey = new Map(stored.map((field) => [field.key, field]));
+        const fields: WidgetDemoLead["fields"][number][] = [];
+        const open: string[] = [];
+        for (const spec of leadFieldCatalogue(values)) {
+          const field = byKey.get(spec.key);
+          const value = demoValue(field?.value, spec.type === "choice");
+          byKey.delete(spec.key);
+          if (field === undefined || value === null) {
+            if (spec.group === "criterion" && spec.ask) open.push(spec.label);
+            continue;
+          }
+          fields.push({
+            key: spec.key,
+            label: spec.label,
+            value,
+            confidence: field.confidence,
+            evidence: field.evidence?.slice(0, 300) ?? null,
+          });
+        }
+        for (const field of byKey.values()) {
+          const value = demoValue(field.value);
+          if (value === null) continue;
+          fields.push({
+            key: field.key,
+            label: field.key.charAt(0).toUpperCase() + field.key.slice(1).replaceAll("_", " "),
+            value,
+            confidence: field.confidence,
+            evidence: field.evidence?.slice(0, 300) ?? null,
+          });
+        }
+        return ok<WidgetDemoLead>({
+          started: true,
+          score: Math.round(lead.score),
+          band: lead.band,
+          status: lead.status,
+          routingOutcome: lead.routingOutcome,
+          routingReasons: (decision?.reasons ?? []).slice(0, 8),
+          fields,
+          open,
+          report: report ?? null,
+          updatedAt: lead.updatedAt.toISOString(),
         });
       });
     },

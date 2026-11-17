@@ -12,6 +12,7 @@ import type {
 import { hashApiKey, looksLikeApiKey } from "./api-keys";
 import type { Connection } from "./internal/client";
 import {
+  agencies,
   alerts,
   apiKeys,
   auditLog,
@@ -19,6 +20,8 @@ import {
   channelConnections,
   escalations,
   integrationConnections,
+  segments,
+  settingValues,
   users,
 } from "./schema/tables";
 import type { BusinessStatus, ConnectionStatus } from "./schema/vocab";
@@ -61,6 +64,27 @@ export interface IntegrationConnectionRef extends TenantRef {
 /** An alert found by an acknowledgement link or a provider callback (C13). */
 export interface AlertRef extends TenantRef {
   readonly alertId: string;
+}
+
+/**
+ * The setting that puts a business on the public demo site. Declared in `@repo/settings`
+ * (which this package cannot import); a business-only setting, so its business-scope row is
+ * its whole value and the directory can read it without resolving anything.
+ */
+export const DEMO_PAGE_SETTING_KEY = "channels.widget.demo_page";
+
+/** A business that chose to be listed on the public demo site (`/demo`). */
+export interface DemoBusinessRef extends TenantRef {
+  /** The agency that runs the demo, named on the demo site. */
+  readonly agencyName: string;
+  readonly slug: string;
+  readonly name: string;
+  readonly city: string | null;
+  readonly state: string | null;
+  readonly segmentSlug: string | null;
+  readonly segmentName: string | null;
+  /** The public key of its website chat. */
+  readonly widgetKey: string;
 }
 
 export interface ApiKeyRef {
@@ -137,6 +161,14 @@ export interface Directory {
     readonly statuses?: readonly BusinessStatus[];
     readonly agencyId?: AgencyId;
   }): Promise<BusinessRef[]>;
+
+  /**
+   * The businesses on the public demo site: active, with their website chat connected and
+   * their "Public demo page" setting on (`channels.widget.demo_page`), oldest first. Only
+   * what such a business has itself made public by that switch is returned: its name, place,
+   * trade and the public key of its chat. Every other business stays invisible here.
+   */
+  listDemoBusinesses(): Promise<DemoBusinessRef[]>;
 
   /**
    * Checks a presented API key. Returns the key's tenant when the key exists, is not
@@ -321,6 +353,44 @@ export function createDirectory(connection: Connection): Directory {
             filter.agencyId === undefined ? undefined : eq(businesses.agencyId, filter.agencyId),
           ),
         )
+        .orderBy(businesses.createdAt, businesses.id);
+    },
+
+    async listDemoBusinesses() {
+      return db
+        .select({
+          agencyId: businesses.agencyId,
+          businessId: businesses.id,
+          agencyName: agencies.name,
+          slug: businesses.slug,
+          name: businesses.name,
+          city: businesses.city,
+          state: businesses.state,
+          segmentSlug: segments.slug,
+          segmentName: segments.name,
+          widgetKey: channelConnections.externalAccountId,
+        })
+        .from(businesses)
+        .innerJoin(agencies, eq(agencies.id, businesses.agencyId))
+        .innerJoin(
+          settingValues,
+          and(
+            eq(settingValues.businessId, businesses.id),
+            eq(settingValues.scope, "business"),
+            eq(settingValues.key, DEMO_PAGE_SETTING_KEY),
+            sql`${settingValues.value} = 'true'::jsonb`,
+          ),
+        )
+        .innerJoin(
+          channelConnections,
+          and(
+            eq(channelConnections.businessId, businesses.id),
+            eq(channelConnections.channel, "widget"),
+            eq(channelConnections.status, "active"),
+          ),
+        )
+        .leftJoin(segments, eq(segments.id, businesses.segmentId))
+        .where(eq(businesses.status, "active"))
         .orderBy(businesses.createdAt, businesses.id);
     },
 
