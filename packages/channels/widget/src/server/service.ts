@@ -68,6 +68,12 @@ import { hit } from "./limits";
 export interface WidgetRequestInfo {
   /** The `Origin` header. Browsers set it on every cross-origin request the widget makes. */
   readonly origin: string | null;
+  /**
+   * The browser marked the request as coming from a page of this app itself
+   * (`Sec-Fetch-Site: same-origin`, which a page's script cannot set). Only the chat on the
+   * public demo pages is in that position.
+   */
+  readonly sameOrigin?: boolean;
   readonly ip: string | null;
   readonly userAgent: string | null;
 }
@@ -92,8 +98,10 @@ export interface WidgetServiceOptions {
   readonly realtime: { readonly url: string; readonly apiKey: string } | null;
   /**
    * The app's own origin (APP_URL). The chat of a business whose public demo page is on
-   * (`channels.widget.demo_page`) also works on pages served from here. Null or absent: only
-   * the business's own list counts.
+   * (`channels.widget.demo_page`) also works on pages served from here, and on any request
+   * the browser itself marks as same-origin (`WidgetRequestInfo.sameOrigin`), which covers
+   * an address of the deployment that APP_URL does not name. Null or absent: only that mark
+   * and the business's own list count.
    */
   readonly appOrigin?: string | null;
   readonly clock?: () => Date;
@@ -305,9 +313,10 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
    * Whether the chat may run on the site the request came from: a site on the business's
    * list, or this app's own pages when the business has its public demo page on.
    */
-  function siteAllowed(origin: string, values: AppSettings): boolean {
+  function siteAllowed(origin: string, values: AppSettings, request: WidgetRequestInfo): boolean {
     if (isOriginAllowed(origin, values["channels.widget.allowed_origins"])) return true;
-    return values["channels.widget.demo_page"] && appOrigin !== null && origin === appOrigin;
+    if (!values["channels.widget.demo_page"]) return false;
+    return request.sameOrigin === true || (appOrigin !== null && origin === appOrigin);
   }
 
   function realtimeFor(connectionId: string, visitorId: string): WidgetSession["realtime"] {
@@ -387,7 +396,7 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
             return widgetFailure(404, "widget_not_found");
           }
           const settings = await loadSettings(ctx, ctx.tenant, { logger: log });
-          if (!siteAllowed(origin, settings.values)) {
+          if (!siteAllowed(origin, settings.values, request)) {
             return widgetFailure(403, "origin_not_allowed");
           }
           return work({ ctx, session, key: connection.key, values: settings.values });
@@ -409,7 +418,7 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
       return db.forBusiness(ref.businessId, { agencyId: ref.agencyId }).run(async (ctx) => {
         const settings = await loadSettings(ctx, ctx.tenant, { logger: log });
         const values = settings.values;
-        if (!siteAllowed(origin, values)) {
+        if (!siteAllowed(origin, values, request)) {
           return widgetFailure(403, "origin_not_allowed");
         }
         const business = await businessRow(ctx);
@@ -473,7 +482,7 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
       return db.forBusiness(ref.businessId, { agencyId: ref.agencyId }).run(async (ctx) => {
         const settings = await loadSettings(ctx, ctx.tenant, { logger: log });
         const values = settings.values;
-        if (!siteAllowed(origin, values)) {
+        if (!siteAllowed(origin, values, request)) {
           return widgetFailure(403, "origin_not_allowed");
         }
         const expiresAt = new Date(

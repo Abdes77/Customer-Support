@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ModelNotice } from "@/components/demo/model-notice";
 import { type DemoListing, demoPrompts, listDemoBusinesses } from "@/server/demo/site";
 
 /*
@@ -71,6 +72,7 @@ export default async function DemoHomeRoute() {
 
   return (
     <div className="min-h-screen bg-stone-100 text-slate-900">
+      <ModelNotice />
       <header className="bg-slate-950 text-white">
         <div className="mx-auto max-w-6xl px-4 pt-6 pb-16 sm:px-6 sm:pb-20">
           <p className="text-sm font-semibold text-slate-300">

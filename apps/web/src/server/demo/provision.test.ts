@@ -72,6 +72,10 @@ describe("demo:setup", () => {
         expect(values["limits.contact_daily_spend_usd"]).toBeLessThanOrEqual(2);
         expect(values["limits.business_daily_spend_usd"]).toBeLessThanOrEqual(20);
         expect(values["follow_up.enabled"]).toBe(false);
+        expect(values["emergency.phone"]).toMatch(/^\+1\d{3}55501\d\d$/);
+        // The greeting carries the AI disclosure, so the first reply need not repeat it.
+        expect(values["voice.opening_message.widget"]).toContain("AI assistant");
+        expect(values["persona.ai_disclosure"]).toBe("when_asked");
       });
     }
   });

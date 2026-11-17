@@ -1015,11 +1015,12 @@ of C8, the conversation runs through the pipeline and the engine, the lead is th
   pastes on its own site (`components/demo/chat-snippet.tsx`). Links between demo pages are
   full page loads: the chat script binds to one business per page. `/` sends a visitor who is
   not signed in to `/demo` when a business is listed, otherwise to the admin panel as before.
-- **The chat on the app's own origin.** `createWidgetService({ appOrigin })`: for a business
-  with the switch on, the app's origin (`APP_URL`) is allowed in addition to
-  `channels.widget.allowed_origins`. A same-origin GET has no `Origin` header, so
-  `requestOrigin` (`apps/web/src/server/widget/http.ts`) takes the origin from the page's
-  address when the browser marks the request `Sec-Fetch-Site: same-origin`.
+- **The chat on the app's own origin.** For a business with the switch on, a request from
+  the app's own pages is allowed in addition to `channels.widget.allowed_origins`: one the
+  browser marks `Sec-Fetch-Site: same-origin` (`WidgetRequestInfo.sameOrigin`), or one whose
+  origin is `APP_URL` (`createWidgetService({ appOrigin })`). A same-origin GET has no
+  `Origin` header, so `requestOrigin` (`apps/web/src/server/widget/http.ts`) takes the origin
+  from the page's address for a request with that mark.
 - **The lead panel.** `GET /api/widget/v1/demo/lead` (`WidgetService.demoLead`,
   `WidgetDemoLead` in `contracts/widget.ts`): with the visitor's session token, the lead of
   that session's conversation (score, band, status, routing outcome and reasons, the answers

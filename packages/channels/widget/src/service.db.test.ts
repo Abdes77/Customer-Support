@@ -700,8 +700,15 @@ describe("public demo page", () => {
     });
     // A business that did not switch it on is not reachable from the app's pages.
     expect(await demo.config(otherKey, fromApp)).toMatchObject({ status: 403 });
-    // A deployment that names no origin of its own allows nothing extra.
+    // A deployment that names no origin of its own allows nothing extra...
     expect(await service.config(key, fromApp)).toMatchObject({ status: 403 });
+    // ...except a request the browser itself marks as same-origin: the demo page on an
+    // address of the deployment that APP_URL does not name.
+    const alias = { ...fromApp, origin: "https://demo-alias.example.com", sameOrigin: true };
+    expect((await service.config(key, alias)).ok).toBe(true);
+    expect((await demo.config(key, alias)).ok).toBe(true);
+    // The mark opens nothing for a business without the switch.
+    expect(await demo.config(otherKey, alias)).toMatchObject({ status: 403 });
 
     // Switched off again, the session started on the app's page stops working.
     await demoPage(false);
@@ -709,6 +716,7 @@ describe("public demo page", () => {
       ok: false,
       status: 403,
     });
+    expect(await demo.config(key, alias)).toMatchObject({ status: 403 });
   });
 
   it("shows a visitor the lead of their own conversation, and only for a demo business", async () => {

@@ -114,6 +114,12 @@ every night (Inngest), with counts only.
 
 4. After the deployment: readiness (daily check 1) and the live round trip (daily check 6).
 
+**With `DEPLOY_MIGRATE=1` on the Vercel project** (the short path of `docs/DEMO.md`), step 2
+happens by itself: every deployment's build first runs `pnpm db:migrate` and fails before
+anything is published when a migration does not apply. `pnpm db:doctor` is still worth running
+after a migration. With `DEPLOY_DEMO_AGENCY` set as well, the build also refreshes the demo
+site's sample businesses (`pnpm demo:setup`), keeping what a person changed.
+
 ## Rolling back
 
 - **The code:** Vercel, the project, Deployments, choose the last good deployment, "Promote to

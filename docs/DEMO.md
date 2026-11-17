@@ -126,8 +126,9 @@ functions, `pipeline-reply` and `pipeline-send` among them, and a run for each r
 
 If the chat stays silent: Inngest is not connected (step 4; Inngest dashboard, Apps) or the
 Claude API refused the key or the model (Vercel, Logs; a 400 that mentions data retention is
-step 1). If the chat does not appear at all: `APP_URL` is not the address in the browser's
-address bar (the chat on the demo pages works on the app's own address only). The checks of
+step 1). If the chat does not appear at all: open the browser's console; a 403 on
+`/api/widget/v1/config` means the business's "Public demo page" setting is off, a 503 that
+`WIDGET_SESSION_SECRET` is missing. The checks of
 HUMAN_TODO 21 apply to this deployment as to any other.
 
 **The admin panel** (to read the demo conversations as the business would): in Supabase,

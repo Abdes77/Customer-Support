@@ -7,6 +7,7 @@ import type { KnowledgeCategory } from "@repo/core";
 import { OpenChatButton, PromptChips } from "@/components/demo/chat-actions";
 import { ChatSnippet } from "@/components/demo/chat-snippet";
 import { LeadPanel } from "@/components/demo/lead-panel";
+import { ModelNotice } from "@/components/demo/model-notice";
 import { type DemoBusinessPage, type DemoFact, loadDemoBusiness } from "@/server/demo/site";
 
 /*
@@ -245,6 +246,8 @@ export default async function DemoBusinessRoute({
           </p>
         </div>
       </div>
+
+      <ModelNotice />
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:grid lg:grid-cols-[340px_minmax(0,1fr)] lg:gap-8">
         <aside className="mb-6 lg:sticky lg:top-6 lg:mb-0 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">

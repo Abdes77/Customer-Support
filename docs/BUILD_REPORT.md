@@ -347,6 +347,35 @@ Each item says where to read more. The launch checklist turns them into steps.
 10. **Nothing was deployed.** No production migration, deployment, DNS change or purchase was
     made. The exact commands are in HUMAN_TODO Part 3 and `docs/RUNBOOK.md`.
 
+## Added after the build: the public demo site (2026-11-17)
+
+Not part of the 19 stages. A public site at `/demo` for showing the assistant: sample businesses
+per trade, each with its "website", its real website chat and a panel that shows the lead the
+assistant builds from the visitor's conversation. `docs/DEMO.md` describes it and the short path
+to put it online (Claude API key, Supabase, Vercel, Inngest; no command to type).
+
+- **Built:** the business-only setting "Public demo page" (`channels.widget.demo_page`); the
+  pages; the lead panel's route (served for demo businesses only, for the visitor's own
+  conversation only); the chat on the app's own origin; `pnpm demo:setup` with five invented
+  sample businesses (facts, starter playbooks, low spend caps); an opt-in deploy step that
+  applies migrations and stores the samples during the build (`DEPLOY_MIGRATE`,
+  `DEPLOY_DEMO_AGENCY`); a GitHub workflow that plays the scripted customers against the
+  Claude API on request (`live-check`).
+- **Fixed on the way:** four round-trip tests of WhatsApp, Messenger and Instagram failed for
+  everyone from the day after their fixtures' fixed date, because the channels' reply windows
+  had closed (DECISIONS 315).
+- **Verified on this computer:** `pnpm verify`; the browser tests including the demo journey
+  at both widths; the deploy step on an empty database, twice; a conversation on a demo page
+  with the jobs run by the Inngest dev server (not Inngest Cloud) instead of the in-process
+  runner. Every reply in these runs came from the rule-based stand-in.
+- **Still unverified:** everything the list above this section says, unchanged. In particular
+  no reply has been written by the real model: the cloud session that built the demo site had
+  no way to call the Claude API for the app (the key set on its environment was not passed to
+  its commands, and its credential form does not take keys for Anthropic's hosts), so the first
+  real conversations run through the `live-check` workflow or on a computer (HUMAN_TODO 24). The demo site has not been deployed.
+  It was not part of the independent security audit; its threats are THREAT_MODEL 2.7, last
+  three rows.
+
 ## Where to start
 
 Open `docs/HUMAN_TODO.md` and begin with step 1: create a vault in your password manager for the
@@ -359,6 +388,7 @@ decisions to make with a compliance adviser, in that order.
 | Document | For |
 | --- | --- |
 | `docs/HUMAN_TODO.md` | The launch checklist |
+| `docs/DEMO.md` | The public demo site and the short path to put it online |
 | `docs/RUNBOOK.md` | Running the system after launch |
 | `docs/ONBOARDING.md` | Agency staff onboarding a client business |
 | `docs/META_APP_REVIEW.md` | Meta's App Review submission |

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { WidgetService } from "@repo/channel-widget/server";
 
-import { clientIp, EDGE_LIMITS, requestOrigin } from "./http";
+import { clientIp, EDGE_LIMITS, requestInfo, requestOrigin } from "./http";
 import { configHandler, sessionHandler } from "./routes";
 
 const API = "https://app.example.com/api/widget/v1";
@@ -61,6 +61,18 @@ describe("the site a request came from", () => {
     expect(from({ "sec-fetch-site": "same-origin", host: "localhost:3000" })).toBe(
       "https://localhost:3000",
     );
+  });
+
+  it("tells the service when the browser marked the request as same-origin", () => {
+    const info = (headers: Record<string, string>) =>
+      requestInfo(new Request(`${API}/messages`, { headers }));
+    expect(
+      info({ origin: "https://demo.example.com", "sec-fetch-site": "same-origin" }),
+    ).toMatchObject({ origin: "https://demo.example.com", sameOrigin: true });
+    expect(
+      info({ origin: "https://www.site.test", "sec-fetch-site": "cross-site" }).sameOrigin,
+    ).toBe(false);
+    expect(info({ origin: "https://www.site.test" }).sameOrigin).toBe(false);
   });
 
   it("stays unknown for everything else without an Origin", () => {

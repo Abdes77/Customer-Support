@@ -99,6 +99,7 @@ export function requestOrigin(request: Request): string | null {
 export function requestInfo(request: Request): WidgetRequestInfo {
   return {
     origin: requestOrigin(request),
+    sameOrigin: request.headers.get("sec-fetch-site") === "same-origin",
     ip: clientIp(request),
     userAgent: request.headers.get("user-agent"),
   };

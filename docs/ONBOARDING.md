@@ -99,6 +99,10 @@ it from your own phone or email before the client's customers do.
   `https://example.com`), set its look (colour, logo, title, greeting, position) on the Settings
   tab, then copy the snippet from the Channels page and send it to whoever edits the client's
   site: one script tag, before `</body>`. With an empty allowed list the chat shows nowhere.
+  To show a business on the public demo site instead (a sample business, or a prospect's own
+  before they sign), switch on "Public demo page" in the same group of settings: it then has a
+  page under `/demo` where anyone can chat with it and watch the lead being scored
+  (`docs/DEMO.md`). Leave it off for a client's live business.
 - **WhatsApp.** "Connect with Facebook", with the client's Meta admin at your side: they choose
   or create their WhatsApp Business account and number (Embedded Signup). Then create the
   suggested message templates on the same page and wait for Meta's approval (minutes), and set

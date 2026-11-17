@@ -108,8 +108,19 @@ export function demoSettings(sample: SampleBusiness): SettingChange[] {
     { key: "limits.business_replies_per_day", value: 600 },
     // The business itself.
     { key: "persona.bot_name", value: sample.botName },
+    // The greeting every visitor sees first already says "AI assistant": the first reply
+    // does not have to introduce itself a second time.
     { key: "voice.opening_message.widget", value: sample.opening },
+    { key: "persona.ai_disclosure", value: "when_asked" },
     { key: "hours.weekly", value: weeklyHours(sample) },
+    // Emergencies as the business's facts describe them: an on-call crew or office hours, and
+    // its own (fictional) number as the line to call.
+    {
+      key: "emergency.service_level",
+      value: sample.onCall ? "around_the_clock" : "business_hours",
+    },
+    { key: "emergency.customer_instruction", value: "both" },
+    { key: "emergency.phone", value: `+1${sample.profile.phone.replaceAll(/\D/g, "")}` },
     // The sample businesses list the towns they serve, so the assistant asks for the town.
     { key: "qualification.service_area.ask_for", value: "city" },
     { key: "qualification.service_area.cities", value: [...sample.cities] },

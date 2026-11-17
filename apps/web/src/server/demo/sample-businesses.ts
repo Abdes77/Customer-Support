@@ -35,6 +35,8 @@ export interface SampleBusiness {
   readonly teaser: string;
   /** Places served, for `qualification.service_area.cities`. */
   readonly cities: readonly string[];
+  /** Whether its facts promise an on-call crew outside office hours (`emergency.service_level`). */
+  readonly onCall: boolean;
   /** Mon to Fri and Saturday hours ("HH:MM"); null: closed on Saturday. */
   readonly hours: {
     readonly weekdays: readonly [string, string];
@@ -60,9 +62,10 @@ export const SAMPLE_BUSINESSES: readonly SampleBusiness[] = [
     botName: "Riley",
     color: "#9a3412",
     opening:
-      "Hi, I'm {{bot_name}}, the assistant at {{business_name}}. Leak, storm damage or time for a new roof? Tell me what's going on and I'll get you sorted.",
+      "Hi, I'm {{bot_name}}, the AI assistant at {{business_name}}. Leak, storm damage or time for a new roof? Tell me what's going on and I'll get you sorted.",
     teaser: "Roof trouble? Ask {{bot_name}}.",
     cities: ["Lakewood", "Denver", "Arvada", "Golden", "Wheat Ridge", "Littleton", "Englewood"],
+    onCall: true,
     hours: { weekdays: ["07:00", "18:00"], saturday: ["08:00", "13:00"] },
     facts: [
       {
@@ -161,9 +164,10 @@ export const SAMPLE_BUSINESSES: readonly SampleBusiness[] = [
     botName: "Sam",
     color: "#0e7490",
     opening:
-      "Hi, I'm {{bot_name}} with {{business_name}}. Furnace acting up, AC not keeping up, or thinking about a new system? Tell me what's happening.",
+      "Hi, I'm {{bot_name}}, the AI assistant at {{business_name}}. Furnace acting up, AC not keeping up, or thinking about a new system? Tell me what's happening.",
     teaser: "No heat? Ask {{bot_name}}.",
     cities: ["Minneapolis", "St. Paul", "Edina", "Bloomington", "Richfield", "St. Louis Park"],
+    onCall: true,
     hours: { weekdays: ["07:00", "19:00"], saturday: ["08:00", "16:00"] },
     facts: [
       {
@@ -261,9 +265,10 @@ export const SAMPLE_BUSINESSES: readonly SampleBusiness[] = [
     botName: "Jordan",
     color: "#1d4ed8",
     opening:
-      "Hi, I'm {{bot_name}} at {{business_name}}. Leak, clog, water heater or something else? Tell me what's going on.",
+      "Hi, I'm {{bot_name}}, the AI assistant at {{business_name}}. Leak, clog, water heater or something else? Tell me what's going on.",
     teaser: "Plumbing problem? Ask {{bot_name}}.",
     cities: ["Tampa", "St. Petersburg", "Brandon", "Riverview", "Temple Terrace", "Clearwater"],
+    onCall: true,
     hours: { weekdays: ["07:00", "18:00"], saturday: ["08:00", "14:00"] },
     facts: [
       {
@@ -361,9 +366,10 @@ export const SAMPLE_BUSINESSES: readonly SampleBusiness[] = [
     botName: "Alex",
     color: "#b45309",
     opening:
-      "Hi, I'm {{bot_name}} with {{business_name}}. Outlet not working, panel upgrade, EV charger? Tell me what you need.",
+      "Hi, I'm {{bot_name}}, the AI assistant at {{business_name}}. Outlet not working, panel upgrade, EV charger? Tell me what you need.",
     teaser: "Electrical question? Ask {{bot_name}}.",
     cities: ["Austin", "Round Rock", "Cedar Park", "Pflugerville", "Lakeway", "Georgetown"],
+    onCall: true,
     hours: { weekdays: ["07:30", "17:30"], saturday: null },
     facts: [
       {
@@ -461,9 +467,10 @@ export const SAMPLE_BUSINESSES: readonly SampleBusiness[] = [
     botName: "Casey",
     color: "#4d7c0f",
     opening:
-      "Hi, I'm {{bot_name}} at {{business_name}}. Planning a kitchen or bathroom? Tell me a bit about the space and what you'd like to change.",
+      "Hi, I'm {{bot_name}}, the AI assistant at {{business_name}}. Planning a kitchen or bathroom? Tell me a bit about the space and what you'd like to change.",
     teaser: "Planning a remodel? Ask {{bot_name}}.",
     cities: ["Columbus", "Dublin", "Upper Arlington", "Westerville", "Worthington", "Bexley"],
+    onCall: false,
     hours: { weekdays: ["08:30", "17:30"], saturday: ["10:00", "14:00"] },
     facts: [
       {
