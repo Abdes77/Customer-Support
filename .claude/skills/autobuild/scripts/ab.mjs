@@ -20,10 +20,11 @@
 //   pause "<reason>"      stop issuing actions (also lets the Stop hook release the session)
 //   resume                undo pause
 //   status [--json] [--remote]   progress table (--remote: as pushed, for a session that is not the runner)
-//   settings              print the suggested .claude/settings.json (allow rules + Stop hook)
+//   settings              print optional .claude/settings.json content (allow rules + Stop hook)
+//                         for a user who wants to add it themselves; the run does not need it
 //   watchdog <id>|clear   remember the id of the scheduled check-in so finish can name it
 //   finish                close the run once no step is left
-//   hook-stop             Stop hook: keeps the session going while steps remain
+//   hook-stop             the optional Stop hook: keeps the runner going between steps
 //
 // One session at a time runs a build. In a cloud session the script knows which session it is
 // in, and refuses to act for any session other than the runner recorded in state.json.

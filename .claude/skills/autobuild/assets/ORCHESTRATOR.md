@@ -183,8 +183,8 @@ When an action is `finish`, every step is done, blocked or skipped.
    `send_message`: the user reads it there. Then give the same report as your own final
    message, and only now end your turn for good.
 
-Leave `.claude/settings.json` and `.claude/agents/` as they are. The Stop hook does nothing
-once the run is finished; mention in the report that they can be deleted.
+Leave `autobuild/` and `.claude/agents/` as they are, and mention in the report that both can
+be deleted once the pull request is merged.
 
 ## If something outside the script fails
 
