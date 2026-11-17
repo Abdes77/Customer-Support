@@ -1,6 +1,6 @@
 ---
 name: autobuild
-description: Plans and then builds a whole software project unattended inside one Claude Code session. Use this whenever the user says they want to build, create, make or automate something new - an automation, bot, agent, workflow, integration, scraper, website, landing page, web app, mobile app, SaaS, dashboard, internal tool or API - even when they only describe the idea ("I want something that answers my leads") and never say autobuild. It interviews the user in short rounds of questions until it knows enough (always including KPIs), writes a plan of small steps with the best model and effort for each (quality first, cost second), has the plan reviewed, then runs every step in its own subagent with tests and reviews until the project is finished, with no further input. Also use it to continue a build when the repository contains autobuild/state.json. Do not use it for a bug fix, a small change or a single feature in existing code.
+description: Plans and then builds a whole software project unattended with Claude Code. Use this whenever the user says they want to build, create, make or automate something new - an automation, bot, agent, workflow, integration, scraper, website, landing page, web app, mobile app, SaaS, dashboard, internal tool or API - even when they only describe the idea ("I want something that answers my leads") and never say autobuild. It interviews the user in short rounds of questions until it knows enough (always including KPIs), writes a plan of small steps with the best model and effort for each (quality first, cost second), has the plan reviewed, then runs every step in its own subagent with tests and reviews until the project is finished, with no further input. Also use it to continue a build when the repository contains autobuild/state.json. Do not use it for a bug fix, a small change or a single feature in existing code.
 ---
 
 # Autobuild
@@ -17,13 +17,14 @@ gone.
 2. **Preflight**: everything that could need the user, done while they are still there.
 3. **Plan**: spec, architecture, and small steps with a model and effort for each.
 4. **Plan review**: a mechanical check and three independent critics, then fixes.
-5. **Run**: each step in a fresh subagent, gated by checks and a review, committed and pushed.
-6. **Finish**: KPI readings, report, pull request.
+5. **Handoff and run**: a build session of its own runs each step in a fresh subagent, gated
+   by checks and a review, committed and pushed.
+6. **Report**: KPI readings, what is unverified, the pull request.
 
 ## Priorities
 
-Quality first, cost second. Where two setups give the same result, take the cheaper one. Both
-goals are served by the same habits:
+Quality first. Then, among setups that reach that quality reliably, the cheapest. Both are
+served by the same habits:
 
 - **Small, sharply specified steps.** A step is as small as it can be while a smaller one
   would still raise quality or let a cheaper model give the same result.
@@ -44,10 +45,13 @@ applies to every agent you start yourself during planning and review.
 
 - **A run exists.** If `autobuild/state.json` is in the repository and is not finished, a
   build is in progress or was interrupted. Continue it only when the user asks you to
-  continue, or when the message is the automatic check-in: make sure the checkout is on the
-  build branch (`branch` in `autobuild/plan.json`), read `autobuild/ORCHESTRATOR.md`, and
-  carry on with its loop without asking anything. If the user came for something else, do
-  that, and mention the unfinished build in one line; another session may be running it.
+  continue, or when the message is the automatic check-in: check out the build branch
+  (`branch` in `autobuild/plan.json`), read `autobuild/ORCHESTRATOR.md` and begin with its
+  "Start" section, without asking anything. If `start` says another session runs the build,
+  that session is doing the work: tell the user how far it is
+  (`node autobuild/ab.mjs status --remote`) and leave it alone, unless they ask you to take
+  the build over here. If the user came for something else, do that, and mention the
+  unfinished build in one line.
 - **An older kit.** If the repository has an `AUTOBUILD.md` and the user asks to run or
   continue it, follow that file as written. This skill is for new builds.
 - **A new build.** Look at what is there before you ask anything: an empty repository, or
@@ -105,9 +109,9 @@ How to run it:
 Do this immediately after the recap is confirmed and before any planning. Planning takes a
 while and the user will leave; anything that might need them has to surface now.
 
-1. **Session settings.** Call `get_session` if the tool exists and read the permission mode,
-   the model and the effort. The run needs permission mode **Auto**; in any other mode it
-   stops at the first command that needs approval, and you cannot change the mode yourself.
+1. **Session settings.** Call `get_session` if the tool exists and read the permission mode.
+   The run needs permission mode **Auto**; in any other mode it stops at the first command
+   that needs approval, and you cannot change the mode yourself.
 2. **Branch.** Use the branch this session is told to develop on; otherwise create
    `claude/autobuild` from the default branch. This is the build branch.
 3. **Copy the tooling** from this skill's folder into the repository: `scripts/ab.mjs` to
@@ -119,35 +123,19 @@ while and the user will leave; anything that might need them has to surface now.
    `fable`), effort `low`, prompt "Reply with the single word READY." The tiers that answer
    become `plan.models`. This also brings up any usage consent while the user is there.
 5. **Scheduled check-in.** If the session can schedule a recurring message back into itself
-   (in Claude Code cloud sessions: `create_trigger` with `cron_expression` `0 * * * *`,
-   `initiation` `own_followup`, and no session id), create one named "Autobuild check-in" with
-   this prompt, putting the build branch in place of BRANCH, and keep its id:
-
-   > Automatic autobuild check-in, not a message from the user. If an agent you started for
-   > the build is still running, or you are in the middle of the autobuild loop, answer with
-   > one short line and do nothing else. Otherwise make sure the checkout is on BRANCH (git
-   > fetch origin BRANCH, git checkout BRANCH). Then: if autobuild/state.json exists, read
-   > autobuild/ORCHESTRATOR.md, run "node autobuild/ab.mjs next" and continue the run. If it
-   > does not exist yet, continue the autobuild planning from what is committed. If next
-   > prints "finished", delete this scheduled task.
-
-   This is what restarts the run after a usage limit, an error or an early stop.
-6. **Settings file.** Run `node autobuild/ab.mjs settings` and merge what it prints into
-   `.claude/settings.json` with the Write or Edit tool: a few allow rules and a Stop hook that
-   keeps the session from ending between steps. Merge, never overwrite. It may only take
-   effect in later sessions on this repository, and if the write is refused, skip it; the
-   check-in covers the same need either way.
-7. **Tell the user, in a few lines, and keep going in the same turn:**
+   (in Claude Code cloud sessions: `create_trigger`, without a session id), run
+   `node autobuild/ab.mjs checkin` and create the task exactly as it prints. Keep its id. It
+   restarts the planning after a usage limit, an error or an early stop.
+6. **Tell the user, in a few lines, and keep going in the same turn:**
    - that you have all you need and what will happen (plan, review, build, test, report);
    - the permission mode: if it is not Auto, or you could not read it, that the run needs
      Auto and only they can switch it;
-   - how to make the run cheaper without changing the result, if they want: from here on
-     this session only coordinates, and the thinking is done by agents on the strongest
-     model whatever this session runs on. Each coordinating turn re-reads the conversation at
-     this session's price, so switching this session to Opus roughly halves that part of the
-     cost, and an effort above `high` buys nothing here. Say this only if the session runs on
-     Fable or above `high`;
-   - that they can ask "status" or say "pause" at any time, and what arrives at the end.
+   - that the build itself will run in a second session, which you start when the plan is
+     ready, and that the final report comes back to this conversation;
+   - that they can ask "status" or say "pause" here at any time.
+
+Do not write `.claude/settings.json`. A hook or allow rules there would loosen the user's
+own oversight of the session, the permission system refuses it, and the run does not need it.
 
 ## 3. Plan
 
@@ -158,8 +146,8 @@ re-read on every later turn. Your job is to give them a complete spec and to jud
 1. **Spec.** Write `docs/SPEC.md` yourself, since only you heard the user: numbered
    requirements, the KPIs with targets and how each is measured, every decision you made by
    default, what is out of scope. It must stand on its own; nothing the planner needs may live
-   only in this conversation. Start `docs/DECISIONS.md` and `docs/HUMAN_TODO.md`. Commit and
-   push.
+   only in this conversation. Start `docs/DECISIONS.md` (including whether the user wants a
+   pull request) and `docs/HUMAN_TODO.md`. Commit and push.
 2. **Architecture and plan.** Start one subagent on the strongest tier at `high`. Tell it to
    read `autobuild/PLANNING.md` in full, then `docs/SPEC.md`, and this skill's
    `assets/plan.example.json` and `assets/step-brief.md` (give the absolute paths), and to
@@ -203,38 +191,71 @@ The plan is the one thing nobody will correct later, so it is attacked before it
    findings). It validates again. If the fixes changed the architecture or more than a fifth
    of the steps, run the first critic once more. Two rounds at most.
 4. Write `autobuild/PLAN_REVIEW.md`: what each critic found, what was changed, and one line
-   for each finding or warning not acted on. Then `node autobuild/ab.mjs init`, and
-   `node autobuild/ab.mjs watchdog <id>` with the check-in's id.
-5. Tell the user in four or five lines, without asking anything: the number of steps and
-   milestones, the model mix, the steps that run Fable at xhigh and why (or that none do),
-   and the KPIs with targets. Then start the run in the same turn.
+   for each finding or warning not acted on. Run `node autobuild/ab.mjs agents`, which writes
+   the lean agent types for the build session from the finished rules. Then
+   `node autobuild/ab.mjs init`, which commits and pushes everything, and
+   `node autobuild/ab.mjs watchdog <id>` with your check-in's id.
 
-## 5. Run
+## 5. Handoff and run
 
-`autobuild/ORCHESTRATOR.md` is the full procedure and the source of truth from here on;
-follow it. In short:
+The build runs in a session of its own, started now that everything it needs is committed.
+That session begins with an empty context instead of this long conversation, can use the lean
+agent types (Claude Code only loads agent types when a session starts), and coordinates on a
+cheaper model: the judgment is already in the plan and in the models the plan chose for each
+step, so the coordinator only has to follow the script. The script lets exactly one session
+run a build; after the handoff it refuses to act in this one.
 
-1. `node autobuild/ab.mjs next` prints the first action.
-2. For `build` or `review`, start one subagent with exactly the model, effort and prompt it
-   printed.
-3. The Agent tool either returns the agent's final message, or, for anything that takes more
-   than a moment, says the agent was launched in the background. In that case end your turn
-   and start nothing else; Claude Code wakes you when the agent has finished.
-4. Then run `node autobuild/ab.mjs gate --wait 540` (tool timeout 600000 ms). It judges the
-   result: the agent's report, the verify command, the step's own checks. On a pass it commits
-   and pushes. On a failure it decides the retry: the same model with the failure explained,
-   then the next model up, then the strongest, never above `high` effort unless the plan said
-   so. Its output carries the following action under `next`, so you go straight to step 2.
-5. Repeat until the action is `finish`.
+**With a tool that creates sessions** (in Claude Code cloud sessions: `create_session`):
 
-You coordinate; you do not write product code, and you do not read the agents' work. The
+1. Create the build session with:
+   - `title`: "Autobuild run: <project>";
+   - `model`: the id of the current Opus model, and `effort`: `medium`;
+   - `source_url`: this repository's URL, and both `source_revision` and `outcome_branch`:
+     the build branch;
+   - `tags`: `["autobuild"]`;
+   - `prompt`, exactly: "You are the build session of an unattended autobuild run in this
+     repository. The plan is already made and reviewed. Your job is to run it to the end
+     without asking anyone anything; nobody is watching this session. Read
+     autobuild/ORCHESTRATOR.md and follow it exactly, beginning with its section "Start"."
+2. Immediately run `node autobuild/ab.mjs handoff <id of the new session>` and do what its
+   output lists, which includes deleting your own scheduled check-in. The build session waits
+   for this handoff before it does anything.
+3. Schedule one message to yourself for 20 minutes from now (`send_later`) to check that the
+   build session started.
+4. Tell the user in a few lines, without asking anything, and end your turn: the number of
+   steps and milestones, the model mix, the steps that run Fable at xhigh and why (or that
+   none do), the KPIs with targets, and that the build is now running in the session named
+   "Autobuild run: <project>", with the final report coming back here.
+
+Afterwards this session only does three things, each in as few turns as possible:
+
+- **On your 20-minute timer:** run `node autobuild/ab.mjs status --remote`. If the build
+  session has started, answer with one line. If not, look at it with `get_session` and
+  `list_events`; when it is still starting up, set the timer once more. When it has failed,
+  or has not started after the second timer: stop it (`interrupt_session`), run
+  `node autobuild/ab.mjs takeover`, and run the build here as `autobuild/ORCHESTRATOR.md`
+  describes.
+- **When the build session sends its final report:** give it to the user as it is.
+- **When the user writes:** for "status", run `node autobuild/ab.mjs status --remote` and
+  answer. For "pause" or "resume", send the build session a message asking it to do that.
+
+**Without such a tool**, or when creating the session fails: run the build in this session.
+Give the user the same summary, then read `autobuild/ORCHESTRATOR.md` and begin with its
+"Start" section. The loop it describes, in short: `start` and every later command print the
+next action; for `build` or `review` you start one subagent with exactly the model, effort
+and prompt printed; when it has finished (it is usually launched in the background, and you
+are woken when it is done) you run the gate, which checks the work, commits, pushes, decides
+any retry, and prints the following action.
+
+Whoever runs the loop coordinates only: no product code, no reading of the agents' work. The
 script holds all the state, so a compacted or resumed conversation loses nothing.
 
-## 6. Finish
+## 6. Report
 
-Follow "Finish" in `autobuild/ORCHESTRATOR.md`: close the run, delete the scheduled check-in,
-open the pull request if the user chose one, and report. The report states every KPI with
-target, reading and verdict, and says plainly what was not met and what could not be verified.
+The session that ran the build follows "Finish" in `autobuild/ORCHESTRATOR.md`: it closes the
+run, deletes its check-in, opens the pull request if the user chose one, and writes the
+report, which states every KPI with target, reading and verdict and says plainly what was not
+met and what could not be verified. A build session sends that report here; pass it on.
 
 ## What holds from the confirmed recap to the final report
 
@@ -246,15 +267,14 @@ target, reading and verdict, and says plainly what was not met and what could no
 - Nothing touches production: no deploys, migrations, DNS or paid resources.
 - A tool call the permission system refuses is not retried in another form. Reach the outcome
   another way or record it in `docs/HUMAN_TODO.md`.
-- If the user writes during the run, answer briefly and keep going, unless they ask to stop.
 
 ## When this session cannot run the build
 
 In a chat with no repository, shell or subagents, do the interview and write the spec, the
 architecture, the plan and the briefs yourself as far as possible without the script, and
 hand over the `autobuild/` folder and the `docs/` files as a download, with this line to paste
-into a Claude Code session on the repository (model Opus or Fable, effort high, permission
-mode Auto): "Read autobuild/ORCHESTRATOR.md and run the build it describes."
+into a Claude Code session on the repository (model Opus, effort medium, permission mode
+Auto): "Read autobuild/ORCHESTRATOR.md and follow it, beginning with its section Start."
 
 ## Files in this skill
 

@@ -29,9 +29,14 @@ the agents' code or logs.
    is what restarts the run after a usage limit, an error or an early stop. The service may
    store the schedule with another minute than printed (it spreads hourly tasks over the
    hour); that is fine. Without such a tool, go on.
-3. If `start` fails because another session runs this build, stop and say so in one line.
-4. If its output has `stop_hook`, autobuild's own Stop hook is not installed in this session.
-   Go on without it; do not edit `.claude/settings.json`. Mention it in the final report.
+3. `lean_agents` in its output says which agent types the actions will name. When it is
+   true, steps run on `autobuild-builder` and `autobuild-reviewer`, which carry only the tools
+   a build step needs and cost a fraction of the general-purpose agent on every turn; a step
+   the plan marked as needing the full agent still names `general-purpose`. Such an action
+   carries `agent_note` saying so; it needs nothing from you. When it is false
+   and your Agent tool offers those two agent types (they may be announced during the
+   session), run `node autobuild/ab.mjs lean on` and use the action it prints.
+4. If `start` fails because another session runs this build, stop and say so in one line.
 
 ## The loop
 
@@ -52,30 +57,25 @@ the agents' code or logs.
    | `paused` | Someone paused the run. Stop, and say so in one line. |
    | `finished` | The run is closed. Nothing to do. |
 
-   If the action has `agent_note`, it explains the agent fields (for example why a step runs
-   on `general-purpose` while the lean types are on). It needs nothing from you.
-
    If the Agent tool answers that the agent type does not exist, run
    `node autobuild/ab.mjs lean off` and use the action it prints. The lean agent types are
    only present in a session that started after they were committed.
 
-3. **Wait for the agent, then run the gate.** The Agent tool answers in one of these ways:
-   - **With the agent's final message**, or **with a note that the agent's report was
-     delivered as a separate message** (the agent's hand-back, which arrives with or right
-     after the tool result) together with usage figures. Either way the agent has finished.
-     Run the gate now: `node autobuild/ab.mjs gate --wait 540`, with a tool timeout of
-     600000 ms. Do not wait for the hand-back message itself: the gate reads the report file.
-   - **With a note that the agent was launched in the background.** This can happen even
-     though `run_in_background` is false: Claude Code moves agents to the background on its
-     own. End your turn at once, in one short line, and start nothing else: no second agent,
-     no `next`, no polling. Claude Code wakes you with a notification (and the agent's
-     hand-back) when the agent has finished. Run the gate then.
+3. **Wait for the agent, then run the gate.** The Agent tool answers in one of two ways:
+   - **It returns normally.** The agent has finished, whether its final words come with the
+     result or as a separate hand-back message. Run the gate now:
+     `node autobuild/ab.mjs gate --wait 540`, with a tool timeout of 600000 ms.
+   - **It returns a note that the agent was launched in the background.** This is the normal
+     case for any step that takes more than a moment, whatever `run_in_background` said. End
+     your turn at once, in one short line, and start nothing else: no second agent, no
+     `next`, no polling. Claude Code wakes you with a notification when the agent has
+     finished. Run the gate then.
 
-   While a background agent runs, a Stop hook that is not autobuild's (for example a cloud
-   environment's check that asks you to commit and push uncommitted changes) may refuse to
-   let your turn end. Do not commit, stage or push: the changes are the running agent's work
-   and the gate commits them. Answer in one line that a build agent is still running and the
-   gate will commit its work, and end your turn again.
+   While an agent works, the working tree holds its unfinished changes. A hook or reminder
+   may then tell you to commit or push uncommitted changes. Do not: the gate commits and
+   pushes when the step passes, and a commit in the middle of a step breaks the retry and
+   rescue logic. Answer in one line that a build agent is still working and end your turn
+   again.
 
    Never start an agent for a step while another agent for it may still be running: two
    agents in one working tree destroy each other's work. A report file on disk does not mean
@@ -106,6 +106,7 @@ A subagent's final message is only a courtesy. The gate decides whether the step
 - Ask the user anything or wait for approval.
 - Build, fix or review product code yourself, or skip the gate.
 - Edit `autobuild/state.json`, or mark a step done by hand.
+- Commit, push, stash or reset yourself. The script does all the git work.
 - Weaken a check, a test or a "Done when" item to get a pass.
 - Change the model or effort of an action. In particular, never raise an agent to `xhigh` or
   `max`: those run only where the plan wrote down a reason.
@@ -199,8 +200,8 @@ When an action is `finish`, every step is done, blocked or skipped.
    `send_message`: the user reads it there. Then give the same report as your own final
    message, and only now end your turn for good.
 
-Leave `.claude/settings.json` and `.claude/agents/` as they are. The Stop hook does nothing
-once the run is finished; mention in the report that they can be deleted.
+Leave `autobuild/` and `.claude/agents/` as they are, and mention in the report that both can
+be deleted once the pull request is merged.
 
 ## If something outside the script fails
 

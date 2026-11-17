@@ -695,7 +695,6 @@ test('handoff: the build session starts from its own clone and the planning sess
   const B = 'cse_builder00003';
   const st = abAs(B, 'start').json;
   assert.deepEqual([st.result, st.lean_agents, st.report_to], ['started', true, 'session_planner0001'], JSON.stringify(st));
-  assert.ok(st.stop_hook && st.stop_hook.includes('hook-stop'), 'start says the Stop hook is not installed');
   assert.ok(st.check_in.create_scheduled_task.prompt.includes('git checkout main'), 'the build session is told to create its own check-in');
   assert.deepEqual([st.next.action, st.next.id, st.next.agent.subagent_type], ['build', 'A1', 'autobuild-builder']);
   assert.equal(abAs(B, 'watchdog', 'trig_build').json.watchdog, 'trig_build');
@@ -732,14 +731,6 @@ test('the check-in to schedule names the build branch', () => {
   const c = ab('checkin').json.create_scheduled_task;
   assert.deepEqual([c.name, c.cron_expression, c.initiation], ['Autobuild check-in', '0 * * * *', 'own_followup']);
   assert.ok(c.prompt.includes('git checkout main') && c.prompt.includes('ab.mjs start'));
-});
-
-test('start reports a missing Stop hook only while it is missing', () => {
-  project([step('A1')]);
-  ab('init');
-  assert.ok(ab('start').json.stop_hook, 'missing hook is reported');
-  write('.claude/settings.json', JSON.stringify(ab('settings').json));
-  assert.equal(ab('start').json.stop_hook, undefined, 'installed hook is not reported');
 });
 
 console.log(`\n${passed} tests passed`);
