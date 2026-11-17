@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { WidgetService } from "@repo/channel-widget/server";
 
-import { clientIp, EDGE_LIMITS } from "./http";
+import { clientIp, EDGE_LIMITS, requestOrigin } from "./http";
 import { configHandler, sessionHandler } from "./routes";
 
 const API = "https://app.example.com/api/widget/v1";
@@ -26,6 +26,51 @@ describe("the visitor's address behind proxies (C17)", () => {
     expect(at(headers, { header: "cf-connecting-ip", trustedHops: 1 })).toBe("192.0.2.44");
     // Not configured: a header any client can send is ignored.
     expect(at(headers, { trustedHops: 1 })).toBe("10.0.0.1");
+  });
+});
+
+describe("the site a request came from", () => {
+  const from = (headers: Record<string, string>) =>
+    requestOrigin(new Request(`${API}/messages`, { headers }));
+
+  it("is the Origin header whenever the browser sends one", () => {
+    expect(from({ origin: "https://www.site.test" })).toBe("https://www.site.test");
+    // Also when the request claims to be same-origin: the header says where it came from.
+    expect(from({ origin: "https://evil.test", "sec-fetch-site": "same-origin" })).toBe(
+      "https://evil.test",
+    );
+  });
+
+  it("is this app's own origin for a same-origin request without one (the demo site)", () => {
+    // A same-origin GET carries no Origin: the page's address says which origin it is.
+    expect(
+      from({
+        "sec-fetch-site": "same-origin",
+        referer: "https://demo.example.com/demo/ironwood-roofing?x=1",
+      }),
+    ).toBe("https://demo.example.com");
+    // The browser withholds the Referer: the address the request was sent to.
+    expect(
+      from({
+        "sec-fetch-site": "same-origin",
+        "x-forwarded-host": "demo.example.com",
+        "x-forwarded-proto": "https",
+        host: "internal:3000",
+      }),
+    ).toBe("https://demo.example.com");
+    expect(from({ "sec-fetch-site": "same-origin", host: "localhost:3000" })).toBe(
+      "https://localhost:3000",
+    );
+  });
+
+  it("stays unknown for everything else without an Origin", () => {
+    // Another site's image tag or no-cors request, a script, a page's forged Referer.
+    expect(from({})).toBeNull();
+    expect(from({ referer: "https://app.example.com/demo" })).toBeNull();
+    expect(
+      from({ "sec-fetch-site": "cross-site", referer: "https://app.example.com/" }),
+    ).toBeNull();
+    expect(from({ "sec-fetch-site": "same-site", host: "app.example.com" })).toBeNull();
   });
 });
 

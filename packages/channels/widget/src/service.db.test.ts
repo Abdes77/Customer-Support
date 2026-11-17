@@ -15,7 +15,11 @@ import {
   contacts,
   conversations,
   eq,
+  leadFields,
+  leadReports,
+  leads,
   messages,
+  routingDecisions,
   segments,
   takeoverLocks,
   widgetSessions,
@@ -644,6 +648,194 @@ describe("history", () => {
     });
     const held = await service.listMessages(visitor.token, third.value.cursor, request);
     expect(held.ok && held.value.typing).toBe(false);
+  });
+});
+
+describe("public demo page", () => {
+  const APP = "https://app.example.com";
+  const fromApp: WidgetRequestInfo = { ...request, origin: APP, ip: "192.0.2.150" };
+  let demo: WidgetService;
+
+  const demoPage = (on: boolean) =>
+    setSettings(tenant, [{ key: "channels.widget.demo_page", value: on }]);
+
+  beforeEach(() => {
+    demo = createWidgetService({
+      db: t.db,
+      ingest: async () => undefined,
+      storage: (scope) => createTenantStorage(store, scope),
+      secret: SECRET,
+      realtime: null,
+      // As configured: APP_URL may end in a slash.
+      appOrigin: `${APP}/`,
+      clock: () => now,
+    });
+  });
+
+  afterAll(async () => {
+    await demoPage(false);
+  });
+
+  it("lets the chat run on the app's own pages only while the business's demo page is on", async () => {
+    await demoPage(false);
+    expect(await demo.config(key, fromApp)).toMatchObject({ ok: false, status: 403 });
+    expect(await demo.startSession({ key, token: null }, fromApp)).toMatchObject({
+      ok: false,
+      status: 403,
+    });
+
+    await demoPage(true);
+    expect((await demo.config(key, fromApp)).ok).toBe(true);
+    const started = await demo.startSession({ key, token: null }, fromApp);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    expect((await demo.listMessages(started.value.token, null, fromApp)).ok).toBe(true);
+    // The business's own site keeps working, and no other site gets in.
+    expect((await demo.config(key, request)).ok).toBe(true);
+    expect(await demo.config(key, { ...fromApp, origin: OTHER_SITE })).toMatchObject({
+      status: 403,
+    });
+    expect(await demo.config(key, { ...fromApp, origin: "http://app.example.com" })).toMatchObject({
+      status: 403,
+    });
+    // A business that did not switch it on is not reachable from the app's pages.
+    expect(await demo.config(otherKey, fromApp)).toMatchObject({ status: 403 });
+    // A deployment that names no origin of its own allows nothing extra.
+    expect(await service.config(key, fromApp)).toMatchObject({ status: 403 });
+
+    // Switched off again, the session started on the app's page stops working.
+    await demoPage(false);
+    expect(await demo.listMessages(started.value.token, null, fromApp)).toMatchObject({
+      ok: false,
+      status: 403,
+    });
+  });
+
+  it("shows a visitor the lead of their own conversation, and only for a demo business", async () => {
+    await demoPage(false);
+    const visitor = await session({ ...request, ip: "192.0.2.151" });
+    // Scores and reports are staff-only: for an ordinary business the route does not exist.
+    expect(await service.demoLead(visitor.token, request)).toMatchObject({
+      ok: false,
+      status: 404,
+    });
+
+    await demoPage(true);
+    expect(await service.demoLead(null, request)).toMatchObject({ ok: false, status: 401 });
+    expect(await service.demoLead("forged", request)).toMatchObject({ ok: false, status: 401 });
+    const before = await service.demoLead(visitor.token, request);
+    expect(before).toMatchObject({ ok: true, value: { started: false, score: null, fields: [] } });
+
+    const sid = verifyWidgetToken(SECRET, visitor.token, now)!.sid;
+    const [row] = await t.admin.select().from(widgetSessions).where(eq(widgetSessions.id, sid));
+    const scope = { agencyId: tenant.agencyId as never, businessId: tenant.businessId };
+    const [contact] = await t.admin
+      .insert(contacts)
+      .values({ ...scope, displayName: "Pat" })
+      .returning({ id: contacts.id });
+    await t.admin.insert(contactIdentities).values({
+      ...scope,
+      contactId: contact!.id,
+      channel: "widget",
+      externalId: row!.visitorId,
+    });
+    const [conversation] = await t.admin
+      .insert(conversations)
+      .values({
+        ...scope,
+        contactId: contact!.id,
+        channelConnectionId: row!.channelConnectionId,
+        channel: "widget",
+        messageSeq: 0,
+      })
+      .returning({ id: conversations.id });
+    const [lead] = await t.admin
+      .insert(leads)
+      .values({
+        ...scope,
+        contactId: contact!.id,
+        conversationId: conversation!.id,
+        status: "qualifying",
+        score: 71.6,
+        band: "hot",
+        routingOutcome: "contact_later",
+      })
+      .returning({ id: leads.id });
+    await t.admin.insert(leadFields).values([
+      // Stored out of order: shown in the order of the business's criteria.
+      {
+        ...scope,
+        leadId: lead!.id,
+        key: "timeline",
+        value: "this_week",
+        confidence: 0.9,
+        evidence: "as soon as you can",
+      },
+      {
+        ...scope,
+        leadId: lead!.id,
+        key: "service_type",
+        value: "Roof leak repair",
+        confidence: 1,
+        evidence: "water is dripping through the ceiling",
+      },
+      { ...scope, leadId: lead!.id, key: "decision_maker", value: "homeowner", confidence: 1 },
+      { ...scope, leadId: lead!.id, key: "service_area", value: null, confidence: 0 },
+    ]);
+    await t.admin.insert(leadReports).values({
+      ...scope,
+      leadId: lead!.id,
+      version: 1,
+      summary: "Hot lead: roof leak, this week.",
+      markdown: "## Who\n- Pat",
+    });
+    await t.admin.insert(routingDecisions).values({
+      ...scope,
+      leadId: lead!.id,
+      outcome: "contact_later",
+      score: 71.6,
+      band: "hot",
+      reasons: ["No calendar is connected."],
+      settingsVersion: "test",
+      decidedAt: now,
+    });
+
+    const result = await service.demoLead(visitor.token, request);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({
+      started: true,
+      score: 72,
+      band: "hot",
+      status: "qualifying",
+      routingOutcome: "contact_later",
+      routingReasons: ["No calendar is connected."],
+      report: { summary: "Hot lead: roof leak, this week." },
+    });
+    expect(result.value.fields.map((field) => [field.key, field.value])).toEqual([
+      ["service_type", "Roof leak repair"],
+      ["timeline", "This week"],
+      ["decision_maker", "Homeowner"],
+    ]);
+    expect(result.value.fields[0]).toMatchObject({
+      label: "Service type",
+      evidence: "water is dripping through the ceiling",
+    });
+    // A criterion without an answer is still open, under its label.
+    expect(result.value.open).toContain("Service area");
+    expect(result.value.open).not.toContain("Service type");
+    // Nothing internal: no ids of the lead, the contact or the tenant.
+    const text = JSON.stringify(result.value);
+    for (const id of [lead!.id, contact!.id, conversation!.id, tenant.businessId]) {
+      expect(text).not.toContain(id);
+    }
+
+    // Another visitor of the same business sees nothing of it.
+    const stranger = await session({ ...request, ip: "192.0.2.152" });
+    expect(await service.demoLead(stranger.token, request)).toMatchObject({
+      ok: true,
+      value: { started: false },
+    });
   });
 });
 

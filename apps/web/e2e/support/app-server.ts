@@ -32,6 +32,9 @@ import { seedDemoData } from "@repo/db/seed";
 import { createTestDatabase, type TestDatabase, TEST_ENCRYPTION_KEY } from "@repo/db/testing";
 import { applySettingChanges } from "@repo/settings/server";
 
+import { provisionDemo } from "../../src/server/demo/provision";
+import { SAMPLE_BUSINESSES } from "../../src/server/demo/sample-businesses";
+
 import {
   APP_PORT,
   APP_URL,
@@ -387,6 +390,26 @@ async function main(): Promise<void> {
     agencyId: business.agencyId,
     segmentId: business.segmentId,
   });
+  // The public demo site (`/demo`), in an agency of its own so the admin panel's tests see
+  // the businesses they always saw: two sample businesses as `pnpm demo:setup` stores them.
+  const { id: demoAgencyId } = await t.db.platform.createAgency({
+    name: "Northwind Leads",
+    slug: "northwind",
+  });
+  const [demoBusiness] = await provisionDemo({
+    db: t.db,
+    agencyId: demoAgencyId,
+    samples: SAMPLE_BUSINESSES.slice(0, 2),
+  });
+  if (demoBusiness === undefined) throw new Error("The demo has no sample business.");
+  // Answer at once, like the other test businesses.
+  await t.db.forBusiness(demoBusiness.businessId).run((ctx) =>
+    applySettingChanges(ctx, {
+      target: { scope: "business", agencyId: demoAgencyId, businessId: demoBusiness.businessId },
+      changes: [{ key: "conversation.reply_wait_seconds.widget", value: 0 }],
+      actor: { type: "system", label: "e2e setup" },
+    }),
+  );
   const mailAddress = "office@northside-roofing.example.com";
   const mailPassword = randomBytes(12).toString("base64url");
   fakes = await startFakes({
@@ -405,6 +428,11 @@ async function main(): Promise<void> {
     businessId: business.id,
     businessName: business.name,
     widgetKey,
+    demo: {
+      businessId: demoBusiness.businessId,
+      name: demoBusiness.name,
+      slug: demoBusiness.slug,
+    },
     channels: {
       ...channelBusiness,
       whatsappPhoneNumberId: CHANNEL_IDS.whatsappPhoneNumberId,

@@ -1,0 +1,111 @@
+name: live-check
+
+# The reply bot against the real Claude API, on request: the scripted customers of
+# `pnpm --filter @repo/ai live:conversations` (roofing, HVAC, electrical and remodeling
+# leads, a gas smell at night, a prompt injection, an angry customer, off-topic questions,
+# spam). Nothing is sent to anyone and no database is used. The log holds every transcript,
+# the tool calls and the token counts; the job fails when a conversation does not behave as
+# specified or when prompt caching does not work.
+#
+# It runs when someone asks for it:
+#   - by hand (Actions, live-check, Run workflow), once this file is on the default branch;
+#   - on any branch, by pushing a change to `.github/live-check.request`, whose first line
+#     holds the arguments: empty for every conversation, or names such as
+#     "emergency prompt-injection", or "--no-strict".
+#
+# It needs the repository secret ANTHROPIC_API_KEY (Settings, Secrets and variables,
+# Actions) and spends real money on the Claude API: a few dollars for all nine
+# conversations at the default model and effort. Without the secret it checks nothing and
+# says so.
+
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: 'Conversations to play (empty: all), for example "emergency prompt-injection"'
+        required: false
+        default: ""
+  push:
+    paths:
+      - ".github/live-check.request"
+
+concurrency:
+  group: live-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live conversations
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      # Whether the secret exists. The key itself is given to the one step that calls the API.
+      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      MANUAL_ARGS: ${{ inputs.args }}
+      TURBO_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Read the request
+        id: request
+        # The arguments reach the shell as data and are checked before use: names, dots,
+        # dashes and spaces only.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            line="$MANUAL_ARGS"
+          else
+            line="$(head -n 1 .github/live-check.request | tr -d '\r')"
+          fi
+          if ! printf '%s' "$line" | grep -Eq '^[A-Za-z0-9 ._-]{0,200}$'; then
+            echo "::error title=Request refused::The arguments may hold letters, digits, spaces, dots and dashes only."
+            exit 1
+          fi
+          echo "args=$line" >> "$GITHUB_OUTPUT"
+
+      - name: Without a key nothing is checked
+        if: env.HAS_ANTHROPIC_KEY != 'true'
+        run: |
+          echo "::warning title=Nothing was checked::The repository secret ANTHROPIC_API_KEY does not exist, so no conversation was played. Add it under Settings, Secrets and variables, Actions, then push a change to .github/live-check.request."
+          echo "No Claude API key: nothing was checked." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up pnpm
+        if: env.HAS_ANTHROPIC_KEY == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        if: env.HAS_ANTHROPIC_KEY == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        if: env.HAS_ANTHROPIC_KEY == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Scripted customers against the Claude API
+        if: env.HAS_ANTHROPIC_KEY == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REQUEST_ARGS: ${{ steps.request.outputs.args }}
+        run: |
+          # Split the arguments into words, but never expand them as file patterns.
+          set -f
+          # shellcheck disable=SC2086
+          pnpm --filter @repo/ai live:conversations $REQUEST_ARGS 2>&1 | tee live-check.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload the transcripts
+        if: always() && env.HAS_ANTHROPIC_KEY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-check
+          path: live-check.log
+          if-no-files-found: ignore
+          retention-days: 30

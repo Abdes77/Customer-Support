@@ -11,7 +11,7 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
   Claude API rules, package layers, contracts between chunks.
 - `docs/BUILD_PLAN.md`: which paths each chunk owns and how to change shared files.
 - `docs/SETTINGS.md`: every setting, how values resolve, how to read, change and add one.
-- `docs/DECISIONS.md`, `docs/HUMAN_TODO.md` (the numbered launch checklist: renumber references when adding a step), `docs/INTEGRATIONS.md` (CRMs), `docs/THREAT_MODEL.md`, `docs/BACKUP_RESTORE.md`, `docs/RUNBOOK.md`, `docs/ONBOARDING.md`, `docs/META_APP_REVIEW.md`, `docs/BUILD_REPORT.md`.
+- `docs/DECISIONS.md`, `docs/HUMAN_TODO.md` (the numbered launch checklist: renumber references when adding a step), `docs/INTEGRATIONS.md` (CRMs), `docs/THREAT_MODEL.md`, `docs/BACKUP_RESTORE.md`, `docs/RUNBOOK.md`, `docs/ONBOARDING.md`, `docs/META_APP_REVIEW.md`, `docs/BUILD_REPORT.md`, `docs/DEMO.md` (the public demo site at `/demo` and its short path online).
 - `AUTOBUILD.md`: the build rules. Never edit it or `autobuild/STATE.md`.
 
 ## Commands
@@ -23,7 +23,7 @@ with Drizzle, Inngest, the Anthropic SDK, Zod, Vitest, Playwright, Tailwind.
 | `pnpm typecheck` / `pnpm lint` / `pnpm test`; `pnpm --filter @repo/<name> test` | One part of verify; the tests of one package (also `typecheck`, `lint`) |
 | `pnpm format` / `pnpm check:boundaries` | Fix formatting with Prettier / check package dependencies against `tooling/boundaries.mjs` |
 | `pnpm env:example` / `pnpm settings:docs` | Regenerate `.env.example` (from `packages/core/src/env/spec.ts`) / `docs/SETTINGS.md` (from the registry) |
-| `pnpm services:up` | Start local PostgreSQL 16, create `hsrb_dev` and `hsrb_test` |
+| `pnpm services:up` / `pnpm demo:setup [--slug <agency>]` | Start local PostgreSQL 16, create `hsrb_dev` and `hsrb_test` / store the demo site's sample businesses (safe to repeat; any database) |
 | `pnpm db:migrate` / `db:seed` / `db:reset` / `db:generate` | Apply migrations (the only supported way); load demo data; wipe a local database; write a migration after changing `packages/db/src/schema` |
 | `pnpm db:doctor` / `pnpm db:create-admin --slug <agency> --email <user>` / `pnpm --filter @repo/pipeline trace <business> <message>` | Check a database (roles, migrations, RLS, privileges, encryption key) / make a user agency_admin (first-time setup) / one customer message's trace: turn, model calls, actions, sends |
 | `pnpm dev` | Run the Next.js app at http://localhost:3000 (jobs in-process without Inngest, offline model without a key; test chat at `/dev/chat`; readiness at `/api/health/ready`). A production build is production unless `DEVELOPMENT_MODE=1` |

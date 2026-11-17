@@ -68,9 +68,10 @@ function Empty({ botName }: { readonly botName: string }) {
     <div className="space-y-3 text-sm text-slate-300">
       <p>
         Chat with {botName} the way a customer would. While you talk, this panel fills in with what
-        the business receives:
+        the business receives: a score, every answer, the next step and a written report.
       </p>
-      <ul className="space-y-2">
+      {/* The list is for screens with room: on a phone the business's page comes first. */}
+      <ul className="hidden space-y-2 sm:block">
         {[
           ["A score from 0 to 100", "weighted by what this business cares about"],
           ["Every answer", "with the customer's own words as evidence"],

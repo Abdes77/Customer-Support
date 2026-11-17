@@ -70,9 +70,13 @@ export function demoPrompts(segmentSlug: string | null): readonly string[] {
   }
   if (/heat|cool|air/.test(slug)) return PROMPTS["hvac"]!;
   if (/kitchen|bath|remodel/.test(slug)) return PROMPTS["remodeling"]!;
-  if (/electric/.test(slug)) return PROMPTS["electrical"]!;
-  if (/plumb/.test(slug)) return PROMPTS["plumbing"]!;
-  if (/roof/.test(slug)) return PROMPTS["roofing"]!;
+  for (const [stem, trade] of [
+    ["electric", "electrical"],
+    ["plumb", "plumbing"],
+    ["roof", "roofing"],
+  ] as const) {
+    if (slug.includes(stem)) return PROMPTS[trade]!;
+  }
   return PROMPTS["general"]!;
 }
 

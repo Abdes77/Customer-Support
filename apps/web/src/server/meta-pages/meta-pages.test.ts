@@ -10,6 +10,7 @@ import {
   FIXTURE_APP_ID,
   FIXTURE_IG_ACCOUNT_ID,
   FIXTURE_PAGE_ID,
+  FIXTURE_TIME_MS,
   inboundMessage,
   INBOUND_FIXTURES,
   deliveryFixture,
@@ -75,8 +76,27 @@ const connectionIds: Partial<Record<Channel, ChannelConnectionId>> = {};
 
 const handle = () => createWebhookHandler(() => server.pipeline);
 
+/**
+ * The fixtures carry a fixed date (`FIXTURE_TIME_MS`), these tests run on the real clock, and
+ * Meta's reply windows are counted from a message's own time: a week after that date every
+ * reply here would be refused as outside the window. So a webhook is delivered as if it were
+ * sent now: every time of the fixtures' day is moved by the same amount.
+ */
+const TIME_SHIFT_MS = Date.now() - FIXTURE_TIME_MS;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function sentNow(body: unknown): unknown {
+  return JSON.parse(JSON.stringify(body), (key, value: unknown) =>
+    (key === "timestamp" || key === "time") &&
+    typeof value === "number" &&
+    Math.abs(value - FIXTURE_TIME_MS) < DAY_MS
+      ? value + TIME_SHIFT_MS
+      : value,
+  );
+}
+
 async function deliver(body: unknown, channel: Channel = "messenger", secret = APP_SECRET) {
-  return handle()(signedMetaHttpRequest(secret, body, channel), {
+  return handle()(signedMetaHttpRequest(secret, sentNow(body), channel), {
     params: Promise.resolve({ channel }),
   });
 }

@@ -6,6 +6,7 @@ import { createFakeGraph, type FakeGraph } from "@repo/channel-whatsapp/testing"
 import {
   FIXTURE_CUSTOMER_BSUID,
   FIXTURE_PHONE_NUMBER_ID,
+  FIXTURE_TIMESTAMP,
   FIXTURE_WABA_ID,
   INBOUND_FIXTURES,
   inboundMessage,
@@ -68,8 +69,29 @@ let connectionId: ChannelConnectionId;
 const handle = () => createWebhookHandler(() => server.pipeline);
 const params = { params: Promise.resolve({ channel: "whatsapp" }) };
 
+/**
+ * The fixtures carry a fixed date (`FIXTURE_TIMESTAMP`), these tests run on the real clock,
+ * and WhatsApp's 24-hour window is counted from the customer's message: a day after that date
+ * every reply here would be refused as outside the window. So a webhook is delivered as if it
+ * were sent now: every time of the fixtures' day is moved by the same amount (in seconds, as
+ * text, the way Meta sends it).
+ */
+const TIME_SHIFT_S = Math.floor(Date.now() / 1000) - Number(FIXTURE_TIMESTAMP);
+const DAY_S = 24 * 60 * 60;
+
+function sentNow(body: unknown): unknown {
+  return JSON.parse(JSON.stringify(body), (key, value: unknown) =>
+    key === "timestamp" &&
+    typeof value === "string" &&
+    /^\d+$/.test(value) &&
+    Math.abs(Number(value) - Number(FIXTURE_TIMESTAMP)) < DAY_S
+      ? String(Number(value) + TIME_SHIFT_S)
+      : value,
+  );
+}
+
 async function deliver(body: unknown, secret = APP_SECRET): Promise<Response> {
-  return handle()(signedWhatsAppHttpRequest(secret, body), params);
+  return handle()(signedWhatsAppHttpRequest(secret, sentNow(body)), params);
 }
 
 async function setSettings(values: Partial<AppSettings>) {

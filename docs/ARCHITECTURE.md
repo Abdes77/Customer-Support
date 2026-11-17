@@ -998,6 +998,56 @@ Security and reliability across the system; the threats, their mitigations and p
 - **Launch documents:** `docs/HUMAN_TODO.md` (the numbered checklist), `docs/RUNBOOK.md`,
   `docs/ONBOARDING.md`, `docs/META_APP_REVIEW.md`, `docs/BUILD_REPORT.md`.
 
+### As built (the demo site, after C18)
+
+A public site at `/demo` that shows the assistant on sample businesses (`docs/DEMO.md`,
+DECISIONS 306 to 315). Nothing in it is a second implementation: the chat is the website chat
+of C8, the conversation runs through the pipeline and the engine, the lead is the lead of C5.
+
+- **Who is listed.** The business-only setting `channels.widget.demo_page` (off by default).
+  `directory.listDemoBusinesses()` (`packages/db/src/directory.ts`, cross-tenant by design)
+  returns active businesses with the switch on and the chat connected: name, place, trade,
+  agency name and the chat's public key, nothing else. The switch is read from its
+  business-scope row (`DEMO_PAGE_SETTING_KEY`); a business-only setting has no other layer.
+- **Pages** (`apps/web/src/app/demo`, no sign-in): `/demo` lists the businesses;
+  `/demo/[slug]` draws a business's "website" from its profile and knowledge facts
+  (`apps/web/src/server/demo/site.ts`) and embeds its chat with the same script tag a business
+  pastes on its own site (`components/demo/chat-snippet.tsx`). Links between demo pages are
+  full page loads: the chat script binds to one business per page. `/` sends a visitor who is
+  not signed in to `/demo` when a business is listed, otherwise to the admin panel as before.
+- **The chat on the app's own origin.** `createWidgetService({ appOrigin })`: for a business
+  with the switch on, the app's origin (`APP_URL`) is allowed in addition to
+  `channels.widget.allowed_origins`. A same-origin GET has no `Origin` header, so
+  `requestOrigin` (`apps/web/src/server/widget/http.ts`) takes the origin from the page's
+  address when the browser marks the request `Sec-Fetch-Site: same-origin`.
+- **The lead panel.** `GET /api/widget/v1/demo/lead` (`WidgetService.demoLead`,
+  `WidgetDemoLead` in `contracts/widget.ts`): with the visitor's session token, the lead of
+  that session's conversation (score, band, status, routing outcome and reasons, the answers
+  in the order of the business's criteria with their evidence, the criteria still open, the
+  newest report). 404 for a business without the switch; it shares the per-session poll limit.
+  `components/demo/lead-panel.tsx` reads the token where the chat script keeps it and polls
+  every 2.5 s.
+- **Driving the chat from the page.** The browser script listens on `document` for
+  `hsrb-chat:open` and `hsrb-chat:send` (detail: the text), which any page it is embedded on
+  may send: the demo's "Chat with ..." button and its sample questions.
+- **Sample businesses.** `pnpm demo:setup` (`apps/web/scripts/demo-setup.ts`,
+  `apps/web/src/server/demo/provision.ts`, content in `sample-businesses.ts`): five invented
+  businesses in one agency, each through the existing paths: `assignSegment` (the trade's
+  settings preset; the built-in starter playbook is stored first where the trade has none, so
+  no generation is queued), facts through `importApiRecords` (a second run leaves hand-edited
+  facts alone), `ensureWidgetConnection`, and business-scope settings (`demoSettings`: the
+  switch, the look, a one-second reply wait, no follow-ups, low spend caps).
+- **Deploying without a command line.** `apps/web/vercel.json` builds with
+  `pnpm run build:deploy` (`scripts/predeploy.ts`, then `next build`). The script does nothing
+  unless `DEPLOY_MIGRATE=1`: then it runs `pnpm db:migrate` and, with `DEPLOY_DEMO_AGENCY`,
+  `pnpm demo:setup` for that agency.
+- **Tests.** `service.db.test.ts` (the origin rule, the lead endpoint), `edge.test.ts`
+  (`requestOrigin`), `apps/web/src/server/demo/provision.test.ts` (setup, a second run, the
+  listing), `apps/web/e2e/demo.spec.ts` (the journey at both widths against a production build).
+- **Live check on GitHub.** `.github/workflows/live-check.yml` plays the scripted customers
+  against the Claude API when `.github/live-check.request` changes (or by hand), with the
+  repository secret `ANTHROPIC_API_KEY`.
+
 ### Invariants (each needs a test in the chunk that owns it)
 
 | # | Invariant | Owner |

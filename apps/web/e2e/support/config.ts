@@ -26,6 +26,8 @@ export interface E2eState {
   readonly businessId: string;
   readonly businessName: string;
   readonly widgetKey: string;
+  /** The first sample business of the public demo site (its own agency). */
+  readonly demo: { readonly businessId: string; readonly name: string; readonly slug: string };
   /** The business whose WhatsApp, Messenger, Instagram and email the channel journeys use. */
   readonly channels: {
     readonly businessId: string;

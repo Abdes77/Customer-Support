@@ -235,7 +235,6 @@ export default async function DemoBusinessRoute({
       <div className="bg-slate-950 text-slate-200">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-1 px-4 py-2.5 text-sm sm:px-6">
           {/* A full page load on purpose: the chat script belongs to one business per page. */}
-          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a href="/demo" className="font-medium text-white hover:underline">
             ← All demos
           </a>

@@ -16,6 +16,11 @@ look for. `docs/BUILD_REPORT.md` says what was and was not verified.
 **Do not let a real customer write to the bot before step 41.** Until then, use only your own
 phone, email address, test Page and test business.
 
+**Only the website chat, as a public demo?** `docs/DEMO.md` is the short path to that: a Claude
+API key, a Supabase project, Vercel and Inngest, a dozen variables and no command to type. It
+uses steps 4 to 7, 9 and 16 to 19 of this checklist and nothing of the channels, alerts,
+calendars or CRMs. Come back here for everything else.
+
 Words used below:
 
 - **The command computer**: the computer you run commands from (step 2). Commands are typed in
@@ -202,11 +207,14 @@ for `META_WEBHOOK_VERIFY_TOKEN` (step 10).
 
 ### 9. Vercel project (hosting)
 
-- **Where:** https://vercel.com, a **Pro** plan (the job route needs a maximum duration of 300
-  seconds, which the Hobby plan does not allow). Add New, Project, import the GitHub
-  repository. Settings, General: Root Directory `apps/web` (keep "Include files outside the
-  root directory" on), Framework Next.js, Node.js version 22.x. Leave the install and build
-  commands at their defaults.
+- **Where:** https://vercel.com. The job route needs a maximum duration of 300 seconds, which
+  Vercel's documentation (read 2026-11-17) allows on every plan with fluid compute, on by
+  default; the Hobby plan is for non-commercial use under Vercel's terms, so an agency belongs
+  on **Pro**. Add New, Project, import the GitHub repository. Settings, General: Root Directory
+  `apps/web` (keep "Include files outside the root directory" on), Framework Next.js, Node.js
+  version 22.x. Leave the install and build commands at their defaults: `apps/web/vercel.json`
+  sets the build command (`pnpm run build:deploy`, which is `next build` unless
+  `DEPLOY_MIGRATE=1` asks it to apply migrations first, see `docs/DEMO.md`).
 - **Domain:** Settings, Domains: add the address that becomes `<APP_URL>`.
 - **Variables:** `APP_URL` and `NEXT_PUBLIC_APP_URL`, both `<APP_URL>`.
 

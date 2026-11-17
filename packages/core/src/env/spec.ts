@@ -88,6 +88,24 @@ export const ENV_SPEC = {
     secret: false,
     required: "optional",
   },
+  DEPLOY_MIGRATE: {
+    schema: flag,
+    group: "app",
+    description:
+      "Set to 1 on a hosted project to apply pending database migrations each time the app is built for a deployment (the build fails when they do not apply), instead of running pnpm db:migrate by hand. Needs DATABASE_URL_DIRECT (or DATABASE_URL) at build time.",
+    example: "",
+    secret: false,
+    required: "optional",
+  },
+  DEPLOY_DEMO_AGENCY: {
+    schema: z.string().min(2).max(80),
+    group: "app",
+    description:
+      'The name of the agency that shows the public demo site, for example "Brightline Growth". With DEPLOY_MIGRATE=1 the build then also stores the demo\'s sample businesses in that agency, creating it when it does not exist (what pnpm demo:setup does). The name appears on the demo site.',
+    example: "",
+    secret: false,
+    required: "optional",
+  },
   HEALTH_CHECK_TOKEN: {
     schema: z.string().min(24),
     group: "app",
