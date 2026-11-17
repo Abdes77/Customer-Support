@@ -40,6 +40,7 @@ import {
 import { fillTemplate } from "../prompt/business-block";
 import { buildPrompt, withOperatorNote } from "../prompt/build";
 import { CURRENT_REPLY_PROMPT, PROMPT_VERSION } from "../prompt/core";
+import { displayPhone } from "../prompt/text";
 import { replyHints } from "./hints";
 import { describeSituation, type EmergencyClass, turnFacts } from "./situation";
 import { runToolCalls } from "./tools";
@@ -180,19 +181,29 @@ export function createEngine(options: EngineOptions): ConversationEngine {
     const coreFacts = (await ports.knowledge.coreFacts(input.business.id)).filter(
       (fact) => fact.pinned === true || coreCategories.has(fact.category),
     );
+    // Facts for the newest messages first, then the ones the customer's earlier messages
+    // bring: what the bot said two messages ago from a looked-up fact (a fee, a brand, a
+    // policy) must still be in front of it, or it takes its own statement for a mistake.
     let retrieved: readonly KnowledgeFact[] = [];
-    if (situation.customerText.trim().length > 0) {
-      try {
-        retrieved = await ports.knowledge.retrieve({
-          businessId: input.business.id,
-          text: situation.customerText,
-          limit: values["knowledge.retrieval_limit"],
-        });
-      } catch (error) {
-        // The core facts are in the prompt either way; a failed look-up costs detail, not the reply.
-        logger.warn("engine.retrieval_failed", { error });
-        state.notes.push("retrieval_failed");
-      }
+    const lookUp = async (text: string): Promise<readonly KnowledgeFact[]> =>
+      text.trim().length === 0
+        ? []
+        : ports.knowledge.retrieve({
+            businessId: input.business.id,
+            text,
+            limit: values["knowledge.retrieval_limit"],
+          });
+    try {
+      const [newest, earlier] = await Promise.all([
+        lookUp(situation.customerText),
+        situation.customerText.trim().length === 0 ? [] : lookUp(situation.earlierCustomerText),
+      ]);
+      const seen = new Set(newest.map((fact) => fact.id));
+      retrieved = [...newest, ...earlier.filter((fact) => !seen.has(fact.id))];
+    } catch (error) {
+      // The core facts are in the prompt either way; a failed look-up costs detail, not the reply.
+      logger.warn("engine.retrieval_failed", { error });
+      state.notes.push("retrieval_failed");
     }
     const facts = turnFacts(retrieved, coreFacts);
 
@@ -258,7 +269,7 @@ export function createEngine(options: EngineOptions): ConversationEngine {
       const phone = values["emergency.phone"];
       const line =
         phone !== null && values["emergency.customer_instruction"] !== "team_will_call"
-          ? ` You can reach our emergency line at ${phone}.`
+          ? ` You can reach our emergency line at ${displayPhone(phone)}.`
           : "";
       const text = fillTemplate(
         alerted

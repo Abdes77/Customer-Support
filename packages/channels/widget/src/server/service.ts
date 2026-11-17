@@ -9,6 +9,7 @@ import {
   logger as rootLogger,
   type NormalizedInboundMessage,
   type ParsedWebhook,
+  SYSTEM_LEAD_FIELDS,
   TenantAccessError,
   WIDGET_MAX_TEXT_LENGTH,
   WidgetClientMessageId,
@@ -983,11 +984,19 @@ export function createWidgetService(options: WidgetServiceOptions): WidgetServic
           });
         }
         for (const field of byKey.values()) {
-          const value = demoValue(field.value);
+          // What lead scoring records itself reads "system.emergency: active_roof_leak": show
+          // the emergency under the name the business gave its class.
+          const emergency =
+            field.key === SYSTEM_LEAD_FIELDS.emergency
+              ? values["emergency.classes"].find((item) => item.key === field.value)?.label
+              : undefined;
+          const system = field.key.startsWith("system.");
+          const value = emergency ?? demoValue(field.value, system);
           if (value === null) continue;
+          const name = system ? field.key.slice("system.".length) : field.key;
           fields.push({
             key: field.key,
-            label: field.key.charAt(0).toUpperCase() + field.key.slice(1).replaceAll("_", " "),
+            label: name.charAt(0).toUpperCase() + name.slice(1).replaceAll("_", " "),
             value,
             confidence: field.confidence,
             evidence: field.evidence?.slice(0, 300) ?? null,

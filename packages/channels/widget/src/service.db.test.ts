@@ -789,6 +789,9 @@ describe("public demo page", () => {
       },
       { ...scope, leadId: lead!.id, key: "decision_maker", value: "homeowner", confidence: 1 },
       { ...scope, leadId: lead!.id, key: "service_area", value: null, confidence: 0 },
+      // Written by lead scoring itself, under keys no criterion has.
+      { ...scope, leadId: lead!.id, key: "system.emergency", value: "gas_leak", confidence: 1 },
+      { ...scope, leadId: lead!.id, key: "system.not_a_fit", value: "wrong_number", confidence: 1 },
     ]);
     await t.admin.insert(leadReports).values({
       ...scope,
@@ -824,6 +827,13 @@ describe("public demo page", () => {
       ["service_type", "Roof leak repair"],
       ["timeline", "This week"],
       ["decision_maker", "Homeowner"],
+      // In words: the emergency under the name of its class, never "system.emergency".
+      ["system.emergency", "Gas smell or gas leak"],
+      ["system.not_a_fit", "Wrong number"],
+    ]);
+    expect(result.value.fields.slice(3).map((field) => field.label)).toEqual([
+      "Emergency",
+      "Not a fit",
     ]);
     expect(result.value.fields[0]).toMatchObject({
       label: "Service type",

@@ -198,7 +198,8 @@ pipeline entry point, `ingest(parsed)`, which performs steps 4 to 6.
   one model call gets at most 90 seconds.
 - **A turn inside the engine:** work out the situation in code (office hours, first reply,
   what kind of message is due, channel limits, open lead fields) → core facts and a look-up
-  → build the request (§5) → tool loop (at most `model.max_tool_rounds` rounds, then one
+  (for the newest messages and for the customer's earlier ones, so a fact the bot already
+  stated stays in front of it) → build the request (§5) → tool loop (at most `model.max_tool_rounds` rounds, then one
   call with `tool_choice: none`) → output guard (one rewrite by the model, then repairs in
   code) → drafts. Nothing is due (`takeover_released` without a check-in, a follow-up with
   no bot message) → `no_reply` without a model call.

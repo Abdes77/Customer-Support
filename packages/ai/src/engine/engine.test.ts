@@ -949,7 +949,8 @@ describe("knowledge", () => {
         ];
       },
     });
-    expect(queries).toEqual(["What warranty do you give on a new roof?"]);
+    // One look-up for the newest message, one for what the customer wrote before it.
+    expect(queries).toEqual(["What warranty do you give on a new roof?", "Hi there"]);
     const business = requests[0]?.system[2]?.text ?? "";
     expect(business).toContain("Roof repair and replacement.");
     // "pricing" is not among the categories kept in every reply.
@@ -958,6 +959,38 @@ describe("knowledge", () => {
     expect(context).toContain("- [faq] Metal roofs last 50 years.");
     // A fact that is already in the business section is not repeated.
     expect(context).not.toContain("Roof repair and replacement.");
+  });
+
+  it("keeps the facts of the customer's earlier messages in front of the bot", async () => {
+    const queries: string[] = [];
+    const { requests } = await run(
+      [scriptedResponse([text("Thanks, Dana. The team will call.")])],
+      {
+        history: [
+          testTurn("customer", "How much does a new furnace cost?", "2026-11-10T16:50:00.000Z"),
+          testTurn("bot", "The estimate for a new system is free.", "2026-11-10T16:50:10.000Z"),
+        ],
+        pending: ["I'm Dana, 612-555-0177."],
+        facts: [],
+        retrieve: async (query) => {
+          queries.push(query.text);
+          return query.text.includes("furnace")
+            ? [
+                fact("p", "pricing", "Estimates for a new system are free."),
+                fact("q", "faq", "We answer the phone until 6 pm."),
+              ]
+            : [fact("q", "faq", "We answer the phone until 6 pm.")];
+        },
+      },
+    );
+    expect(queries).toEqual(["I'm Dana, 612-555-0177.", "How much does a new furnace cost?"]);
+    const context = lastText(requests[0]?.messages.at(-1));
+    // What the bot said two messages ago still has its fact, once, after the newest ones.
+    expect(context).toContain("- [pricing] Estimates for a new system are free.");
+    expect(context.split("We answer the phone until 6 pm.")).toHaveLength(2);
+    expect(context.indexOf("We answer the phone")).toBeLessThan(
+      context.indexOf("Estimates for a new"),
+    );
   });
 
   it("answers without looked-up facts when the look-up fails", async () => {

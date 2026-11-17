@@ -2,6 +2,7 @@ import { ensureWidgetConnection } from "@repo/channel-widget/server";
 import {
   type AgencyId,
   type BusinessId,
+  KNOWLEDGE_CATEGORIES,
   type Logger,
   logger as rootLogger,
   type SegmentId,
@@ -121,6 +122,9 @@ export function demoSettings(sample: SampleBusiness): SettingChange[] {
     },
     { key: "emergency.customer_instruction", value: "both" },
     { key: "emergency.phone", value: `+1${sample.profile.phone.replaceAll(/\D/g, "")}` },
+    // A sample business has a dozen short facts: all of them are in every reply, none is
+    // left to the look-up for each message.
+    { key: "knowledge.core_categories", value: [...KNOWLEDGE_CATEGORIES] },
     // The sample businesses list the towns they serve, so the assistant asks for the town.
     { key: "qualification.service_area.ask_for", value: "city" },
     { key: "qualification.service_area.cities", value: [...sample.cities] },

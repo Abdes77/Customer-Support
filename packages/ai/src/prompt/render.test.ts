@@ -16,6 +16,7 @@ import { allowedLinkDomains, renderBusinessBlock } from "./business-block";
 import { renderHistory } from "./conversation";
 import { CURRENT_REPLY_PROMPT, PROMPT_VERSION, RENDER_VERSION } from "./core";
 import { renderFingerprint } from "./fingerprint";
+import { displayPhone } from "./text";
 
 /**
  * The fingerprint of the sample request for each render version. When this test fails,
@@ -34,6 +35,11 @@ const RENDER_FINGERPRINTS: Readonly<Record<number, string>> = {
   // routing section states the confirmation guidance and the rescheduling and cancelling
   // rules (and, with Calendly, that offer_times returns a link, which may be sent).
   3: "91819b31464a875e38950a7b863d512ac10c44486d9e133c6f19ba1265d9f20e",
+  // r4 (the first conversations with the real model): the facts section says that looked-up
+  // facts change from message to message and that a statement is not taken back because its
+  // fact is no longer shown; the emergency line is written as a customer reads a phone
+  // number; facts are also looked up for the customer's earlier messages (`engine.test.ts`).
+  4: "8b8a47c8bdaa547aac7b1beda19e92cb2494efc721f9dd9d2740a49db0b0c85b",
 };
 
 function build(
@@ -585,7 +591,9 @@ describe("the business section", () => {
     expect(block).toContain(
       "Safety instructions, word for word: Leave the building right now and take everyone with you.",
     );
-    expect(block).toContain("emergency line: +13035550199");
+    // As a customer reads a phone number, not as it is stored.
+    expect(block).toContain("emergency line: (303) 555-0199");
+    expect(block).not.toContain("+13035550199");
     expect(render({ "emergency.enabled": false })).toContain(
       "Emergency alerts are switched off for this business",
     );
@@ -611,5 +619,13 @@ describe("the business section", () => {
       'Use the time frame "by the end of the next business day" as it is written',
     );
     expect(block).toContain("customers get only the business's after-hours message");
+  });
+});
+
+describe("displayPhone", () => {
+  it("writes a US number as a customer reads it and leaves others as stored", () => {
+    expect(displayPhone("+13035550142")).toBe("(303) 555-0142");
+    expect(displayPhone("+442079460000")).toBe("+442079460000");
+    expect(displayPhone("(303) 555-0142")).toBe("(303) 555-0142");
   });
 });

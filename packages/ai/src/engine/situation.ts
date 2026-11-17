@@ -88,6 +88,12 @@ export interface TurnSituation {
   readonly nudge: { readonly number: number; readonly max: number; readonly last: boolean } | null;
   /** What the customer wrote in the messages this turn answers (plain text). */
   readonly customerText: string;
+  /**
+   * What the customer wrote before that, newest last (the last few messages only). Facts are
+   * looked up for it too, so that a fact the bot stated from an earlier look-up stays in
+   * front of it when the newest message is about something else.
+   */
+  readonly earlierCustomerText: string;
 }
 
 /** Whether the office counts as closed for the after-hours rules. */
@@ -162,6 +168,10 @@ export function emergencyHints(values: AppSettings, text: string): EmergencyClas
       }),
   );
 }
+
+/** How far back the look-up of facts reads the customer's earlier messages. */
+const EARLIER_MESSAGES = 8;
+const EARLIER_CHARACTERS = 2000;
 
 export function describeSituation(input: EngineTurnInput, values: AppSettings): TurnSituation {
   const now = new Date(input.now);
@@ -243,6 +253,11 @@ export function describeSituation(input: EngineTurnInput, values: AppSettings): 
     ),
     nudge: purpose === "nudge" ? { number: nudgeNumber, max, last: nudgeNumber >= max } : null,
     customerText: text,
+    earlierCustomerText: customerText(
+      input.history
+        .filter((turn) => turn.author === "customer" && !answered.includes(turn))
+        .slice(-EARLIER_MESSAGES),
+    ).slice(-EARLIER_CHARACTERS),
   };
 }
 

@@ -72,6 +72,15 @@ export function usd(amount: number): string {
   return `$${amount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
+/**
+ * A stored phone number (E.164) the way a customer reads one: "+13035550142" becomes
+ * "(303) 555-0142". Numbers outside the US and Canada stay as stored.
+ */
+export function displayPhone(phone: string): string {
+  const match = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(phone.trim());
+  return match === null ? phone : `(${match[1]}) ${match[2]}-${match[3]}`;
+}
+
 /** "Summit Roofing Co.." reads badly: two periods in a row (not an ellipsis) become one. */
 export function collapseDots(value: string): string {
   return value.replaceAll(/(?<!\.)\.\.(?!\.)/g, ".");
