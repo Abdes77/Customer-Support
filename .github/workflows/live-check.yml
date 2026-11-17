@@ -10,8 +10,8 @@ name: live-check
 # It runs when someone asks for it:
 #   - by hand (Actions, live-check, Run workflow), once this file is on the default branch;
 #   - on any branch, by pushing a change to `.github/live-check.request`, whose first line
-#     holds the arguments: empty for every conversation, or names such as
-#     "emergency prompt-injection", or "--no-strict".
+#     says what to play: "all" for every conversation, names such as
+#     "emergency prompt-injection", or "none" (the default: nothing is played).
 #
 # It needs the repository secret ANTHROPIC_API_KEY (Settings, Secrets and variables,
 # Actions) and spends real money on the Claude API: a few dollars for all nine
@@ -22,9 +22,9 @@ on:
   workflow_dispatch:
     inputs:
       args:
-        description: 'Conversations to play (empty: all), for example "emergency prompt-injection"'
+        description: 'Conversations to play: "all", or names such as "emergency prompt-injection"'
         required: false
-        default: ""
+        default: "all"
   push:
     paths:
       - ".github/live-check.request"
@@ -54,43 +54,59 @@ jobs:
 
       - name: Read the request
         id: request
-        # The arguments reach the shell as data and are checked before use: names, dots,
-        # dashes and spaces only.
+        # The request reaches the shell as data and is checked before use: letters, digits,
+        # spaces, dots and dashes only.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            line="$MANUAL_ARGS"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            line="${MANUAL_ARGS:-all}"
           else
             line="$(head -n 1 .github/live-check.request | tr -d '\r')"
           fi
-          if ! printf '%s' "$line" | grep -Eq '^[A-Za-z0-9 ._-]{0,200}$'; then
-            echo "::error title=Request refused::The arguments may hold letters, digits, spaces, dots and dashes only."
+          if [[ ! "$line" =~ ^[A-Za-z0-9\ ._-]{0,200}$ ]]; then
+            echo "::error title=Request refused::The request may hold letters, digits, spaces, dots and dashes only."
             exit 1
           fi
-          echo "args=$line" >> "$GITHUB_OUTPUT"
+          case "$line" in
+            "" | none)
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "::notice title=Nothing requested::The first line of .github/live-check.request is \"none\": no conversation was played."
+              echo "Nothing requested: no conversation was played." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            all)
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "args=" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "args=$line" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       - name: Without a key nothing is checked
-        if: env.HAS_ANTHROPIC_KEY != 'true'
+        if: steps.request.outputs.run == 'true' && env.HAS_ANTHROPIC_KEY != 'true'
         run: |
           echo "::warning title=Nothing was checked::The repository secret ANTHROPIC_API_KEY does not exist, so no conversation was played. Add it under Settings, Secrets and variables, Actions, then push a change to .github/live-check.request."
           echo "No Claude API key: nothing was checked." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up pnpm
-        if: env.HAS_ANTHROPIC_KEY == 'true'
+        if: steps.request.outputs.run == 'true' && env.HAS_ANTHROPIC_KEY == 'true'
         uses: pnpm/action-setup@v4
 
       - name: Set up Node.js
-        if: env.HAS_ANTHROPIC_KEY == 'true'
+        if: steps.request.outputs.run == 'true' && env.HAS_ANTHROPIC_KEY == 'true'
         uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install dependencies
-        if: env.HAS_ANTHROPIC_KEY == 'true'
+        if: steps.request.outputs.run == 'true' && env.HAS_ANTHROPIC_KEY == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Scripted customers against the Claude API
-        if: env.HAS_ANTHROPIC_KEY == 'true'
+        if: steps.request.outputs.run == 'true' && env.HAS_ANTHROPIC_KEY == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REQUEST_ARGS: ${{ steps.request.outputs.args }}
@@ -102,7 +118,7 @@ jobs:
           exit "${PIPESTATUS[0]}"
 
       - name: Upload the transcripts
-        if: always() && env.HAS_ANTHROPIC_KEY == 'true'
+        if: always() && steps.request.outputs.run == 'true' && env.HAS_ANTHROPIC_KEY == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: live-check

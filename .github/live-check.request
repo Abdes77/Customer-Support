@@ -1,4 +1,4 @@
-
-# First line: arguments for the live check (see .github/workflows/live-check.yml).
-# Empty plays every scripted conversation. Push a change to this file to run it.
-# Requested: never
+none
+# The first line says what the live-check workflow plays against the Claude API when this
+# file is pushed (.github/workflows/live-check.yml): "none" (nothing), "all" (every scripted
+# conversation, a few dollars), or names, for example "emergency prompt-injection".

@@ -144,9 +144,9 @@ Nothing has replaced this step: read real conversations first. The assistant's p
 written without ever being read by the model. Two ways to see how it really writes:
 
 - On GitHub (no computer needed): add the repository secret `ANTHROPIC_API_KEY` (Settings,
-  Secrets and variables, Actions), then change the first comment line of
-  `.github/live-check.request` and push. The workflow `live-check` plays nine scripted
-  customers against the Claude API and prints every transcript; it costs a few dollars.
+  Secrets and variables, Actions), then change the first line of `.github/live-check.request`
+  from `none` to `all` and push. The workflow `live-check` plays nine scripted customers
+  against the Claude API and prints every transcript; it costs a few dollars.
 - On a computer with the key in `.env.local`: `pnpm --filter @repo/ai live:conversations`
   (HUMAN_TODO 24), then the evaluation suite (HUMAN_TODO 25).
 
