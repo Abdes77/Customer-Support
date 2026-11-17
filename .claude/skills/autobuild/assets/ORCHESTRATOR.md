@@ -28,7 +28,13 @@ the agents' code or logs.
    under `create_scheduled_task` and record it with `node autobuild/ab.mjs watchdog <id>`. It
    is what restarts the run after a usage limit, an error or an early stop. Without such a
    tool, go on.
-3. If `start` fails because another session runs this build, stop and say so in one line.
+3. `lean_agents` in its output says which agent types the actions will name. When it is
+   true, steps run on `autobuild-builder` and `autobuild-reviewer`, which carry only the tools
+   a build step needs and cost a fraction of the general-purpose agent on every turn; a step
+   the plan marked as needing the full agent still names `general-purpose`. When it is false
+   and your Agent tool offers those two agent types (they may be announced during the
+   session), run `node autobuild/ab.mjs lean on` and use the action it prints.
+4. If `start` fails because another session runs this build, stop and say so in one line.
 
 ## The loop
 
@@ -54,12 +60,20 @@ the agents' code or logs.
    only present in a session that started after they were committed.
 
 3. **Wait for the agent, then run the gate.** The Agent tool answers in one of two ways:
-   - **With the agent's final message.** The agent has finished. Run the gate now:
+   - **It returns normally.** The agent has finished, whether its final words come with the
+     result or as a separate hand-back message. Run the gate now:
      `node autobuild/ab.mjs gate --wait 540`, with a tool timeout of 600000 ms.
-   - **With a note that the agent was launched in the background.** This is the normal case
-     for any step that takes more than a moment. End your turn at once, in one short line,
-     and start nothing else: no second agent, no `next`, no polling. Claude Code wakes you
-     with a notification when the agent has finished. Run the gate then.
+   - **It returns a note that the agent was launched in the background.** This is the normal
+     case for any step that takes more than a moment, whatever `run_in_background` said. End
+     your turn at once, in one short line, and start nothing else: no second agent, no
+     `next`, no polling. Claude Code wakes you with a notification when the agent has
+     finished. Run the gate then.
+
+   While an agent works, the working tree holds its unfinished changes. A hook or reminder
+   may then tell you to commit or push uncommitted changes. Do not: the gate commits and
+   pushes when the step passes, and a commit in the middle of a step breaks the retry and
+   rescue logic. Answer in one line that a build agent is still working and end your turn
+   again.
 
    Never start an agent for a step while another agent for it may still be running: two
    agents in one working tree destroy each other's work. A report file on disk does not mean
@@ -90,6 +104,7 @@ A subagent's final message is only a courtesy. The gate decides whether the step
 - Ask the user anything or wait for approval.
 - Build, fix or review product code yourself, or skip the gate.
 - Edit `autobuild/state.json`, or mark a step done by hand.
+- Commit, push, stash or reset yourself. The script does all the git work.
 - Weaken a check, a test or a "Done when" item to get a pass.
 - Change the model or effort of an action. In particular, never raise an agent to `xhigh` or
   `max`: those run only where the plan wrote down a reason.

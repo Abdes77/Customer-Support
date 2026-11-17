@@ -125,9 +125,8 @@ How Claude Code bills an agent explains most of the rules in this guide.
 
 - **Every turn re-reads the agent's whole context.** A turn is one model call: read a file, run
   a command, edit something. The context starts with the system prompt and the tool
-  definitions, which measured about 65,000 tokens in a cloud session with a few connectors,
-  and grows with every file read and every command output. An agent that needs 40 turns pays
-  for its context 40 times.
+  definitions, and grows with every file read and every command output. An agent that needs
+  40 turns pays for its context 40 times.
 - **Repeated context is cached at roughly a tenth of the price** while the agent keeps
   working. The first turn of every agent pays in full, and so does the first turn after a
   long pause, such as a test run of many minutes.
@@ -146,6 +145,14 @@ levers, in order of how much they save without touching quality:
 4. **Effort.** One level lower on a step that needs no deliberation.
 5. **Agents.** Each agent pays its base context once at full price. On haiku that is nothing;
    on fable it is real money. A review is a whole second agent.
+
+In a build session the builders and reviewers run as lean agent types that carry only the
+tools a build step needs: shell, file reading and editing, search, and web lookup. That
+brought the base context from about 79,000 tokens to about 19,000 in a measured run, on every
+turn of every step. A lean agent has no skills and no connector tools. Mark a step
+`"full_agent": true` only when its builder needs one of those, for example a skill with
+reference material or a tool from a connected service; it then runs on the general-purpose
+agent at the higher price.
 
 ### Choosing
 
@@ -306,7 +313,7 @@ meant. If you cannot write a sharp "Done when", the step is not understood well 
 Per step: `id` (short, such as `S07`), `title`, `milestone`, `kind` (`design`, `build`, `test`,
 `integrate`, `optimize`, `harden`, `accept`, `docs`), `model`, `effort`, `why`, `depends_on`,
 `covers` (requirement ids), `checks`, `review`, and where needed `protect` (paths the step may
-not change), `xhigh_reason` and `skip_verify`.
+not change), `full_agent`, `xhigh_reason` and `skip_verify`.
 
 Run `node autobuild/ab.mjs validate` as often as you like while writing. It lists every error
 and warning and shows the model mix and the steps that run Fable at xhigh.
