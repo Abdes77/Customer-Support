@@ -2,8 +2,8 @@
   "version": 1,
   "status": "running",
   "started_at": "2026-11-17T13:46:04Z",
-  "runner": "016VpDmkLUzWE6L58nbRnwbn",
-  "lean": false,
+  "runner": "016VpDmob1gfdcFNybj6a2gR",
+  "lean": true,
   "current": null,
   "steps": {},
   "known": [
@@ -12,5 +12,7 @@
     "T3",
     "T4"
   ],
-  "watchdog": null
+  "watchdog": null,
+  "report_to": "016VpDmkLUzWE6L58nbRnwbn",
+  "handed_off_at": "2026-11-17T13:46:37Z"
 }
