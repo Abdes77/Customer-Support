@@ -26,9 +26,12 @@ the agents' code or logs.
    have a tool that schedules a recurring message into this same session (in a Claude Code
    cloud session: `create_trigger`, without a session id), create the task exactly as printed
    under `create_scheduled_task` and record it with `node autobuild/ab.mjs watchdog <id>`. It
-   is what restarts the run after a usage limit, an error or an early stop. Without such a
-   tool, go on.
+   is what restarts the run after a usage limit, an error or an early stop. The service may
+   store the schedule with another minute than printed (it spreads hourly tasks over the
+   hour); that is fine. Without such a tool, go on.
 3. If `start` fails because another session runs this build, stop and say so in one line.
+4. If its output has `stop_hook`, autobuild's own Stop hook is not installed in this session.
+   Go on without it; do not edit `.claude/settings.json`. Mention it in the final report.
 
 ## The loop
 
@@ -49,17 +52,30 @@ the agents' code or logs.
    | `paused` | Someone paused the run. Stop, and say so in one line. |
    | `finished` | The run is closed. Nothing to do. |
 
+   If the action has `agent_note`, it explains the agent fields (for example why a step runs
+   on `general-purpose` while the lean types are on). It needs nothing from you.
+
    If the Agent tool answers that the agent type does not exist, run
    `node autobuild/ab.mjs lean off` and use the action it prints. The lean agent types are
    only present in a session that started after they were committed.
 
-3. **Wait for the agent, then run the gate.** The Agent tool answers in one of two ways:
-   - **With the agent's final message.** The agent has finished. Run the gate now:
-     `node autobuild/ab.mjs gate --wait 540`, with a tool timeout of 600000 ms.
-   - **With a note that the agent was launched in the background.** This is the normal case
-     for any step that takes more than a moment. End your turn at once, in one short line,
-     and start nothing else: no second agent, no `next`, no polling. Claude Code wakes you
-     with a notification when the agent has finished. Run the gate then.
+3. **Wait for the agent, then run the gate.** The Agent tool answers in one of these ways:
+   - **With the agent's final message**, or **with a note that the agent's report was
+     delivered as a separate message** (the agent's hand-back, which arrives with or right
+     after the tool result) together with usage figures. Either way the agent has finished.
+     Run the gate now: `node autobuild/ab.mjs gate --wait 540`, with a tool timeout of
+     600000 ms. Do not wait for the hand-back message itself: the gate reads the report file.
+   - **With a note that the agent was launched in the background.** This can happen even
+     though `run_in_background` is false: Claude Code moves agents to the background on its
+     own. End your turn at once, in one short line, and start nothing else: no second agent,
+     no `next`, no polling. Claude Code wakes you with a notification (and the agent's
+     hand-back) when the agent has finished. Run the gate then.
+
+   While a background agent runs, a Stop hook that is not autobuild's (for example a cloud
+   environment's check that asks you to commit and push uncommitted changes) may refuse to
+   let your turn end. Do not commit, stage or push: the changes are the running agent's work
+   and the gate commits them. Answer in one line that a build agent is still running and the
+   gate will commit its work, and end your turn again.
 
    Never start an agent for a step while another agent for it may still be running: two
    agents in one working tree destroy each other's work. A report file on disk does not mean

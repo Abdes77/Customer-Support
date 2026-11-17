@@ -660,10 +660,13 @@ test('a step can ask for the full agent even when lean agents are on', () => {
   project([step('A1', { full_agent: true }), step('A2', { review: OPUS })]);
   write('autobuild/RULES.md', RULES);
   ab('agents'); ab('init'); ab('lean', 'on');
-  assert.equal(next().agent.subagent_type, 'general-purpose');
+  const n1 = next();
+  assert.equal(n1.agent.subagent_type, 'general-purpose');
+  assert.ok(n1.agent_note && n1.agent_note.includes('full_agent'), 'says why the general-purpose type is used');
   build('A1');
   const g = gate();
   assert.equal(g.next.agent.subagent_type, 'autobuild-builder');
+  assert.equal(g.next.agent_note, undefined, 'no note for a lean step');
   build('A2');
   assert.equal(gate().next.agent.subagent_type, 'autobuild-reviewer');
 });
@@ -692,6 +695,7 @@ test('handoff: the build session starts from its own clone and the planning sess
   const B = 'cse_builder00003';
   const st = abAs(B, 'start').json;
   assert.deepEqual([st.result, st.lean_agents, st.report_to], ['started', true, 'session_planner0001'], JSON.stringify(st));
+  assert.ok(st.stop_hook && st.stop_hook.includes('hook-stop'), 'start says the Stop hook is not installed');
   assert.ok(st.check_in.create_scheduled_task.prompt.includes('git checkout main'), 'the build session is told to create its own check-in');
   assert.deepEqual([st.next.action, st.next.id, st.next.agent.subagent_type], ['build', 'A1', 'autobuild-builder']);
   assert.equal(abAs(B, 'watchdog', 'trig_build').json.watchdog, 'trig_build');
@@ -728,6 +732,14 @@ test('the check-in to schedule names the build branch', () => {
   const c = ab('checkin').json.create_scheduled_task;
   assert.deepEqual([c.name, c.cron_expression, c.initiation], ['Autobuild check-in', '0 * * * *', 'own_followup']);
   assert.ok(c.prompt.includes('git checkout main') && c.prompt.includes('ab.mjs start'));
+});
+
+test('start reports a missing Stop hook only while it is missing', () => {
+  project([step('A1')]);
+  ab('init');
+  assert.ok(ab('start').json.stop_hook, 'missing hook is reported');
+  write('.claude/settings.json', JSON.stringify(ab('settings').json));
+  assert.equal(ab('start').json.stop_hook, undefined, 'installed hook is not reported');
 });
 
 console.log(`\n${passed} tests passed`);

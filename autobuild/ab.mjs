@@ -624,11 +624,14 @@ function nextAction() {
     if_it_was_launched_in_the_background: 'End your turn and start nothing else. You are notified when the agent finishes; run the gate then.',
   };
   if (lean) then.if_the_agent_type_does_not_exist = `Run "${ME} lean off" and use the action it prints.`;
+  // Say why a lean run issues the general-purpose type, so the orchestrator does not wonder.
+  const agentNote = s.lean && step.full_agent ? `Step ${step.id} sets full_agent in the plan, so it runs on the general-purpose agent type although the lean types are on. That is intended.` : undefined;
   if (c.phase === 'build') {
     const { model, effort } = ladder(plan, step, c.attempt, c.top);
     return {
       action: 'build', id: step.id, title: step.title, attempt: c.attempt, of: maxAttempts(plan), progress, note,
       agent: { subagent_type: lean ? 'autobuild-builder' : 'general-purpose', model, effort, run_in_background: false, description: `${step.id} build`, prompt: buildPrompt(plan, step, c, failure, lean) },
+      agent_note: agentNote,
       then,
     };
   }
@@ -636,6 +639,7 @@ function nextAction() {
   return {
     action: 'review', id: step.id, title: step.title, review_try: c.review_try, progress, note,
     agent: { subagent_type: lean ? 'autobuild-reviewer' : 'general-purpose', model, effort, run_in_background: false, description: `${step.id} review`, prompt: reviewPrompt(plan, step, c, failure, lean) },
+    agent_note: agentNote,
     then,
   };
 }
@@ -1040,6 +1044,11 @@ function cmdStatus(json, remote) {
   }
 }
 
+function stopHookInstalled() {
+  const st = readJSON('.claude/settings.json');
+  return !!(st && JSON.stringify((st.hooks && st.hooks.Stop) || []).includes('hook-stop'));
+}
+
 function cmdSettings() {
   const { plan } = loadPlan();
   const tool = plan && str(plan.verify) ? plan.verify.trim().split(/\s+/)[0] : null;
@@ -1224,6 +1233,7 @@ function cmdStart() {
   const res = { result: first ? 'started' : 'resumed', project: plan.project, progress: `${prog.done} of ${prog.total} steps done`, lean_agents: !!s.lean, pull, push: push(s), then: `${ME} next` };
   if (!s.watchdog) res.check_in = { missing: 'No scheduled check-in is recorded. If you can schedule a recurring message into this session, create this one before anything else.', create_scheduled_task: checkin(plan.branch), then: `${ME} watchdog <id of the scheduled task>` };
   if (s.report_to) res.report_to = `session_${s.report_to}`;
+  if (!stopHookInstalled()) res.stop_hook = `Not installed: .claude/settings.json has no Stop hook running "${P.self} hook-stop". The run works without it; ${P.logs}/hook*.json will not be written. Do not add it now: a session reads its settings when it starts.`;
   emit(res);
 }
 
