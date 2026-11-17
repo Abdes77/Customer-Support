@@ -4,7 +4,16 @@
   "started_at": "2026-11-17T13:46:04Z",
   "runner": "016VpDmob1gfdcFNybj6a2gR",
   "lean": true,
-  "current": null,
+  "current": {
+    "id": "T3",
+    "phase": "review",
+    "attempt": 1,
+    "base": "d2e01372560647fd66dff9aebaf5a1a32b30eb3d",
+    "issued": false,
+    "issued_at": "2026-11-17T13:49:46Z",
+    "idle": 0,
+    "review_try": 1
+  },
   "steps": {
     "T1": {
       "status": "done",
@@ -24,7 +33,7 @@
     },
     "T3": {
       "status": "todo",
-      "attempts": 0
+      "attempts": 1
     },
     "T4": {
       "status": "todo",
